@@ -1,4 +1,4 @@
-# MoonLit
+# MoonClip
 
 > Open-source, lightweight, local-first game clip recorder for Linux and Windows.
 > Inspired by the idea of instant replay: press a hotkey, save the last seconds, edit lightly, share from your own storage.
@@ -9,11 +9,11 @@
 [![Stack](https://img.shields.io/badge/stack-React_19_%2B_Rust-blue.svg)](./SPEC.md)
 [![Status](https://img.shields.io/badge/status-Linux_Alpha_%7C_Windows_Next-yellow.svg)](./docs/ROADMAP_PHASES.md)
 
-Website: [moonlit.souriscg.dev](https://moonlit.souriscg.dev/) · Full spec: [`SPEC.md`](./SPEC.md) · Docs: [`docs/`](./docs)
+Website: [moonclip.souriscg.dev](https://moonclip.souriscg.dev/) · Full spec: [`SPEC.md`](./SPEC.md) · Docs: [`docs/`](./docs)
 
 ---
 
-## Why MoonLit?
+## Why MoonClip?
 
 Clipping epic moments shouldn't require a heavy client, a cloud account, or a single-OS app.
 
@@ -23,7 +23,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 - **Keep playing** — capture lives in GPU/VRAM + RAM ring, React UI stays hidden in tray.
 - **Own your clips** — local files + SQLite + OS keyring. No central server. Share via *your* Google Drive or webhooks.
 
-## How MoonLit is different
+## How MoonClip is different
 
 |  | Typical closed recorders | MoonLit |
 |---|---|---|
