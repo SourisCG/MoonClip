@@ -2,10 +2,10 @@
 
 Execute strictly in order. Do not start phase N+1 until phase N acceptance passes.
 
-## Phase 1 — Scaffold, Tray, Hotkey, MoonLit UI base
+## Phase 1 — Scaffold, Tray, Hotkey, MoonClip UI base
 
 - Tauri v2 + tray-icon (minimize-to-tray), `global-shortcut` F9 → test event/log.
-- Tailwind MoonLit theme, `MoonlitStarfield.tsx` canvas (85 stars, pause on `hidden`), glass layout, i18n skeleton (`en`/`es`).
+- Tailwind MoonClip theme, `MoonClipStarfield.tsx` canvas (85 stars, pause on `hidden`), glass layout, i18n skeleton (`en`/`es`).
 - **Accept:** F9 fires in any app; minimized <40 MB, 0% CPU; starfield pauses off-screen.
 
 ## Phase 2 — Safe persistence

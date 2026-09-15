@@ -1,7 +1,7 @@
 //! Capture device enumeration (Linux): query OUR bundled GSR binary.
 //! Output lines are `name|description`; kind follows GSR conventions.
 //! Argless like the Windows backend so shared code never branches: the
-//! binary resolves internally (MOONLIT_GSR_BIN → bundled sidecar → PATH),
+//! binary resolves internally (MOONCLIP_GSR_BIN → bundled sidecar → PATH),
 //! exactly as engine start does.
 
 use super::super::AudioDevice;

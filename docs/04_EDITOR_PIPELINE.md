@@ -6,7 +6,7 @@ Goal: Medal-style trim (In/Out) with waveform. No NLE. Preview in web, processin
 
 - **Cap (CapSoftware/Cap, AGPL-3.0):** Tauri+React+FFmpeg architecture, player↔Rust IPC layout.
 - **LosslessCut (mifi/lossless-cut, GPL-3.0):** exact FFmpeg cut args, keyframe handling.
-- MoonLit is GPL-3.0-compatible (due to `gpu-screen-recorder` GPL-3.0), so studying both is license-safe. Prefer MIT/Apache libs at runtime (`wavesurfer.js` BSD-3).
+- MoonClip is GPL-3.0-compatible (due to `gpu-screen-recorder` GPL-3.0), so studying both is license-safe. Prefer MIT/Apache libs at runtime (`wavesurfer.js` BSD-3).
 
 ## 2. Frontend: `ClipEditor.tsx` (must be lazy)
 
@@ -17,7 +17,7 @@ const ClipEditor = lazy(() => import('./components/editor/ClipEditor'));
 
 - `<video src={convertFileSrc(clipPath)} muted={false}>` — HW-decoded by WebView (NVDEC/VA-API).
 - `wavesurfer.js v7 + RegionsPlugin`: one region draggable/resizable, `region.on('update-end')` → `onRangeChange(start,end)`.
-- Dual-track preview problem: HTML `<video>` plays only track 0:1. Solution: on open, Rust extracts audios to temp (`/tmp/moonlit/*.aac`), React loads **two** Wavesurfer instances (game + mic) with independent volume/mute sliders; keep `<video muted>` and sync web audio to `video.currentTime`.
+- Dual-track preview problem: HTML `<video>` plays only track 0:1. Solution: on open, Rust extracts audios to temp (`/tmp/moonclip/*.aac`), React loads **two** Wavesurfer instances (game + mic) with independent volume/mute sliders; keep `<video muted>` and sync web audio to `video.currentTime`.
 - Cleanup (mandatory):
   ```tsx
   useEffect(() => {

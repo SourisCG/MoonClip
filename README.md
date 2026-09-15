@@ -4,7 +4,7 @@
 > Inspired by the idea of instant replay: press a hotkey, save the last seconds, edit lightly, share from your own storage.
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/SourisCG/Moonlit)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/SourisCG/MoonClip)
 [![Built with Tauri v2](https://img.shields.io/badge/Tauri-v2-purple.svg)](https://tauri.app/)
 [![Stack](https://img.shields.io/badge/stack-React_19_%2B_Rust-blue.svg)](./SPEC.md)
 [![Status](https://img.shields.io/badge/status-Linux_Alpha_%7C_Windows_Next-yellow.svg)](./docs/ROADMAP_PHASES.md)
@@ -17,7 +17,7 @@ Website: [moonclip.souriscg.dev](https://moonclip.souriscg.dev/) · Full spec: [
 
 Clipping epic moments shouldn't require a heavy client, a cloud account, or a single-OS app.
 
-Many popular clipping tools are closed-source, tied to their cloud, and resource-heavy, with limited support on Linux. **MoonLit takes a different approach:** capture what just happened while you game, with almost zero cost, and keep the files with you.
+Many popular clipping tools are closed-source, tied to their cloud, and resource-heavy, with limited support on Linux. **MoonClip takes a different approach:** capture what just happened while you game, with almost zero cost, and keep the files with you.
 
 - **Press `F9` while playing** — get an `.mp4` of the last seconds in <1s.
 - **Keep playing** — capture lives in GPU/VRAM + RAM ring, React UI stays hidden in tray.
@@ -25,7 +25,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 
 ## How MoonClip is different
 
-|  | Typical closed recorders | MoonLit |
+|  | Typical closed recorders | MoonClip |
 |---|---|---|
 | Cloud required | Often yes, account + upload | **No. Zero-cloud, local-first** |
 | Linux support | Rare / limited | **Yes (X11 + Wayland via gpu-screen-recorder)** |
@@ -48,7 +48,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 - **Smart delivery** — records at source when needed, downscales on save with `lanczos` for crisp text at non-integer ratios.
 - **Gallery** — thumbnails + real durations, favorites, ghost-clip reconcile (auto-purge missing files), LRU prune.
 - **Safe persistence** — SQLite with relative paths only (`base_dir + file_name`), secrets in OS keyring, never absolute paths in DB.
-- **MoonLit UI** — frameless glass layout, pausable starfield (0 cost while gaming), bilingual ES/EN, tray with status + audio ding on save (audible in fullscreen).
+- **MoonClip UI** — frameless glass layout, pausable starfield (0 cost while gaming), bilingual ES/EN, tray with status + audio ding on save (audible in fullscreen).
 
 ### Coming soon
 
@@ -63,9 +63,9 @@ See [`docs/ROADMAP_PHASES.md`](./docs/ROADMAP_PHASES.md) and [`docs/PROGRESS.md`
 ## How it works
 
 ```
-1. Play (MoonLit hidden to tray, RAM ring recording, ~100-150 MB for 60s 1080p)
+1. Play (MoonClip hidden to tray, RAM ring recording, ~100-150 MB for 60s 1080p)
        ↓ press F9
-2. Save (remux ring → .mp4 in Videos/MoonLit, indexed + thumb, ding plays)
+2. Save (remux ring → .mp4 in Videos/MoonClip, indexed + thumb, ding plays)
        ↓
 3. Browse (Gallery → favorite / preview / open externally)
        ↓
@@ -115,7 +115,7 @@ pnpm build
 - `F9` — save clip (global, works in fullscreen exclusive).
 - Tray icon — buffer status (active/idle), show/hide, quit. Main window minimizes to tray while gaming.
 - Settings — buffer length, fps (30/60), quality ladder, monitor, `gain_game/gain_mic` + mutes, base folder, locale ES/EN, hotkey (F9 default).
-- Clips live in `~/Videos/MoonLit` by default. DB stores only `file_name`, resolved at runtime as `base_dir.join(file_name)` — move the folder freely.
+- Clips live in `~/Videos/MoonClip` by default. DB stores only `file_name`, resolved at runtime as `base_dir.join(file_name)` — move the folder freely.
 
 ## Privacy: local-first, zero-cloud
 
@@ -134,7 +134,7 @@ pnpm build
 - **Rules:** HW-encode first, lossless-cut by default, lazy editor, relative paths, zero `cfg(target_os)` outside `os/`, IPC wire keys always camelCase
 
 ```
-moonlit/
+moonclip/
 ├── docs/          # EN technical spec (01-09 + ROADMAP + PROGRESS + THIRD_PARTY)
 ├── SPEC.md        # Index + acceptance map
 ├── src-tauri/src/os/  # ALL platform code (linux/ + windows/ behind traits)

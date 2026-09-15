@@ -157,11 +157,11 @@ export function SettingsModal({ engineStatus }: { engineStatus: EngineStatus }) 
   );
 }
 
-declare const __MOONLIT_BUILD__: string | undefined;
+declare const __MOONCLIP_BUILD__: string | undefined;
 
 function buildId(): string {
   try {
-    return typeof __MOONLIT_BUILD__ !== "undefined" ? __MOONLIT_BUILD__ : "dev";
+    return typeof __MOONCLIP_BUILD__ !== "undefined" ? __MOONCLIP_BUILD__ : "dev";
   } catch {
     return "dev";
   }

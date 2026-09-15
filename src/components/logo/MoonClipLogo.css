@@ -1,5 +1,5 @@
-/* MoonLit logo replica (moon crescent + play), ported from moonlit.souriscg.dev */
-.moonlit-logo {
+/* MoonClip logo replica (moon crescent + play), ported from moonclip.souriscg.dev */
+.moonclip-logo {
   position: relative;
   display: inline-block;
   flex-shrink: 0;
@@ -8,7 +8,7 @@
   isolation: isolate;
 }
 
-.moonlit-logo::before {
+.moonclip-logo::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -19,7 +19,7 @@
   mask: radial-gradient(circle at 68% 50%, transparent 44%, #000 45%);
 }
 
-.moonlit-logo::after {
+.moonclip-logo::after {
   content: "";
   position: absolute;
   inset: -18%;
@@ -29,10 +29,10 @@
   /* Was z-index:-1 (painted behind ancestors -> corner artifacts). Keep inside. */
   z-index: 0;
   pointer-events: none;
-  animation: moonlit-logo-pulse 3.5s ease-in-out infinite;
+  animation: moonclip-logo-pulse 3.5s ease-in-out infinite;
 }
 
-.moonlit-logo-play {
+.moonclip-logo-play {
   position: absolute;
   z-index: 2;
   left: 68%;
@@ -46,13 +46,13 @@
   transition: transform 0.2s ease;
 }
 
-a:hover .moonlit-logo-play,
-button:hover .moonlit-logo-play,
-.moonlit-logo-hover:hover .moonlit-logo-play {
+a:hover .moonclip-logo-play,
+button:hover .moonclip-logo-play,
+.moonclip-logo-hover:hover .moonclip-logo-play {
   transform: translate(-50%, -50%) translateX(2px);
 }
 
-@keyframes moonlit-logo-pulse {
+@keyframes moonclip-logo-pulse {
   0%,
   100% {
     opacity: 0.5;

@@ -11,8 +11,8 @@ interface Star {
 
 const STAR_COUNT = 85;
 
-/** MoonLit starfield: cheap canvas twinkle, fully paused when hidden. */
-export function MoonlitStarfield() {
+/** MoonClip starfield: cheap canvas twinkle, fully paused when hidden. */
+export function MoonClipStarfield() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {

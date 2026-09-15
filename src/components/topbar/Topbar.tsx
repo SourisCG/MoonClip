@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Minus, Square, X } from "lucide-react";
-import { MoonlitLogo } from "../logo/MoonlitLogo";
+import { MoonClipLogo } from "../logo/MoonClipLogo";
 import type { ClipMetadata } from "../../types";
 
 type ResizeDirection =
@@ -62,11 +62,11 @@ export function Topbar() {
     })();
     (async () => {
       try {
-        const fn = await listen<ClipMetadata>("moonlit://clip-saved", (event) => {
+        const fn = await listen<ClipMetadata>("moonclip://clip-saved", (event) => {
           const name = event.payload.file_name;
           setLastClip(name);
           void getCurrentWindow()
-            .setTitle(`MoonLit — ${name}`)
+            .setTitle(`MoonClip — ${name}`)
             .catch(console.error);
         });
         if (cancelled) fn();

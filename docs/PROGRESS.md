@@ -1,4 +1,4 @@
-# PROGRESS — MoonLit build log
+# PROGRESS — MoonClip build log
 
 Single source of truth for phase status. Updated at the end of every phase.
 Details per phase live in `ROADMAP_PHASES.md`; technical specs in `01_*`–`08_*`.
@@ -26,6 +26,16 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 | 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
 
 ## Log
+
+- **Rename MoonClip (2026-09-14)** — Project renamed from MoonLit everywhere:
+  identifier `dev.souriscg.moonclip`, crate/package `moonclip`, clips homes
+  `~/Videos/MoonClip` / `%LOCALAPPDATA%\MoonClip\Clips`, DB `moonclip.db`,
+  keyring service `moonclip`, env overrides `MOONCLIP_GSR_BIN` /
+  `MOONCLIP_FFMPEG`, events `moonclip://*`, sidecar dir `moonclip-gsr/`,
+  Tailwind/CSS/component names (`moonclip-*`, `MoonClipLogo`,
+  `MoonClipStarfield`), dev `.desktop` `dev.souriscg.moonclip`. No data
+  migration (no pre-rename installs exist). Historical log entries and commit
+  subjects below intentionally keep the old name.
 
 - **Phase 3-win — Windows capture engine (2026-09-07, commits `681529d`→`7078a13`)**
   Native WGC replay engine behind the same `CaptureEngine` surface; Linux

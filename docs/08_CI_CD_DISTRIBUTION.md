@@ -9,7 +9,7 @@ Developer OS: Fedora. Targets: WinGet/MS Store (later), Flathub (later), direct 
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi", "appimage", "deb", "rpm"],
-    "identifier": "dev.souriscg.moonlit",
+    "identifier": "dev.souriscg.moonclip",
     "windows": { "nsis": { "oneClick": false, "perMachine": false } },
     "linux": {
       "deb": { "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"] },
@@ -31,7 +31,7 @@ Windows ffmpeg ships via `bundle.resources` (raw binary pipes — the
 shell-plugin sidecar API is line-events only and cannot carry them), added
 through a **per-OS CI config overlay** (`tauri build --config ...`), never
 in the base `tauri.conf.json`, so Linux bundles never carry the `.exe`.
-Plus `moonlit-gsr/gpu-screen-recorder` (+ `gsr-kms-server`) for Linux targets,
+Plus `moonclip-gsr/gpu-screen-recorder` (+ `gsr-kms-server`) for Linux targets,
 built in CI from the pinned snapshot in `docs/THIRD_PARTY.md`. Full ship matrix
 (user installs nothing extra) is defined there.
 Windows agent: MSVC toolchain + `pnpm install` (pnpm via corepack/npm);
@@ -62,11 +62,11 @@ jobs:
         env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'MoonLit ${{ github.ref_name }}'
+          releaseName: 'MoonClip ${{ github.ref_name }}'
           releaseBody: |
             ### Install
             * **Windows:** `.exe` or `.msi`. Unsigned yet: SmartScreen → More info → Run anyway.
-            * **Fedora/RHEL:** `.rpm` (`sudo dnf install ./MoonLit-*.rpm`).
+            * **Fedora/RHEL:** `.rpm` (`sudo dnf install ./MoonClip-*.rpm`).
             * **Generic Linux:** `.AppImage` (`chmod +x`).
             * **Ubuntu/Debian:** `.deb`.
 ```
@@ -78,8 +78,8 @@ Artifacts per tag: `_x64-setup.exe`, `_x64_en-US.msi`, `_amd64.AppImage`, `-1.x8
 ## 3. Signing / stores (deferred, documented)
 
 - **Windows now:** unsigned NSIS `.exe` + README SmartScreen note ("More info → Run anyway", auditable Actions). Reputation accrues faster with NSIS installer vs loose portable.
-- **Later:** SignPath Foundation (free for OSS) or Azure Trusted Signing (~$10/mo). Best trick: MS Store `.msix` → Microsoft signs with trusted root → SmartScreen clean + auto-available in WinGet `msstore` source (`winget install "MoonLit"`). Needs $19 one-time Partner Center account. WinGet community (`winget-pkgs`) via `winget-releaser` with `WINGET_TOKEN` after signing.
-- **Linux later:** Flathub manifest (`com.souriscg.moonlit.yml`, runtime `org.freedesktop 24.08`, `--device=dri --socket=wayland --socket=fallback-x11 --socket=pulseaudio --talk-name=org.freedesktop.portal.* --filesystem=xdg-videos`). Flathub builds from source/manifest, not just attached `.flatpak`.
+- **Later:** SignPath Foundation (free for OSS) or Azure Trusted Signing (~$10/mo). Best trick: MS Store `.msix` → Microsoft signs with trusted root → SmartScreen clean + auto-available in WinGet `msstore` source (`winget install "MoonClip"`). Needs $19 one-time Partner Center account. WinGet community (`winget-pkgs`) via `winget-releaser` with `WINGET_TOKEN` after signing.
+- **Linux later:** Flathub manifest (`com.souriscg.moonclip.yml`, runtime `org.freedesktop 24.08`, `--device=dri --socket=wayland --socket=fallback-x11 --socket=pulseaudio --talk-name=org.freedesktop.portal.* --filesystem=xdg-videos`). Flathub builds from source/manifest, not just attached `.flatpak`.
 - WinGet does NOT sign binaries; it hash-checks your Release asset.
 
 ## 4. README note (Phase 7)

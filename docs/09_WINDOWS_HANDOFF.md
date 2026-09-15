@@ -39,7 +39,7 @@ implement the Windows side without breaking Linux.
 - Save pipeline: flush ring → dedupe name (`stem_2.mp4`) → optional lanczos
   downscale → stat → probe real duration (`ffmpeg -i`) → thumbnail → DB
   `insert_clip` (relative paths only) → ding (`rodio`, synthesized) → event
-  `moonlit://clip-saved` → notification with file name.
+  `moonclip://clip-saved` → notification with file name.
 - Monitor selector (`-w <name>` on GSR; `monitor` setting, `""` = automatic).
 
 ## 3. Stub inventory — implement exactly these, same signatures
@@ -70,7 +70,7 @@ Phase 7 ships `ffmpeg` BtbN static as `ffmpeg-x86_64-pc-windows-msvc.exe`.
 
 - [ ] No `sh`/`xdg-open`/`/proc`/`getcap`/`pkexec` reachable on Windows paths.
 - [ ] Clips never default under Videos/Documents/Desktop (AV-safe
-  `%LOCALAPPDATA%\MoonLit\Clips` home + one-time legacy migration).
+  `%LOCALAPPDATA%\MoonClip\Clips` home + one-time legacy migration).
 - [ ] No hardcoded UI text (backend returns ids; frontend locales cover EN+ES).
 - [ ] No absolute paths in DB; `%LOCALAPPDATA%`-style locations resolve via `dirs`/`app_data_dir`.
 - [ ] Behaviors in §2 all work without touching `commands.rs` contracts (extend, don't reshape, IPC shapes the frontend already uses).

@@ -1,5 +1,5 @@
 {
-  "app": { "name": "MOONLIT", "tagline": "Replay buffer standby" },
+  "app": { "name": "MOONCLIP", "tagline": "Replay buffer standby" },
   "nav": { "clips": "My Clips", "games": "Games", "settings": "Settings" },
   "status": {
     "active": "Replay Buffer Active",

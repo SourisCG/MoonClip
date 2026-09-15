@@ -3,7 +3,7 @@
 
 use keyring::Entry;
 
-const SERVICE: &str = "moonlit";
+const SERVICE: &str = "moonclip";
 
 fn entry(alias: &str) -> Result<Entry, String> {
     Entry::new(SERVICE, alias).map_err(|e| friendly(&e))

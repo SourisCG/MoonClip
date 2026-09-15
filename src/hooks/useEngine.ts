@@ -37,7 +37,7 @@ export function useEngine(onClipSaved: () => void) {
     let unlisten: (() => void) | undefined;
     (async () => {
       try {
-        const fn = await listen("moonlit://clip-saved", () => onClipSaved());
+        const fn = await listen("moonclip://clip-saved", () => onClipSaved());
         unlisten = fn;
       } catch (err) {
         console.error(err);

@@ -197,7 +197,7 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
           {[0, 1, 2].map((i) => (
             <div
               key={i}
-              className="relative overflow-hidden rounded-xl border border-dashed border-white/10 bg-moonlit-card/60 p-6 text-center"
+              className="relative overflow-hidden rounded-xl border border-dashed border-white/10 bg-moonclip-card/60 p-6 text-center"
             >
               <Clapperboard size={22} className="mx-auto text-slate-600" />
               <p className="mt-2 text-xs text-slate-500">{t("gallery.empty")}</p>

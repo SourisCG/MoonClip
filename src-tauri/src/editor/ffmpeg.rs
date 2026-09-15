@@ -1,5 +1,5 @@
 //! FFmpeg helpers (Phase 3: thumbnails only; trim presets land in Phase 5).
-//! Binary resolution: MOONLIT_FFMPEG override -> app-bundled sidecar
+//! Binary resolution: MOONCLIP_FFMPEG override -> app-bundled sidecar
 //! (BtbN static, see docs/THIRD_PARTY.md) -> PATH fallback (dev only).
 
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ pub fn sidecar_name() -> String {
 }
 
 pub fn resolve_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("MOONLIT_FFMPEG") {
+    if let Ok(path) = std::env::var("MOONCLIP_FFMPEG") {
         let p = PathBuf::from(&path);
         if p.exists() {
             return Ok(p);
@@ -27,7 +27,7 @@ pub fn resolve_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
     // production resources, triple-scoped). This also covers the Phase 7
     // `bundle.resources` shipment with no further code changes.
     if let Some((p, source)) = crate::sidecar::search_bundled(&sidecar_name(), app) {
-        eprintln!("[moonlit] ffmpeg: {} ({})", p.display(), source);
+        eprintln!("[moonclip] ffmpeg: {} ({})", p.display(), source);
         return Ok(p);
     }
     // Legacy resource scan (flat `binaries/ffmpeg*` layout).
@@ -51,7 +51,7 @@ pub fn resolve_ffmpeg(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
     // Dev fallback: system ffmpeg. Production always ships the pinned sidecar.
-    eprintln!("[moonlit] ffmpeg: no bundled sidecar, falling back to PATH (dev only)");
+    eprintln!("[moonclip] ffmpeg: no bundled sidecar, falling back to PATH (dev only)");
     Ok(PathBuf::from("ffmpeg"))
 }
 
@@ -181,10 +181,10 @@ mod tests {
             .output()
             .await;
         if probe.map(|o| o.status.success()).unwrap_or(false) == false {
-            eprintln!("[moonlit-test] ffmpeg missing from PATH, skipping thumbnail test");
+            eprintln!("[moonclip-test] ffmpeg missing from PATH, skipping thumbnail test");
             return;
         }
-        let dir = std::env::temp_dir().join(format!("moonlit-thumb-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("moonclip-thumb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let clip = dir.join("limited.mp4");
         let thumb = dir.join("thumb.jpg");

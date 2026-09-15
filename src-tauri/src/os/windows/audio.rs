@@ -252,7 +252,7 @@ impl AudioCapture {
         let game_device = super::devices::find_output_device(desktop_id);
         // Mic: capture endpoint.
         let mic_device = super::devices::find_input_device(mic_id);
-        eprintln!("[moonlit] audio devices: game='{}' mic='{}'",
+        eprintln!("[moonclip] audio devices: game='{}' mic='{}'",
             device_label(&game_device), device_label(&mic_device));
         let game_stream = match game_device {
             Some(d) => match start_loopback_stream(&d, shared.clone()) {
@@ -261,12 +261,12 @@ impl AudioCapture {
                     Some(s)
                 }
                 Err(e) => {
-                    eprintln!("[moonlit] game loopback failed ({e}), continuing mic-only");
+                    eprintln!("[moonclip] game loopback failed ({e}), continuing mic-only");
                     None
                 }
             },
             None => {
-                eprintln!("[moonlit] game device '{desktop_id}' not found, continuing mic-only");
+                eprintln!("[moonclip] game device '{desktop_id}' not found, continuing mic-only");
                 None
             }
         };
@@ -278,12 +278,12 @@ impl AudioCapture {
                     Some(s)
                 }
                 Err(e) => {
-                    eprintln!("[moonlit] mic capture failed ({e}), continuing without mic");
+                    eprintln!("[moonclip] mic capture failed ({e}), continuing without mic");
                     None
                 }
             },
             None => {
-                eprintln!("[moonlit] mic device '{mic_id}' not found, continuing without mic");
+                eprintln!("[moonclip] mic device '{mic_id}' not found, continuing without mic");
                 None
             }
         };
@@ -332,7 +332,7 @@ fn start_loopback_stream(device: &cpal::Device, shared: Arc<SharedAudio>) -> Res
     let config = device
         .default_output_config()
         .map_err(|e| format!("loopback config: {e}"))?;
-    eprintln!("[moonlit] game format: {} Hz, {} ch, {:?}",
+    eprintln!("[moonclip] game format: {} Hz, {} ch, {:?}",
         config.sample_rate().0, config.channels(), config.sample_format());
     let stream_config = cpal::StreamConfig {
         channels: config.channels(),
@@ -341,7 +341,7 @@ fn start_loopback_stream(device: &cpal::Device, shared: Arc<SharedAudio>) -> Res
     };
     let ch = config.channels();
     let rate = config.sample_rate().0;
-    let err_fn = |err| eprintln!("[moonlit] game stream error: {err}");
+    let err_fn = |err| eprintln!("[moonclip] game stream error: {err}");
     let make_cb = |shared: Arc<SharedAudio>| {
         move |data: &[f32], _: &cpal::InputCallbackInfo| push_game_quantum(&shared, data, ch, rate)
     };
@@ -374,7 +374,7 @@ fn start_mic_stream(device: &cpal::Device, shared: Arc<SharedAudio>) -> Result<c
     let config = device
         .default_input_config()
         .map_err(|e| format!("mic config: {e}"))?;
-    eprintln!("[moonlit] mic format: {} Hz, {} ch, {:?}",
+    eprintln!("[moonclip] mic format: {} Hz, {} ch, {:?}",
         config.sample_rate().0, config.channels(), config.sample_format());
     let stream_config = cpal::StreamConfig {
         channels: config.channels(),
@@ -383,7 +383,7 @@ fn start_mic_stream(device: &cpal::Device, shared: Arc<SharedAudio>) -> Result<c
     };
     let ch = config.channels();
     let rate = config.sample_rate().0;
-    let err_fn = |err| eprintln!("[moonlit] mic stream error: {err}");
+    let err_fn = |err| eprintln!("[moonclip] mic stream error: {err}");
     // NOTE: the mix ring is game-appended by the loopback callback and
     // mic-appended here. Both sides convert to the same 48 kHz stereo grid,
     // so the mix stays aligned within one callback quantum (~10 ms).
@@ -522,7 +522,7 @@ mod tests {
         let total = snap.game.len() + snap.mic.len();
         assert!(total > 0, "rings stayed empty after 2 s");
         let (g, m) = cap.peak_levels();
-        eprintln!("[moonlit-test] live peaks: game={g:.4} mic={m:.4}");
+        eprintln!("[moonclip-test] live peaks: game={g:.4} mic={m:.4}");
     }
 
     /// Regression test for the stock-install failure: the GSR magic ids

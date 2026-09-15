@@ -1,7 +1,7 @@
 # THIRD_PARTY — Bundled components and license compliance
 
-MoonLit is `GPL-3.0-only` (see `LICENSE`). This file tracks every third-party
-component shipped inside MoonLit installers and what the GPL requires for each.
+MoonClip is `GPL-3.0-only` (see `LICENSE`). This file tracks every third-party
+component shipped inside MoonClip installers and what the GPL requires for each.
 
 ## gpu-screen-recorder (Linux capture engine)
 
@@ -9,7 +9,7 @@ component shipped inside MoonLit installers and what the GPL requires for each.
   `-Dcapabilities=false -Dffmpeg_static=true` (same recipe as upstream Flathub).
 - **Upstream:** https://git.dec05eba.com/gpu-screen-recorder/ by dec05eba.
 - **License:** `GPL-3.0-only` (per Arch, Alpine, Artix packaging). Compatible:
-  MoonLit as a whole is GPL-3.0-only.
+  MoonClip as a whole is GPL-3.0-only.
 - **Pinned source (CI builds from this):**
   GitHub mirror `https://github.com/antonlobanovskiy/gpu-screen-recorder`
   (upstream git is bot-walled; mirror documents its upstream base commit)
@@ -22,13 +22,13 @@ component shipped inside MoonLit installers and what the GPL requires for each.
   plus our build flags (this file + the script). No modifications to GSR itself.
 - **Ship model per format:**
   - `.rpm` / `.deb` / `.AppImage`: prebuilt sidecar under
-    `<app>/moonlit-gsr/`; system deps (`libdrm`, `libva`, pipewire, pulse)
+    `<app>/moonclip-gsr/`; system deps (`libdrm`, `libva`, pipewire, pulse)
     come from official distro repos via `Requires`/`Depends`.
   - Flatpak/Flathub: `gpu-screen-recorder` compiled as a manifest module
     (mirrors upstream manifest), `finish-args: --device=all
     --socket=pulseaudio --socket=wayland --socket=fallback-x11`.
   - Windows: not shipped (native WGC/AMF/NVENC APIs instead).
-- **Runtime resolution order:** `MOONLIT_GSR_BIN` override → bundled sidecar
+- **Runtime resolution order:** `MOONCLIP_GSR_BIN` override → bundled sidecar
   → system `PATH` → clear error. Dev machines use a native install
   (Terra/COPR rpm on Fedora); end users never install anything extra.
 - **Windows ships NO GSR.** Capture there is native (WGC/DXGI + WASAPI, see
@@ -61,11 +61,11 @@ component shipped inside MoonLit installers and what the GPL requires for each.
   with a log warning. Production always ships the pinned sidecar.
 - **License:** the static builds we ship (BtbN for Windows, johnvansickle
   musl for Linux) are GPL builds — they link `libx264`/`libx265`, which
-  MoonLit needs for the `x264` CPU fallback codec (Windows `offered_codecs`
+  MoonClip needs for the `x264` CPU fallback codec (Windows `offered_codecs`
   always lists it; save-time `TranscodeEncoder::X264` maps to `libx264`).
-  This is compliant because MoonLit as a whole is already `GPL-3.0-only`
+  This is compliant because MoonClip as a whole is already `GPL-3.0-only`
   (via GSR, above). FFmpeg stays a separate process (CLI boundary); no
-  libx264 code is linked into MoonLit itself.
+  libx264 code is linked into MoonClip itself.
 - **Dev fallback:** system `ffmpeg` from `PATH` when no sidecar is present,
   with a log warning. Production always ships the pinned sidecar.
 

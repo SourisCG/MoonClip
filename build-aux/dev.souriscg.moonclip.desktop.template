@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Name=MoonClip (dev)
+GenericName=Game clip recorder
+Comment=MoonClip development build (tauri dev). Matches identifier dev.souriscg.moonclip for Wayland taskbar association.
+Exec=__REPO__/src-tauri/target/debug/moonclip
+Icon=__REPO__/src-tauri/icons/icon.png
+Terminal=false
+Type=Application
+Categories=AudioVideo;Recorder;
+StartupNotify=true
+StartupWMClass=dev.souriscg.moonclip

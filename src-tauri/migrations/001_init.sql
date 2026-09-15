@@ -1,4 +1,4 @@
--- MoonLit initial schema (Phase 2).
+-- MoonClip initial schema (Phase 2).
 -- RULE: file_name / thumbnail_name are RELATIVE to the configured clips directory.
 -- Never store absolute paths here.
 

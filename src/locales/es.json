@@ -1,5 +1,5 @@
 {
-  "app": { "name": "MOONLIT", "tagline": "Búfer de repetición en espera" },
+  "app": { "name": "MOONCLIP", "tagline": "Búfer de repetición en espera" },
   "nav": { "clips": "Mis Clips", "games": "Juegos", "settings": "Ajustes" },
   "status": {
     "active": "Replay Buffer Activo",

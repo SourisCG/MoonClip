@@ -1,6 +1,6 @@
-<!-- MoonLit brand mark: red->blue crescent moon + white play.
-     Replica of the CSS logo (MoonlitLogo.css) and moonlit.souriscg.dev.
-     Source for `pnpm tauri icon build-aux/moonlit-icon.svg`. -->
+<!-- MoonClip brand mark: red->blue crescent moon + white play.
+     Replica of the CSS logo (MoonClipLogo.css) and moonclip.souriscg.dev.
+     Source for `pnpm tauri icon build-aux/moonclip-icon.svg`. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="moon" x1="0" y1="0" x2="1" y2="1">

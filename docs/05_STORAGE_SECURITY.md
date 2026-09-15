@@ -47,13 +47,13 @@ CREATE TABLE IF NOT EXISTS settings (
 ```
 Migrations live in `src-tauri/migrations/` (`PRAGMA user_version` stamped).
 Default clips home is per-OS (`crate::os::paths`, so shared code never
-branches): Linux = OS videos folder + `MoonLit` (`dirs::video_dir`);
-Windows = `%LOCALAPPDATA%\MoonLit\Clips` (`dirs::data_local_dir`) —
+branches): Linux = OS videos folder + `MoonClip` (`dirs::video_dir`);
+Windows = `%LOCALAPPDATA%\MoonClip\Clips` (`dirs::data_local_dir`) —
 deliberately outside Videos/Documents/Desktop, which sit under Controlled
 Folder Access and are often redirected into OneDrive (an unsigned clip app
 mass-writing `.mp4` there is blocked/flagged and syncs every clip to the
 cloud). A one-time boot migration moves `*.mp4` + `thumb_*.jpg` from the
-legacy `~/Videos/MoonLit` to the new home when the stored setting still
+legacy `~/Videos/MoonClip` to the new home when the stored setting still
 equals it (custom folders are never touched); DB rows need no migration
 (relative names). DB at OS app-data dir. Changing `clips_directory` (C:→D:) needs zero row migration.
 
@@ -82,10 +82,10 @@ Setting `max_storage_gb` (e.g. 20 GB). On new save, if folder exceeds quota, del
 ```rust
 use keyring::Entry;
 pub fn store_drive_token(token: &str) -> Result<(), keyring::Error> {
-    Entry::new("moonlit", "google_drive_refresh_token")?.set_password(token)
+    Entry::new("moonclip", "google_drive_refresh_token")?.set_password(token)
 }
 pub fn get_drive_token() -> Result<String, keyring::Error> {
-    Entry::new("moonlit", "google_drive_refresh_token")?.get_password()
+    Entry::new("moonclip", "google_drive_refresh_token")?.get_password()
 }
 ```
 

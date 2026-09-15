@@ -1,7 +1,7 @@
 //! Linux engine: gpu-screen-recorder as a replay-buffer daemon.
 //! Ship model (see docs/THIRD_PARTY.md): prebuilt GSR sidecar bundled in the
 //! package (rpm/deb/AppImage) or built as a Flatpak module. At runtime we
-//! resolve: MOONLIT_GSR_BIN override -> bundled sidecar -> system PATH.
+//! resolve: MOONCLIP_GSR_BIN override -> bundled sidecar -> system PATH.
 
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
@@ -32,17 +32,17 @@ impl LinuxGsrEngine {
 
     /// Locate the GSR binary: env override, bundled sidecar, then PATH.
     pub fn resolve_binary() -> Result<PathBuf, String> {
-        if let Ok(path) = std::env::var("MOONLIT_GSR_BIN") {
+        if let Ok(path) = std::env::var("MOONCLIP_GSR_BIN") {
             let p = PathBuf::from(&path);
             if p.exists() {
                 return Ok(p);
             }
-            return Err(format!("MOONLIT_GSR_BIN points nowhere: {path}"));
+            return Err(format!("MOONCLIP_GSR_BIN points nowhere: {path}"));
         }
         // Bundled sidecar next to the app binary (rpm/deb/AppImage layout).
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
-                for name in ["moonlit-gsr/gpu-screen-recorder", "gpu-screen-recorder"] {
+                for name in ["moonclip-gsr/gpu-screen-recorder", "gpu-screen-recorder"] {
                     let p = dir.join(name);
                     if p.exists() {
                         return Ok(p);

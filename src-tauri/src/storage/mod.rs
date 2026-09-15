@@ -1,4 +1,4 @@
-//! MoonLit persistence (Phase 2): SQLite metadata + OS keyring secrets.
+//! MoonClip persistence (Phase 2): SQLite metadata + OS keyring secrets.
 //! RULE: only RELATIVE file names are stored in SQLite.
 
 pub mod db;

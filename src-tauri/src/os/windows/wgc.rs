@@ -275,7 +275,7 @@ impl GraphicsCaptureApiHandler for FrameHandler {
         if frame.width() != self.shared.width || frame.height() != self.shared.height {
             if !self.shared.size_warned.swap(true, Ordering::Relaxed) {
                 eprintln!(
-                    "[moonlit] monitor size changed mid-buffer ({}x{}), dropping frames until restart",
+                    "[moonclip] monitor size changed mid-buffer ({}x{}), dropping frames until restart",
                     frame.width(),
                     frame.height()
                 );
@@ -290,13 +290,13 @@ impl GraphicsCaptureApiHandler for FrameHandler {
                     let _ = tx.try_send(bytes.to_vec());
                 }
             }
-            Err(e) => eprintln!("[moonlit] frame buffer failed: {e}"),
+            Err(e) => eprintln!("[moonclip] frame buffer failed: {e}"),
         }
         Ok(())
     }
 
     fn on_closed(&mut self) -> Result<(), Self::Error> {
-        eprintln!("[moonlit] WGC session closed by the OS");
+        eprintln!("[moonclip] WGC session closed by the OS");
         Ok(())
     }
 }
@@ -422,7 +422,7 @@ impl WindowsCaptureEngine {
         let pump_out = self.frames_out.clone();
         let interval = pace_interval_ms(fps);
         std::thread::Builder::new()
-            .name("moonlit-wgc-pump".into())
+            .name("moonclip-wgc-pump".into())
             .spawn(move || {
                 pump_frames(rx, &mut stdin, interval, fps, &pump_halt, &dead, &pump_in, &pump_out);
             })
@@ -432,7 +432,7 @@ impl WindowsCaptureEngine {
         let cap = self.ring_cap;
         let dead2 = self.video_dead.clone();
         std::thread::Builder::new()
-            .name("moonlit-ts-drain".into())
+            .name("moonclip-ts-drain".into())
             .spawn(move || {
                 let mut out = stdout;
                 let mut buf = [0u8; 64 * 1024];
@@ -528,7 +528,7 @@ impl WindowsCaptureEngine {
         if !status.success() {
             return Err("save mux failed (ffmpeg)".into());
         }
-        eprintln!("[moonlit] mux: wav={wav_elapsed:?} mux={:?}", t_mux.elapsed());
+        eprintln!("[moonclip] mux: wav={wav_elapsed:?} mux={:?}", t_mux.elapsed());
         Ok(())
     }
 }
@@ -641,12 +641,12 @@ impl CaptureEngine for WindowsCaptureEngine {
         ) {
             Ok(a) => {
                 if a.live_count() < 2 {
-                    eprintln!("[moonlit] audio degraded: {}/2 streams live", a.live_count());
+                    eprintln!("[moonclip] audio degraded: {}/2 streams live", a.live_count());
                 }
                 self.audio = Some(a);
             }
             Err(e) => {
-                eprintln!("[moonlit] audio failed, aborting start: {e}");
+                eprintln!("[moonclip] audio failed, aborting start: {e}");
                 let _ = self.stop_buffer().await;
                 return Err(e);
             }
@@ -674,7 +674,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         self.fps = fps;
         self.ffmpeg = ffmpeg.clone();
         eprintln!(
-            "[moonlit] WGC buffer: {}x{}@{} {} ({}), audio {}/2",
+            "[moonclip] WGC buffer: {}x{}@{} {} ({}), audio {}/2",
             mw,
             mh,
             fps,
@@ -704,7 +704,7 @@ impl CaptureEngine for WindowsCaptureEngine {
             self.frames_out.load(Ordering::Relaxed),
             self.video_ring.lock().map(|r| r.len()).unwrap_or(0),
         );
-        eprintln!("[moonlit] save: wgc_in={fin} pump_out={fout} ring={}MB dead={}",
+        eprintln!("[moonclip] save: wgc_in={fin} pump_out={fout} ring={}MB dead={}",
             rlen / 1024 / 1024,
             self.video_dead.load(Ordering::Relaxed));
         // Audio levels: peaks seen since start, per stem. A -inf stem means
@@ -712,7 +712,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         // no signal) — not a mux problem.
         if let Some(a) = self.audio.as_ref() {
             let (g, m) = a.peak_levels();
-            eprintln!("[moonlit] audio stats: game peak={} mic peak={}", dbfs(g), dbfs(m));
+            eprintln!("[moonclip] audio stats: game peak={} mic peak={}", dbfs(g), dbfs(m));
         }
         // Video window: last (duration + 2 s) of TS, resynced.
         let keep = ((self.bitrate_kbps as usize * (self.duration_secs as usize + 2)) / 8) * 1024;
@@ -723,7 +723,7 @@ impl CaptureEngine for WindowsCaptureEngine {
             }
             cut_ts_window(&ring, keep.max(1024 * 1024)).to_vec()
         };
-        let ts_path = std::env::temp_dir().join("moonlit-save-cut.ts");
+        let ts_path = std::env::temp_dir().join("moonclip-save-cut.ts");
         tokio::fs::write(&ts_path, &cut)
             .await
             .map_err(|e| format!("cannot stage video window: {e}"))?;
@@ -759,7 +759,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         .await;
         let _ = tokio::fs::remove_file(&ts_path).await;
         res?;
-        eprintln!("[moonlit] wgc-save done in {:?}", t_save.elapsed());
+        eprintln!("[moonclip] wgc-save done in {:?}", t_save.elapsed());
         Ok(dest)
     }
 
@@ -896,7 +896,7 @@ mod tests {
     #[test]
     fn wav_exact_size_and_clamp() {
         use super::write_wav;
-        let dir = std::env::temp_dir().join(format!("moonlit-wav-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("moonclip-wav-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("t.wav");
         // 1 s stereo + out-of-range clamp check.
@@ -932,7 +932,7 @@ mod tests {
         use super::super::super::{CaptureConfig, CaptureEngine, TranscodeEncoder};
         use std::time::Duration as StdDuration;
 
-        let dir = std::env::temp_dir().join("moonlit-e2e");
+        let dir = std::env::temp_dir().join("moonclip-e2e");
         std::fs::create_dir_all(&dir).unwrap();
         let mut eng = super::WindowsCaptureEngine::new();
         eng.start_buffer(CaptureConfig {

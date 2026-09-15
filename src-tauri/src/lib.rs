@@ -1,4 +1,4 @@
-// MoonLit Phase 3 — tray + F9 + persistence + replay capture.
+// MoonClip Phase 3 — tray + F9 + persistence + replay capture.
 // Detection / editor logic lands in later phases.
 
 use std::sync::Mutex;
@@ -84,7 +84,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // --- Tray ---
-            let show = MenuItem::with_id(app, "show", "Show MoonLit", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Show MoonClip", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
             // Dedicated tray asset: transparent moon mark, kept separate
@@ -115,7 +115,7 @@ pub fn run() {
                 .expect("missing tray icon");
             TrayIconBuilder::with_id("main-tray")
                 .icon(icon)
-                .tooltip("MoonLit — replay buffer standby")
+                .tooltip("MoonClip — replay buffer standby")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -147,8 +147,8 @@ pub fn run() {
             // --- Global shortcut F9 ---
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
             match app.global_shortcut().register("F9") {
-                Ok(_) => eprintln!("[moonlit] global shortcut F9 registered"),
-                Err(e) => eprintln!("[moonlit] could not register F9: {}", e),
+                Ok(_) => eprintln!("[moonclip] global shortcut F9 registered"),
+                Err(e) => eprintln!("[moonclip] could not register F9: {}", e),
             }
 
             // --- Persistence (Phase 2) ---

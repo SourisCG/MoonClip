@@ -20,7 +20,7 @@ export default defineConfig(() => ({
 
   // Commit hash baked in: answers "which version am I running?" (Settings footer).
   define: {
-    __MOONLIT_BUILD__: JSON.stringify(buildStamp()),
+    __MOONCLIP_BUILD__: JSON.stringify(buildStamp()),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

@@ -4,7 +4,7 @@
 > clipboard/notification plugins behave the same on Linux and Windows.
 > No per-OS code expected here (Windows trip: none).
 
-All uploads are client-to-service. No MoonLit server.
+All uploads are client-to-service. No MoonClip server.
 
 ## 1. Google Drive (primary share)
 

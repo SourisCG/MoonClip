@@ -1,4 +1,4 @@
-# MoonLit cargo config.
+# MoonClip cargo config.
 # WEBKIT_DISABLE_DMABUF_RENDERER: mandatory on Wayland (Fedora/GNOME).
 # Without it WebKitGTK crashes at first paint with:
 #   Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.

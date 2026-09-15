@@ -2,7 +2,7 @@
 //! OS floor: Windows 10 1903+ (WGC). No sidecar binary is involved — the
 //! `_bin` params exist only for signature parity with `os/linux/video`, and
 //! are ignored. `ffmpeg` for encoder probes resolves via `capture_ffmpeg()`
-//! (MOONLIT_FFMPEG override, else PATH); the Phase 7 bundled sidecar plugs
+//! (MOONCLIP_FFMPEG override, else PATH); the Phase 7 bundled sidecar plugs
 //! into the same helper.
 
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ use super::super::TranscodeEncoder;
 /// ffmpeg binary for capture/probe duties: explicit override, else PATH.
 /// (The Phase 7 BtbN sidecar is wired here once `externalBin` ships.)
 pub fn capture_ffmpeg() -> PathBuf {
-    if let Ok(path) = std::env::var("MOONLIT_FFMPEG") {
+    if let Ok(path) = std::env::var("MOONCLIP_FFMPEG") {
         let p = PathBuf::from(&path);
         if p.exists() {
             return p;

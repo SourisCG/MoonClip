@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        moonlit: {
+        moonclip: {
           void: "#050608",
           panel: "#0b0f19",
           card: "#0d1220",

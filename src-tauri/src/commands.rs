@@ -74,7 +74,7 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
         // ignore this path, so shared code stays free of OS branches.
         Err(_) => (PathBuf::new(), "native"),
     };
-    eprintln!("[moonlit] capture backend: {} ({})", gsr_bin.display(), source);
+    eprintln!("[moonclip] capture backend: {} ({})", gsr_bin.display(), source);
 
     // Video quality: Medal ladder + old-MoonLit NVENC HQ recipe.
     let mut codec = setting_str(&db, "video_codec", "h264");
@@ -124,7 +124,7 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     };
     // Save-time encoder per GPU vendor (None = keep source file on save).
     let save_encoder = video::transcode_encoder(&vendor, &codec);
-    eprintln!("[moonlit] video: codec={codec} height={} fps={fps} vendor={vendor} cbr={bitrate}kbps nvenc_hq={} monitor={} capture={} save={} save_enc={:?}",
+    eprintln!("[moonclip] video: codec={codec} height={} fps={fps} vendor={vendor} cbr={bitrate}kbps nvenc_hq={} monitor={} capture={} save={} save_enc={:?}",
         if out_height == 0 { "source".to_string() } else { out_height.to_string() },
         nvenc_opts.is_some(),
         if monitor.trim().is_empty() { "auto".to_string() } else { monitor.clone() },
@@ -172,11 +172,11 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     tauri::async_runtime::spawn(async move {
         match apply_saved_gains(&app2).await {
             Ok(n) => {
-                eprintln!("[moonlit] gains applied to {n} tracks");
+                eprintln!("[moonclip] gains applied to {n} tracks");
                 set_audio_error(&app2, None).await;
             }
             Err(e) => {
-                eprintln!("[moonlit] gain apply failed: {e}");
+                eprintln!("[moonclip] gain apply failed: {e}");
                 set_audio_error(&app2, Some(e)).await;
             }
         }
@@ -320,7 +320,7 @@ fn is_spanish(app: &AppHandle) -> bool {
 pub fn notify(app: &AppHandle, body_es: &str, body_en: &str) {
     use tauri_plugin_notification::NotificationExt;
     let body = if is_spanish(app) { body_es } else { body_en };
-    let _ = app.notification().builder().title("MoonLit").body(body).show();
+    let _ = app.notification().builder().title("MoonClip").body(body).show();
 }
 
 #[tauri::command]
@@ -359,7 +359,7 @@ pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
 }
 
 /// Full save pipeline: flush ring -> thumbnail -> DB index -> ding -> event.
-/// Stage timings go to the backend log (`[moonlit] save ...`) so slow saves
+/// Stage timings go to the backend log (`[moonclip] save ...`) so slow saves
 /// can be attributed instead of guessed.
 pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> {
     let t_total = std::time::Instant::now();
@@ -438,19 +438,19 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
                 // No save-time encoder on this GPU (e.g. AMD/VAAPI without
                 // validated render-node plumbing): keep the source file.
                 None => {
-                    eprintln!("[moonlit] no save encoder for this GPU, keeping source resolution");
+                    eprintln!("[moonclip] no save encoder for this GPU, keeping source resolution");
                     false
                 }
             };
             if ok {
                 if let Err(e) = tokio::fs::rename(&tmp, &path).await {
-                    eprintln!("[moonlit] scaled replace failed: {e}");
+                    eprintln!("[moonclip] scaled replace failed: {e}");
                     let _ = tokio::fs::remove_file(&tmp).await;
                 } else {
-                    eprintln!("[moonlit] lanczos save-scale to {}p in {:?}", p.height, t0.elapsed());
+                    eprintln!("[moonclip] lanczos save-scale to {}p in {:?}", p.height, t0.elapsed());
                 }
             } else {
-                eprintln!("[moonlit] save-scale failed, keeping source resolution");
+                eprintln!("[moonclip] save-scale failed, keeping source resolution");
                 let _ = tokio::fs::remove_file(&tmp).await;
             }
         }
@@ -491,10 +491,10 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     let t_tail_elapsed = t_tail.elapsed();
     let t_db = std::time::Instant::now();
     let clip = db.insert_clip(&file_name, &thumb_name, "Unknown", secs_ms, size)?;
-    eprintln!("[moonlit] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
+    eprintln!("[moonclip] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
         t_total.elapsed(), t_db.elapsed(), size / 1024 / 1024);
     crate::cue::play_ding();
-    let _ = app.emit("moonlit://clip-saved", &clip);
+    let _ = app.emit("moonclip://clip-saved", &clip);
     Ok(clip)
 }
 
@@ -531,7 +531,7 @@ pub(crate) async fn backfill_durations(app: &AppHandle) {
 /// F9 entry point: counter event always fires; clip saves only when running.
 pub(crate) async fn handle_hotkey(app: AppHandle, shortcut: String, pressed_at: String) {
     let _ = app.emit(
-        "moonlit://clip-hotkey",
+        "moonclip://clip-hotkey",
         serde_json::json!({ "shortcut": shortcut, "pressed_at": pressed_at }),
     );
     let st = app.state::<AppState>();
@@ -849,21 +849,21 @@ pub async fn open_clip_external(app: AppHandle, clip_id: String) -> Result<(), S
         .find(|c| c.id == clip_id)
         .ok_or("clip not found")?;
     let abs = base.join(&clip.file_name);
-    eprintln!("[moonlit] open_clip_external: {}", abs.display());
+    eprintln!("[moonclip] open_clip_external: {}", abs.display());
     if !abs.exists() {
         return Err(format!("file gone from disk: {}", clip.file_name));
     }
     match app.opener().open_path(abs.to_string_lossy(), None::<&str>) {
         Ok(()) => {
-            eprintln!("[moonlit] open_clip_external: opener ok");
+            eprintln!("[moonclip] open_clip_external: opener ok");
             return Ok(());
         }
-        Err(e) => eprintln!("[moonlit] open_clip_external: opener failed ({e}), trying OS launcher"),
+        Err(e) => eprintln!("[moonclip] open_clip_external: opener failed ({e}), trying OS launcher"),
     }
     // OS launcher lives in os::open — no cfg here (zero-cfg rule).
     match open::open_external(&abs) {
         Ok(()) => {
-            eprintln!("[moonlit] open_clip_external: OS launcher ok");
+            eprintln!("[moonclip] open_clip_external: OS launcher ok");
             Ok(())
         }
         Err(e) => Err(format!("opener + OS launcher both failed ({e})")),
@@ -884,7 +884,7 @@ pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Resul
         .ok_or("clip not found")?;
     let base = db.clips_dir()?;
     let input = base.join(&clip.file_name);
-    let preview = std::env::temp_dir().join("moonlit-track-preview.m4a");
+    let preview = std::env::temp_dir().join("moonclip-track-preview.m4a");
     let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
     let status = tokio::process::Command::new(&ffmpeg)
         .args([

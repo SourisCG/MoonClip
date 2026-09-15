@@ -62,7 +62,7 @@ impl DbState {
 
     /// Fill empty `clips_directory` setting with the platform default and create it.
     /// One-time relocation: when the stored dir is still the legacy Windows
-    /// default (~/Videos/MoonLit, pre AV-safe home), move our files to the
+    /// default (~/Videos/MoonClip, pre AV-safe home), move our files to the
     /// new home and repoint the setting. DB rows are untouched (relative).
     /// Custom user folders are never migrated.
     fn ensure_clips_dir(&self) -> Result<(), String> {
@@ -94,7 +94,7 @@ impl DbState {
                     params![fresh.to_string_lossy()],
                 )
                 .map_err(|e| format!("cannot save clips_directory: {e}"))?;
-                eprintln!("[moonlit] clips library relocated ({moved} files): {} -> {}",
+                eprintln!("[moonclip] clips library relocated ({moved} files): {} -> {}",
                     legacy.display(), fresh.display());
                 return Ok(());
             }

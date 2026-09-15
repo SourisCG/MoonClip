@@ -48,14 +48,14 @@ pub fn migrate_legacy_clips_dir(old: &Path, new: &Path) -> Result<usize, String>
     Ok(moved)
 }
 
-/// SQLite file location: <app_data>/moonlit.db
+/// SQLite file location: <app_data>/moonclip.db
 pub fn db_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("app data dir unavailable: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create app data dir: {e}"))?;
-    Ok(dir.join("moonlit.db"))
+    Ok(dir.join("moonclip.db"))
 }
 
 #[cfg(test)]
@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn migrates_only_ours() {
-        let base = std::env::temp_dir().join(format!("moonlit-mig-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("moonclip-mig-{}", std::process::id()));
         let old = base.join("old");
         let new = base.join("new");
         std::fs::create_dir_all(&old).unwrap();

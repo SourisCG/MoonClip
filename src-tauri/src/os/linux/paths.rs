@@ -4,12 +4,12 @@
 
 use std::path::PathBuf;
 
-/// Default clips directory: ~/Videos/MoonLit (or data dir fallback).
+/// Default clips directory: ~/Videos/MoonClip (or data dir fallback).
 pub fn default_clips_dir() -> PathBuf {
     if let Some(videos) = dirs::video_dir() {
-        return videos.join("MoonLit");
+        return videos.join("MoonClip");
     }
-    PathBuf::from("MoonLit")
+    PathBuf::from("MoonClip")
 }
 
 /// No legacy relocation on Linux: the default never moved.

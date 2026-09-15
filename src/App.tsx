@@ -4,8 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { Circle, Clapperboard, Gamepad2, Settings, Square } from "lucide-react";
-import { MoonlitStarfield } from "./components/starfield/MoonlitStarfield";
-import { MoonlitLogo } from "./components/logo/MoonlitLogo";
+import { MoonClipStarfield } from "./components/starfield/MoonClipStarfield";
+import { MoonClipLogo } from "./components/logo/MoonClipLogo";
 import { Topbar } from "./components/topbar/Topbar";
 import { SettingsModal } from "./components/settings/SettingsModal";
 import { AppManager } from "./components/settings/AppManager";
@@ -50,7 +50,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     (async () => {
       try {
-        const fn = await listen<HotkeyEvent>("moonlit://clip-hotkey", (event) => {
+        const fn = await listen<HotkeyEvent>("moonclip://clip-hotkey", (event) => {
           const at = Number(event.payload.pressed_at);
           if (!Number.isNaN(at)) {
             if (at - lastAcceptedRef.current < FRONTEND_DEDUPE_MS) return;

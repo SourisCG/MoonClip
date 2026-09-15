@@ -24,7 +24,7 @@ if ((Test-Path $OutExe) -and (-not $Force)) {
 }
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-$Work = Join-Path ([IO.Path]::GetTempPath()) ("moonlit-ffmpeg-" + [Guid]::NewGuid().ToString("N"))
+$Work = Join-Path ([IO.Path]::GetTempPath()) ("moonclip-ffmpeg-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force $Work | Out-Null
 try {
   $Url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$Tag/$Asset"
