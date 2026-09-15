@@ -17,7 +17,7 @@ trap 'rm -rf "$WORK"' EXIT
 MESON_PY="${MESON_PY:-}"
 if [ -z "$MESON_PY" ]; then
   if command -v meson >/dev/null; then
-    MESON_PY="meson"
+    MESON_PY="$(command -v meson)"
   else
     echo "error: meson not found. Install it (dnf install meson) or set MESON_PY=/path/to/meson.py" >&2
     exit 1
