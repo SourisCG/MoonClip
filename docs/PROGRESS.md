@@ -27,6 +27,17 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **Responsive layout (2026-09-14)** — App usable on narrow/portrait screens
+  (user's rotated 768x1360 second monitor; `minWidth` was 900 so the window
+  did not fit). `tauri.conf.json` min `420x420`. Sidebar becomes a 56 px icon
+  rail below `lg` (tooltips, icon-only start/stop; hotkey card/language hidden
+  until `lg`). Shell padding/gap scale, aura clamped to viewport, main
+  `p-3/sm:p-4/lg:p-6`. Gallery `ClipRow` and settings/AppManager rows stack
+  below `sm` (thumbs `aspect-video` full width), inputs fluid. Topbar wordmark
+  from `sm`, tagline from `md`; also fixed the last hardcoded `MoonLit` (was
+  split as `Moon<span>Lit</span>` so the rename grep missed it). Docs 07
+  updated.
+
 - **Rename MoonClip (2026-09-14)** — Project renamed from MoonLit everywhere:
   identifier `dev.souriscg.moonclip`, crate/package `moonclip`, clips homes
   `~/Videos/MoonClip` / `%LOCALAPPDATA%\MoonClip\Clips`, DB `moonclip.db`,

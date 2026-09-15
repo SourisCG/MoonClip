@@ -45,7 +45,7 @@ function Thumb({
     return (
       <button
         onClick={onOpen}
-        className="flex h-16 w-full items-center justify-center rounded-lg bg-black/40 transition hover:bg-black/60 sm:w-28"
+        className="flex aspect-video w-full items-center justify-center rounded-lg bg-black/40 transition hover:bg-black/60 sm:aspect-auto sm:h-16 sm:w-28"
         title={clip.file_name}
       >
         <Clapperboard size={18} className="text-slate-600" />
@@ -58,7 +58,7 @@ function Thumb({
         src={src}
         alt=""
         onError={() => onError(`thumb asset blocked: ${clip.thumbnail_name}`)}
-        className="h-16 w-full rounded-lg object-cover transition hover:brightness-125 sm:w-28"
+        className="aspect-video w-full rounded-lg object-cover transition hover:brightness-125 sm:aspect-auto sm:h-16 sm:w-28"
       />
     </button>
   );
@@ -119,38 +119,40 @@ function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions })
     "rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200";
 
   return (
-    <li className="rounded-xl border border-white/5 bg-black/30 p-2.5 pr-4">
-      <div className="flex items-center gap-3">
+    <li className="rounded-xl border border-white/5 bg-black/30 p-2.5 sm:pr-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <Thumb clip={clip} onOpen={() => void openVideo()} onError={actions.onError} />
-        <div className="min-w-0 flex-1 text-sm">
-          <p className="truncate font-medium text-slate-200" title={clip.file_name}>
-            {clip.file_name}
-          </p>
-          <p className="truncate font-mono text-xs text-slate-500">
-            {clip.game_title} ·{" "}
-            <span className="text-cyan-300/80">{fmtDuration(clip.duration_ms)}</span> ·{" "}
-            {fmtSize(clip.file_size_bytes)}{" "}
-            {!clip.exists && <span className="text-xs text-amber-400">({t("gallery.missing")})</span>}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button onClick={() => void reveal()} className={iconBtn} title={t("gallery.reveal")}>
-            <FolderOpen size={15} />
-          </button>
-          <button
-            onClick={() => actions.onToggleFavorite(clip.id)}
-            className={`rounded-lg p-1.5 transition ${clip.is_favorite ? "text-amber-300" : "text-slate-500 hover:text-amber-200"}`}
-            title={t("gallery.favorite")}
-          >
-            <Star size={15} fill={clip.is_favorite ? "currentColor" : "none"} />
-          </button>
-          <button
-            onClick={() => actions.onDelete(clip.id)}
-            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-red-500/20 hover:text-red-300"
-            title={t("common.delete")}
-          >
-            <Trash2 size={15} />
-          </button>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="truncate font-medium text-slate-200" title={clip.file_name}>
+              {clip.file_name}
+            </p>
+            <p className="truncate font-mono text-xs text-slate-500">
+              {clip.game_title} ·{" "}
+              <span className="text-cyan-300/80">{fmtDuration(clip.duration_ms)}</span> ·{" "}
+              {fmtSize(clip.file_size_bytes)}{" "}
+              {!clip.exists && <span className="text-xs text-amber-400">({t("gallery.missing")})</span>}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <button onClick={() => void reveal()} className={iconBtn} title={t("gallery.reveal")}>
+              <FolderOpen size={15} />
+            </button>
+            <button
+              onClick={() => actions.onToggleFavorite(clip.id)}
+              className={`rounded-lg p-1.5 transition ${clip.is_favorite ? "text-amber-300" : "text-slate-500 hover:text-amber-200"}`}
+              title={t("gallery.favorite")}
+            >
+              <Star size={15} fill={clip.is_favorite ? "currentColor" : "none"} />
+            </button>
+            <button
+              onClick={() => actions.onDelete(clip.id)}
+              className="rounded-lg p-1.5 text-slate-500 transition hover:bg-red-500/20 hover:text-red-300"
+              title={t("common.delete")}
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
         </div>
       </div>
     </li>
@@ -221,7 +223,7 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
 
   return (
     <>
-      <div className="mb-2 flex items-center gap-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2 sm:gap-3">
         {lastError && (
           <p className="flex-1 truncate font-mono text-xs text-red-400" title={lastError}>
             {lastError}

@@ -39,18 +39,18 @@ export function AppManager() {
     <div className="max-w-2xl space-y-4">
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-white/5 bg-black/30 p-3">
         <input
-          className={`${input} flex-1`}
+          className={`${input} w-full sm:flex-1`}
           placeholder={t("games.name_ph")}
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <input
-          className={`${input} flex-1`}
+          className={`${input} w-full sm:flex-1`}
           placeholder={t("games.exe_ph")}
           value={exe}
           onChange={(e) => setExe(e.target.value)}
         />
-        <select className={input} value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+        <select className={`${input} w-full sm:w-auto`} value={strategy} onChange={(e) => setStrategy(e.target.value)}>
           {STRATEGIES.map((s) => (
             <option key={s} value={s}>
               {s}
@@ -59,7 +59,7 @@ export function AppManager() {
         </select>
         <button
           onClick={() => void submit()}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-sm text-cyan-200 transition hover:bg-cyan-500/20"
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-sm text-cyan-200 transition hover:bg-cyan-500/20 sm:w-auto"
         >
           <Plus size={14} /> {t("games.add")}
         </button>
@@ -72,11 +72,11 @@ export function AppManager() {
           {apps.map((a) => (
             <li
               key={a.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-black/30 px-4 py-2.5"
+              className="flex flex-col items-start gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4"
             >
-              <div className="text-sm">
+              <div className="w-full min-w-0 text-sm sm:w-auto">
                 <p className="font-medium text-slate-200">{a.display_name}</p>
-                <p className="font-mono text-xs text-slate-500">
+                <p className="break-all font-mono text-xs text-slate-500">
                   {a.target_exe} · {a.match_strategy}
                   {a.clip_duration_seconds ? ` · ${a.clip_duration_seconds}s` : ""}
                 </p>

@@ -72,22 +72,22 @@ export default function App() {
   }, []);
 
   const testNotification = () => {
-    sendNotification({ title: "MoonLit", body: "Phase 1 test notification OK" });
+    sendNotification({ title: "MoonClip", body: "Phase 1 test notification OK" });
   };
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden bg-moonlit-void font-sans text-slate-100 selection:bg-cyan-500/30">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-moonclip-void font-sans text-slate-100 selection:bg-cyan-500/30">
       <Topbar />
       <div className="relative flex min-h-0 flex-1">
-        <MoonlitStarfield />
-        <div className="pointer-events-none fixed left-1/2 top-10 h-[250px] w-[700px] -translate-x-1/2 bg-gradient-to-b from-cyan-500/10 via-indigo-500/5 to-transparent blur-3xl" />
+        <MoonClipStarfield />
+        <div className="pointer-events-none fixed left-1/2 top-10 h-[250px] w-[min(700px,100vw)] -translate-x-1/2 bg-gradient-to-b from-cyan-500/10 via-indigo-500/5 to-transparent blur-3xl" />
 
-        <div className="relative z-10 flex min-h-0 flex-1 gap-4 overflow-x-auto p-4">
-          <aside className="flex w-56 shrink-0 flex-col justify-between self-start overflow-y-auto rounded-2xl border border-white/5 bg-moonlit-panel/50 p-4 shadow-2xl backdrop-blur-xl lg:w-64" style={{ maxHeight: "calc(100vh - 5.5rem)" }}>
+        <div className="relative z-10 flex min-h-0 flex-1 gap-2 overflow-x-auto p-2 sm:gap-4 sm:p-4">
+          <aside className="flex max-h-[calc(100vh-4rem)] w-14 shrink-0 flex-col justify-between self-start overflow-y-auto rounded-2xl border border-white/5 bg-moonclip-panel/50 p-2 shadow-2xl backdrop-blur-xl sm:max-h-[calc(100vh-5.5rem)] lg:w-56 lg:p-4 xl:w-64">
             <div>
-              <div className="mb-6 flex items-center gap-2.5 px-2 py-3">
-                <MoonlitLogo size={30} />
-                <h1 className="bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-lg font-bold tracking-wider text-transparent">
+              <div className="mb-3 flex items-center justify-center gap-2.5 px-0 py-2 lg:mb-6 lg:justify-start lg:px-2 lg:py-3">
+                <MoonClipLogo size={30} />
+                <h1 className="hidden bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-lg font-bold tracking-wider text-transparent lg:block">
                   {t("app.name")}
                 </h1>
               </div>
@@ -103,20 +103,22 @@ export default function App() {
                   <button
                     key={item.id}
                     onClick={() => setView(item.id)}
+                    title={item.label}
                     className={
                       view === item.id
-                        ? "w-full rounded-xl border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-left text-sm font-medium text-cyan-300 shadow-[0_0_10px_rgba(56,189,248,0.1)]"
-                        : "w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+                        ? "flex w-full items-center justify-center rounded-xl border border-cyan-500/20 bg-cyan-500/10 px-0 py-2 text-sm font-medium text-cyan-300 shadow-[0_0_10px_rgba(56,189,248,0.1)] lg:justify-start lg:px-3"
+                        : "flex w-full items-center justify-center rounded-xl px-0 py-2 text-sm font-medium text-slate-400 transition hover:bg-white/5 hover:text-slate-200 lg:justify-start lg:px-3"
                     }
                   >
                     <span className="inline-flex items-center gap-2">
-                      {item.icon} {item.label}
+                      {item.icon}
+                      <span className="hidden lg:inline">{item.label}</span>
                     </span>
                   </button>
                 ))}
               </nav>
 
-              <div className="mt-6 rounded-xl border border-white/5 bg-black/30 p-3 text-xs text-slate-400">
+              <div className="mt-6 hidden rounded-xl border border-white/5 bg-black/30 p-3 text-xs text-slate-400 lg:block">
                 <p className="mb-1 font-semibold text-slate-200">{t("hotkey.title")}</p>
                 <p>{t("hotkey.hint", { hotkey })}</p>
                 <p className="mt-2 font-mono text-cyan-300">
@@ -133,8 +135,8 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              <div className="rounded-xl border border-white/5 bg-[#0f1424]/80 p-3">
-                <div className="flex items-center gap-2">
+              <div className="rounded-xl border border-white/5 bg-[#0f1424]/80 p-2 lg:p-3">
+                <div className="flex items-center justify-center gap-2 lg:justify-start">
                   <span className="relative flex h-2.5 w-2.5">
                     {status.running ? (
                       <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
@@ -145,7 +147,7 @@ export default function App() {
                       </>
                     )}
                   </span>
-                  <div className="text-xs">
+                  <div className="hidden text-xs lg:block">
                     <p className="font-medium text-slate-300">
                       {status.running ? t("rec.recording") : t("status.standby")}
                     </p>
@@ -159,20 +161,23 @@ export default function App() {
                 <button
                   onClick={() => void (status.running ? stop() : start())}
                   disabled={busy}
-                  className={`mt-2.5 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
+                  title={status.running ? t("rec.stop") : t("rec.start")}
+                  className={`mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-semibold transition disabled:opacity-50 lg:mt-2.5 ${
                     status.running
                       ? "border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20"
                       : "border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20"
                   }`}
                 >
                   {status.running ? <Square size={12} /> : <Circle size={12} />}
-                  {status.running ? t("rec.stop") : t("rec.start")}
+                  <span className="hidden lg:inline">
+                    {status.running ? t("rec.stop") : t("rec.start")}
+                  </span>
                 </button>
                 {engineError && (
-                  <p className="mt-1.5 font-mono text-[11px] text-red-400">{engineError}</p>
+                  <p className="mt-1.5 break-all font-mono text-[11px] text-red-400">{engineError}</p>
                 )}
               </div>
-              <div className="flex items-center justify-between rounded-xl border border-white/5 bg-black/30 px-3 py-2 text-xs">
+              <div className="hidden items-center justify-between rounded-xl border border-white/5 bg-black/30 px-3 py-2 text-xs lg:flex">
                 <span className="text-slate-400">{t("lang.label")}</span>
                 <div className="flex gap-1">
                   <button
@@ -192,7 +197,7 @@ export default function App() {
             </div>
           </aside>
 
-          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-2xl border border-white/5 bg-moonlit-panel/30 p-4 shadow-2xl backdrop-blur-xl sm:p-6">
+          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-2xl border border-white/5 bg-moonclip-panel/30 p-3 shadow-2xl backdrop-blur-xl sm:p-4 lg:p-6">
             {view === "settings" && (
               <>
                 <h2 className="text-xl font-bold text-slate-100">{t("nav.settings")}</h2>
@@ -211,7 +216,7 @@ export default function App() {
             )}
             {view === "clips" && (
               <>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-xl font-bold text-slate-100">
                     {t("gallery.title")}{" "}
                     <span className="font-mono text-sm font-normal text-slate-500">

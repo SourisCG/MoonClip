@@ -64,17 +64,17 @@ export function SettingsModal({ engineStatus }: { engineStatus: EngineStatus }) 
   if (loading) return <p className="text-sm text-slate-400">{t("common.loading")}</p>;
   if (error) return <p className="text-sm text-red-400">{error}</p>;
 
-  const row = "flex items-center justify-between gap-4 rounded-xl border border-white/5 bg-black/30 px-4 py-3";
+  const row = "flex flex-col items-start gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
   const label = "text-sm text-slate-300";
   const input =
-    "w-48 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-500/50";
+    "w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-500/50 sm:w-48";
 
   return (
     <div className="max-w-2xl space-y-3">
       <div className={row}>
         <span className={label}>{t("settings.clips_dir")}</span>
-        <span className="flex items-center gap-2">
-          <code className="max-w-64 truncate font-mono text-xs text-cyan-300">
+        <span className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs text-cyan-300 sm:max-w-64 sm:flex-none">
             {settings.clips_directory || "—"}
           </code>
           <button

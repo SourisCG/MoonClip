@@ -28,6 +28,7 @@ Already in `tailwind.config.js` as `colors.moonclip.{void,panel,card,lunar,astra
 ## 3. Layout (Phase 1 target)
 
 - Sidebar `w-64 rounded-2xl bg-[#0b0f19]/50 backdrop-blur-xl border-white/5`: logo (🌙 gradient), nav (My Clips, Games, Settings), live status (pulsing dot "Replay Buffer Active / F9").
+- **Responsive (portrait/second screens)**: window min `420x420` fits a 768-wide rotated monitor. Sidebar collapses to a 56 px icon rail below `lg` (1024) — logo, nav icons with `title` tooltips, status dot + icon-only start/stop; hotkey card and language row return at `lg` (language also lives in Settings). Main padding `p-3` → `sm:p-4` → `lg:p-6`. Gallery rows and settings/AppManager rows stack below `sm` (640), thumbs switch to `aspect-video` full width; topbar wordmark shows from `sm`, tagline from `md`. No new deps: Tailwind breakpoints only.
 - Main `flex-1 rounded-2xl bg-[#0b0f19]/30 border-white/5`: gallery or editor outlet.
 - Clip cards: `group rounded-xl overflow-hidden border-white/5 hover:border-cyan-500/40 hover:shadow-[0_0_20px_rgba(56,189,248,0.15)]`, `aspect-video` thumb + bottom gradient + `gameTitle` + `duration`.
 

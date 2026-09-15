@@ -14,11 +14,11 @@
     "windows": [
       {
         "label": "main",
-        "title": "MoonLit",
+        "title": "MoonClip",
         "width": 1100,
         "height": 700,
-        "minWidth": 900,
-        "minHeight": 600,
+        "minWidth": 420,
+        "minHeight": 420,
         "decorations": false,
         "transparent": false,
         "shadow": true

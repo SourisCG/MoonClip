@@ -139,11 +139,11 @@ export function Topbar() {
         ))}
       <header className="relative z-20 flex h-10 select-none items-center justify-between border-b border-white/5 bg-[#0d0f14]/85 pl-3 pr-2 backdrop-blur-md">
         <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-2">
-          <MoonlitLogo size={18} />
-          <span className="shrink-0 text-sm font-extrabold tracking-wide text-slate-100">
-            Moon<span className="text-indigo-400">Lit</span>
+          <MoonClipLogo size={18} />
+          <span className="hidden shrink-0 text-sm font-extrabold tracking-wide text-slate-100 sm:inline">
+            Moon<span className="text-indigo-400">Clip</span>
           </span>
-          <span className="hidden truncate text-[11px] text-slate-500 sm:inline">
+          <span className="hidden truncate text-[11px] text-slate-500 md:inline">
             {lastClip ?? t("app.tagline")}
           </span>
         </div>
