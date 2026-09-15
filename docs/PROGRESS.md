@@ -27,6 +27,22 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **Audio device list + save robustness + hotkey test card removed (2026-09-14)**
+  - `list_audio_devices` used `LinuxGsrEngine::resolve_binary`, which only
+    checks next-to-exe/PATH, so it failed in dev (sidecar lives in
+    `src-tauri/binaries/<triple>/`): Settings showed only
+    `default_input`/`default_output` plus a red "gpu-screen-recorder not
+    found" line while the engine (via `binary::backend_binary`) recorded
+    fine. The command now takes `AppHandle` and uses the same resolver as the
+    engine on Linux; Windows accepts and ignores it (cpal, no sidecar). IPC
+    wire unchanged.
+  - `save_clip` replaced the fixed 400 ms sleep + "newest mp4" (could return
+    a stale clip or fail on slow disks / large rings) with a 5 s poll for a
+    `.mp4` whose mtime is >= the save signal; hermetic unit test added.
+  - Removed the Phase 1 "Global hotkey test" card (pulse counter, last press,
+    test notification) plus dead frontend code/locale keys; the backend
+    `moonclip://clip-hotkey` event still fires for future consumers.
+
 - **Responsive layout (2026-09-14)** — App usable on narrow/portrait screens
   (user's rotated 768x1360 second monitor; `minWidth` was 900 so the window
   did not fit). `tauri.conf.json` min `420x420`. Sidebar becomes a 56 px icon

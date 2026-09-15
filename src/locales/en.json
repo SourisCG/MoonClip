@@ -4,15 +4,7 @@
   "status": {
     "active": "Replay Buffer Active",
     "standby": "Standby (Phase 1 — no capture yet)",
-    "shortcut": "Shortcut: {{hotkey}}",
-    "presses": "{{count}} presses"
-  },
-  "hotkey": {
-    "title": "Global hotkey test",
-    "hint": "Press {{hotkey}} anywhere — even with this window unfocused — and the counter must increase.",
-    "last": "Last press: {{when}}",
-    "never": "Not pressed yet",
-    "test_button": "Send test notification"
+    "shortcut": "Shortcut: {{hotkey}}"
   },
   "gallery": {
     "title": "Clips",

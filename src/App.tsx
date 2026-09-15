@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { sendNotification } from "@tauri-apps/plugin-notification";
 import { Circle, Clapperboard, Gamepad2, Settings, Square } from "lucide-react";
 import { MoonClipStarfield } from "./components/starfield/MoonClipStarfield";
 import { MoonClipLogo } from "./components/logo/MoonClipLogo";
@@ -13,10 +11,6 @@ import { GalleryView } from "./components/gallery/GalleryView";
 import { useClips } from "./hooks/useClips";
 import { useEngine } from "./hooks/useEngine";
 import { useLocale } from "./hooks/useLocale";
-import type { HotkeyEvent } from "./types";
-
-/** Ignore repeats of the same press closer than this (extra guard over Rust debounce). */
-const FRONTEND_DEDUPE_MS = 300;
 
 type View = "clips" | "games" | "settings";
 
@@ -32,9 +26,6 @@ export default function App() {
   }, [refreshClips]);
   const { status, busy, error: engineError, start, stop, saveNow } = useEngine(onClipSaved);
   const [hotkey, setHotkey] = useState("F9");
-  const [presses, setPresses] = useState(0);
-  const [lastPress, setLastPress] = useState<string | null>(null);
-  const lastAcceptedRef = useRef<number>(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,35 +36,10 @@ export default function App() {
       .catch(() => {
         if (!cancelled) setHotkey("F9");
       });
-
-    // Awaited subscription: StrictMode-safe (no leaked double listener).
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      try {
-        const fn = await listen<HotkeyEvent>("moonclip://clip-hotkey", (event) => {
-          const at = Number(event.payload.pressed_at);
-          if (!Number.isNaN(at)) {
-            if (at - lastAcceptedRef.current < FRONTEND_DEDUPE_MS) return;
-            lastAcceptedRef.current = at;
-          }
-          setPresses((c) => c + 1);
-          setLastPress(new Date().toLocaleTimeString());
-        });
-        if (cancelled) fn();
-        else unlisten = fn;
-      } catch (err) {
-        console.error(err);
-      }
-    })();
     return () => {
       cancelled = true;
-      unlisten?.();
     };
   }, []);
-
-  const testNotification = () => {
-    sendNotification({ title: "MoonClip", body: "Phase 1 test notification OK" });
-  };
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-moonclip-void font-sans text-slate-100 selection:bg-cyan-500/30">
@@ -117,21 +83,6 @@ export default function App() {
                   </button>
                 ))}
               </nav>
-
-              <div className="mt-6 hidden rounded-xl border border-white/5 bg-black/30 p-3 text-xs text-slate-400 lg:block">
-                <p className="mb-1 font-semibold text-slate-200">{t("hotkey.title")}</p>
-                <p>{t("hotkey.hint", { hotkey })}</p>
-                <p className="mt-2 font-mono text-cyan-300">
-                  {lastPress ? t("hotkey.last", { when: lastPress }) : t("hotkey.never")}
-                </p>
-                <p className="mt-1 text-slate-500">{t("status.presses", { count: presses })}</p>
-                <button
-                  onClick={testNotification}
-                  className="mt-2 w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200"
-                >
-                  {t("hotkey.test_button")}
-                </button>
-              </div>
             </div>
 
             <div className="space-y-3">

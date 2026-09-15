@@ -4,15 +4,7 @@
   "status": {
     "active": "Replay Buffer Activo",
     "standby": "En espera (Fase 1 — aún sin captura)",
-    "shortcut": "Atajo: {{hotkey}}",
-    "presses": "{{count}} pulsaciones"
-  },
-  "hotkey": {
-    "title": "Prueba de atajo global",
-    "hint": "Pulsa {{hotkey}} en cualquier parte — incluso con esta ventana desenfocada — y el contador debe aumentar.",
-    "last": "Última pulsación: {{when}}",
-    "never": "Aún sin pulsar",
-    "test_button": "Enviar notificación de prueba"
+    "shortcut": "Atajo: {{hotkey}}"
   },
   "gallery": {
     "title": "Clips",
