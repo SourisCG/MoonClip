@@ -1,14 +1,14 @@
-//! Capture device enumeration (Linux): query OUR bundled GSR binary.
+//! Capture device enumeration (Linux): query OUR resolved GSR binary.
 //! Output lines are `name|description`; kind follows GSR conventions.
-//! Argless like the Windows backend so shared code never branches: the
-//! binary resolves internally (MOONCLIP_GSR_BIN → bundled sidecar → PATH),
-//! exactly as engine start does.
+//! The AppHandle resolves through the same walker as the engine
+//! (env → bundled dev/resources → PATH), so dev staging works too.
 
 use super::super::AudioDevice;
-use super::gsr::LinuxGsrEngine;
+use super::binary;
+use tauri::AppHandle;
 
-pub async fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
-    let bin = LinuxGsrEngine::resolve_binary()?;
+pub async fn list_audio_devices(app: &AppHandle) -> Result<Vec<AudioDevice>, String> {
+    let (bin, _source) = binary::backend_binary(app)?;
     let out = tokio::process::Command::new(&bin)
         .arg("--list-audio-devices")
         .output()

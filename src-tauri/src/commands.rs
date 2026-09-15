@@ -697,8 +697,8 @@ pub async fn fix_gsr_caps(app: AppHandle) -> Result<(), String> {
 
 /// Capture devices (Linux: bundled GSR query; Windows: cpal enumeration).
 #[tauri::command]
-pub async fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
-    devices::list_audio_devices().await
+pub async fn list_audio_devices(app: AppHandle) -> Result<Vec<AudioDevice>, String> {
+    devices::list_audio_devices(&app).await
 }
 
 /// Video options for the Settings UI: codec ids from the backend, ladder

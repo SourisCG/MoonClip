@@ -1,11 +1,12 @@
 //! Capture device enumeration (Windows): `cpal` hosts, no sidecar.
 //! Output (render) devices are game/desktop sources (WASAPI loopback reads
 //! them); input (capture) devices are microphones. Same item shape as
-//! `os/linux/devices`; argless on both backends so shared code never
-//! branches (Linux resolves its GSR binary internally).
+//! `os/linux/devices`; the AppHandle is unused here (cpal needs no sidecar)
+//! but keeps one shared signature across backends.
 
 use super::super::AudioDevice;
 use cpal::traits::{DeviceTrait, HostTrait};
+use tauri::AppHandle;
 
 /// Friendly device name, or `None` when the OS will not name it.
 fn dev_name(d: &cpal::Device) -> Option<String> {
@@ -15,7 +16,7 @@ fn dev_name(d: &cpal::Device) -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
-pub async fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
+pub async fn list_audio_devices(_app: &AppHandle) -> Result<Vec<AudioDevice>, String> {
     // Device enumeration is quick; keep it sync-shaped inside async for
     // signature parity with the Linux backend.
     let host = cpal::default_host();
