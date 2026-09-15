@@ -88,9 +88,10 @@ settings, never of whichever monitor the backend finds first.
 
 - Spawn as `tokio::process::Child` on app start / game start.
 - `save_clip()`:
-  1. `nix::sys::signal::kill(pid, SIGUSR1)`
-  2. `sleep(300ms)`
-  3. Pick newest `.mp4` in `output_dir` by `modified()` time.
+  1. Snapshot the save time, then `nix::sys::signal::kill(pid, SIGUSR1)`.
+  2. Poll every 100 ms (up to 5 s) for the `.mp4` whose mtime is >= the
+     signal — a fixed sleep proved racy on slow disks / large rings, and
+     "newest file" could return a previous clip; never falls back to one.
 - `stop()`: `SIGINT` + `child.wait()`.
 - `Drop`: `start_kill()` to avoid zombies.
 

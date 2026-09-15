@@ -156,11 +156,26 @@ impl CaptureEngine for LinuxGsrEngine {
     async fn save_clip(&mut self) -> Result<PathBuf, String> {
         let child = self.child.as_ref().ok_or("recorder not running")?;
         let pid = child.id().ok_or("recorder has no PID")?;
+        // Accept files touched from 1 s before the signal (FS mtime
+        // granularity), never older ones: a previous save must not be
+        // returned while the fresh remux is still being written.
+        let since = std::time::SystemTime::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         kill(Pid::from_raw(pid as i32), Signal::SIGUSR1)
             .map_err(|e| format!("SIGUSR1 failed: {e}"))?;
-        sleep(Duration::from_millis(400)).await;
-        latest_mp4(&self.output_dir)
-            .ok_or_else(|| "no clip file appeared after signal".to_string())
+        // GSR remuxes the RAM ring to disk; a fixed sleep proved racy on slow
+        // disks / large rings, so poll for the fresh file instead.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(p) = newest_modified_after(&self.output_dir, since) {
+                return Ok(p);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("no clip file appeared within 5 s of the save signal".into());
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
     }
 
     async fn stop_buffer(&mut self) -> Result<(), String> {
@@ -199,13 +214,47 @@ fn scale_arg(height: u32) -> Option<String> {
     }
 }
 
-fn latest_mp4(dir: &Path) -> Option<PathBuf> {    std::fs::read_dir(dir).ok()?
+/// Newest `.mp4` in `dir` modified at/after `since` (None if none qualify).
+/// Time-filtered on purpose: never falls back to a pre-signal clip.
+fn newest_modified_after(dir: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "mp4"))
+        .filter(|p| {
+            p.metadata()
+                .and_then(|m| m.modified())
+                .map(|m| m >= since)
+                .unwrap_or(false)
+        })
         .max_by_key(|p| {
             p.metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::newest_modified_after;
+
+    #[test]
+    fn newest_modified_after_filters_by_time() {
+        let dir = std::env::temp_dir().join(format!("moonclip-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("Replay_test.mp4");
+        std::fs::write(&clip, b"v").unwrap();
+        std::fs::write(dir.join("thumb_test.jpg"), b"t").unwrap();
+        let now = std::time::SystemTime::now();
+        assert_eq!(
+            newest_modified_after(&dir, now - std::time::Duration::from_secs(60)),
+            Some(clip)
+        );
+        assert_eq!(
+            newest_modified_after(&dir, now + std::time::Duration::from_secs(60)),
+            None
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
