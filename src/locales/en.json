@@ -45,7 +45,10 @@
     "disk_note": "Lower resolutions only save disk space. For maximum quality use Source.",
     "judder_note": "30 fps saves GPU but judders more on high-refresh monitors; 60 fps is smoother for action.",
     "estimate": "CBR {{bitrate}} kbps · ~{{ram}} MB per 60 s in RAM",
-    "hq_note": "Fixed HQ: CBR + P7 + high quality + AQ (verified NVENC recipe, no knobs to turn)."
+    "hq_note": "Fixed HQ: CBR + P7 + high quality + AQ (verified NVENC recipe, no knobs to turn).",
+    "caps_missing": "KMS capture permission is missing: the system will ask for admin on every capture start.",
+    "caps_fix": "Fix permissions",
+    "caps_fixing": "Requesting…"
   },
   "settings": {
     "clips_dir": "Clips folder",

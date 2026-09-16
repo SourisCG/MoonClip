@@ -32,16 +32,44 @@ interface VideoOptions {
   vendor: string;
 }
 
+interface GsrInfo {
+  path: string;
+  source: string;
+  caps_ok: boolean;
+  present: boolean;
+}
+
 /** Recording video: codec + output resolution (Medal ladder, GSR-backed). */
 export function VideoSection() {
   const { t } = useTranslation();
   const [opts, setOpts] = useState<VideoOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [gsr, setGsr] = useState<GsrInfo | null>(null);
+  const [capsBusy, setCapsBusy] = useState(false);
+  const [capsMsg, setCapsMsg] = useState<string | null>(null);
 
   const load = () => {
     invoke<VideoOptions>("video_options").then(setOpts).catch((e) => setError(String(e)));
   };
   useEffect(load, []);
+
+  const loadGsr = () => {
+    invoke<GsrInfo>("gsr_info").then(setGsr).catch((e) => setCapsMsg(String(e)));
+  };
+  useEffect(loadGsr, []);
+
+  const fixCaps = async () => {
+    setCapsBusy(true);
+    setCapsMsg(null);
+    try {
+      await invoke("fix_gsr_caps");
+      loadGsr();
+    } catch (e) {
+      setCapsMsg(String(e));
+    } finally {
+      setCapsBusy(false);
+    }
+  };
 
   const change = async (key: "video_codec" | "out_height" | "fps" | "monitor", value: string) => {
     setError(null);
@@ -144,6 +172,19 @@ export function VideoSection() {
           </select>
         </label>
       </div>
+      {gsr?.present && !gsr.caps_ok && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+          <p className="flex-1 text-xs text-amber-300">{t("video.caps_missing")}</p>
+          <button
+            onClick={() => void fixCaps()}
+            disabled={capsBusy}
+            className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+          >
+            {capsBusy ? t("video.caps_fixing") : t("video.caps_fix")}
+          </button>
+        </div>
+      )}
+      {capsMsg && <p className="break-all font-mono text-xs text-red-400">{capsMsg}</p>}
       <p className="text-xs text-slate-400">{currentNote}</p>
       {upscale && (
         <p className="text-xs text-amber-400">{t("video.upscale_warn")}</p>

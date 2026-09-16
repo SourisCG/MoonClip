@@ -27,6 +27,21 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **Embedded local install (2026-09-16)** — `pnpm tauri:build:linux` bundles
+  the resolved sidecars via a per-OS resource overlay: prebuilt GSR
+  (`gpu-screen-recorder` + `gsr-kms-server`) and a pinned static FFmpeg (BtbN
+  `linux64-gpl`, NVENC + libx264) land in
+  `/usr/lib/MoonClip/binaries/x86_64-unknown-linux-gnu/`, so the RPM is fully
+  self-contained. `build-aux/fetch-ffmpeg.sh` stages the pinned Linux ffmpeg
+  (johnvansickle dropped: its static build has no NVENC, needed by
+  save-scale). `pnpm app:install` (build-aux/install-local.sh) replaces the
+  RPM, re-applies the KMS cap (updates reset file capabilities) and adds a
+  hidden appId desktop alias for KDE/Wayland. Packaged builds now apply the
+  WebKitGTK Wayland workaround from code (`os::prepare_environment`) instead
+  of relying on cargo's dev env — fixes the Gdk `Error 71` crash at first
+  paint in the installed app. Settings → Video gained a one-click
+  "Fix permissions" row shown when the KMS cap is missing.
+
 - **Configurable clip hotkey (2026-09-16)** — Settings gains a recorder-style
   "Clip hotkey" row: click, press a combo, Esc cancels; "Reset to F9" appears
   when changed. `set_hotkey` canonicalizes/validates via `HotKey::from_str`,

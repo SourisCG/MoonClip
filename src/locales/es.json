@@ -45,7 +45,10 @@
     "disk_note": "Las resoluciones bajas solo ahorran espacio en disco. Para máxima calidad usa Origen.",
     "judder_note": "30 fps ahorra GPU pero se entrecorta más en monitores de alto refresco; 60 fps es más fluido en acción.",
     "estimate": "CBR {{bitrate}} kbps · ~{{ram}} MB por 60 s en RAM",
-    "hq_note": "HQ fijo: CBR + P7 + alta calidad + AQ (receta NVENC verificada, sin perillas)."
+    "hq_note": "HQ fijo: CBR + P7 + alta calidad + AQ (receta NVENC verificada, sin perillas).",
+    "caps_missing": "Falta el permiso de captura KMS: el sistema pedirá administrador en cada inicio de captura.",
+    "caps_fix": "Arreglar permisos",
+    "caps_fixing": "Solicitando…"
   },
   "settings": {
     "clips_dir": "Carpeta de clips",
