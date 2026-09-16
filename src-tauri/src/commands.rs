@@ -157,11 +157,13 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
         })
         .await?;
     let tracks = audio::linked_count(&engine.audio_args()).await;
+    set_engine_error(app, None).await;
     let status = EngineStatus {
         running: true,
         backend: engine.backend_name().to_string(),
         tracks_linked: tracks,
         audio_error: read_audio_error(app).await,
+        engine_error: None,
     };
     {
         let st = app.state::<AppState>();
@@ -200,11 +202,13 @@ async fn stop_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     }
     drop(guard);
     set_audio_error(app, None).await;
+    set_engine_error(app, None).await;
     Ok(EngineStatus {
         running: false,
         backend: backend_name().to_string(),
         tracks_linked: 0,
         audio_error: None,
+        engine_error: None,
     })
 }
 
@@ -287,6 +291,8 @@ pub struct EngineStatus {
     pub tracks_linked: usize,
     /// Last audio-gain apply error, if any.
     pub audio_error: Option<String>,
+    /// Last engine death/exit error, if any (cleared on next start).
+    pub engine_error: Option<String>,
 }
 
 async fn read_audio_error(app: &AppHandle) -> Option<String> {
@@ -298,6 +304,30 @@ async fn read_audio_error(app: &AppHandle) -> Option<String> {
 async fn set_audio_error(app: &AppHandle, err: Option<String>) {
     if let Some(st) = app.try_state::<AppState>() {
         *st.audio_error.lock().await = err;
+    }
+}
+
+async fn read_engine_error(app: &AppHandle) -> Option<String> {
+    let st = app.try_state::<AppState>()?;
+    let guard = st.engine_error.lock().await;
+    guard.clone()
+}
+
+async fn set_engine_error(app: &AppHandle, err: Option<String>) {
+    if let Some(st) = app.try_state::<AppState>() {
+        *st.engine_error.lock().await = err;
+    }
+}
+
+/// Human-readable cause from the last GSR log lines (best effort).
+fn engine_death_reason(tail: &[String]) -> String {
+    let last = tail.iter().rev().find(|line| {
+        let l = line.to_lowercase();
+        l.contains("error") || l.contains("failed") || l.contains("warning")
+    });
+    match last {
+        Some(line) => format!("capture engine exited: {line}"),
+        None => "capture engine exited unexpectedly".to_string(),
     }
 }
 
@@ -339,22 +369,64 @@ pub async fn stop_buffer(app: AppHandle) -> Result<EngineStatus, String> {
     stop_engine(&app).await
 }
 
+/// Liveness sweep: drop a dead engine and surface the reason. Returns whether
+/// an engine is currently running. Used by `engine_status` AND by a backend
+/// watchdog task, because the webview (and its 2 s poll) is paused while the
+/// window is hidden to tray during gaming.
+pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
+    let st = app.state::<AppState>();
+    let mut guard = st.recorder.lock().await;
+    let had_engine = guard.is_some();
+    let (alive, tail) = match guard.as_mut() {
+        Some(engine) => {
+            if engine.check_alive() {
+                (true, Vec::new())
+            } else {
+                (false, engine.log_tail())
+            }
+        }
+        None => (false, Vec::new()),
+    };
+    if had_engine && !alive {
+        guard.take();
+    }
+    drop(guard);
+    if had_engine && !alive {
+        let reason = engine_death_reason(&tail);
+        eprintln!("[moonclip] engine died: {reason}");
+        set_engine_error(app, Some(reason.clone())).await;
+        let _ = app.emit(
+            "moonclip://engine-stopped",
+            serde_json::json!({ "reason": reason }),
+        );
+        notify(
+            app,
+            "El motor de captura se detuvo inesperadamente",
+            "Capture engine stopped unexpectedly",
+        );
+    }
+    alive
+}
+
 #[tauri::command]
 pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
-    let st = app.state::<AppState>();
-    let guard = st.recorder.lock().await;
-    let (running, args) = (guard.is_some(), guard.as_ref().map(|e| e.audio_args()).unwrap_or_default());
-    drop(guard);
-    let tracks = if running {
+    let alive = sweep_engine_liveness(&app).await;
+    let args = if alive {
+        engine_audio_args(&app).await
+    } else {
+        Vec::new()
+    };
+    let tracks = if alive {
         audio::linked_count(&args).await
     } else {
         0
     };
     Ok(EngineStatus {
-        running,
+        running: alive,
         backend: backend_name().to_string(),
         tracks_linked: tracks,
         audio_error: read_audio_error(&app).await,
+        engine_error: read_engine_error(&app).await,
     })
 }
 

@@ -94,13 +94,29 @@ settings, never of whichever monitor the backend finds first.
      "newest file" could return a previous clip; never falls back to one.
 - `stop()`: `SIGINT` + `child.wait()`.
 - `Drop`: `start_kill()` to avoid zombies.
+- Stdio: GSR's stdout/stderr are drained by background readers into a bounded
+  200-line ring. An unread 64 KB pipe buffer fills under load (GSR logs frame
+  telemetry several times per second) and blocks GSR mid-capture.
+- Liveness: `check_alive()` (`try_wait`) runs on the `engine_status` UI poll
+  AND on a 2 s backend watchdog (the webview is paused while tray-hidden, so
+  the UI poll alone cannot detect it during gaming). If GSR exited, the engine
+  is dropped, the log tail surfaces in the UI and `moonclip://engine-stopped`
+  fires + notification. No silent dead buffer.
+- Codec ids: app `x264` = CPU encoding, spawned as `-k h264 -encoder cpu`
+  (GSR rejects `h264_software` as a `-k` value; `--info` only reports it as a
+  capability). NVENC HQ passthrough is skipped for x264 and save-scale uses
+  `libx264` for it.
 
 ### 2.3 Permissions (avoid portal UX pain)
 
-- Preferred: direct KMS capture, zero dialogs. Requires capability once at install/first run:
+- Preferred: direct KMS capture, zero dialogs. Upstream GSR checks the cap on
+  its KMS helper (`gsr-kms-server`, spawned next to the binary) and falls back
+  to launching it via `pkexec` — an admin prompt on every capture start — when
+  the cap is missing. Set it once at install/first run:
   ```bash
-  sudo setcap cap_sys_admin+ep $(which gpu-screen-recorder)
+  sudo setcap cap_sys_admin+ep "$(dirname "$(which gpu-screen-recorder)")/gsr-kms-server"
   ```
+  `os/linux/caps.rs` checks/fixes this same helper (one-click `pkexec` fix).
 - Fallback: XDG Portal `ScreenCast` with `persist_mode=2` + saved `restore_token` + onboarding screen ("Pick Entire Screen → Check Remember → Share"). If stream metadata looks like a single window, warn the user.
 - Audio discovery: `pactl list short sources` / `pw-dump`. `*.monitor` = output, others = inputs.
 

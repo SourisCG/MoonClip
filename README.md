@@ -87,9 +87,11 @@ No pixels ever touch JS. React only sends `{start, end}` to Rust; Rust runs FFmp
   # Ubuntu / Debian
   sudo apt-get install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
   ```
-- Linux capture (no portal dialogs):
+- Linux capture (no portal dialogs): the cap belongs to GSR's KMS helper, not
+  to the main binary — upstream checks it there and otherwise asks for admin
+  via `pkexec` on every capture start:
   ```bash
-  sudo setcap cap_sys_admin+ep $(which gpu-screen-recorder)
+  sudo setcap cap_sys_admin+ep "$(dirname "$(which gpu-screen-recorder)")/gsr-kms-server"
   ```
   Fallback is XDG Portal ScreenCast with saved token if you skip this.
 - Windows: 10 version 1903 (build 18362)+ or 11. MSVC toolchain.

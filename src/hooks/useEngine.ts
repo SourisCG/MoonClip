@@ -8,6 +8,7 @@ export interface EngineStatus {
   backend: string;
   tracks_linked: number;
   audio_error: string | null;
+  engine_error: string | null;
 }
 
 export function useEngine(onClipSaved: () => void) {
@@ -16,6 +17,7 @@ export function useEngine(onClipSaved: () => void) {
     backend: "",
     tracks_linked: 0,
     audio_error: null,
+    engine_error: null,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,10 +37,13 @@ export function useEngine(onClipSaved: () => void) {
       invoke<EngineStatus>("engine_status").then(setStatus).catch(() => {});
     }, 2000);
     let unlisten: (() => void) | undefined;
+    let unlistenStopped: (() => void) | undefined;
     (async () => {
       try {
-        const fn = await listen("moonclip://clip-saved", () => onClipSaved());
-        unlisten = fn;
+        unlisten = await listen("moonclip://clip-saved", () => onClipSaved());
+        unlistenStopped = await listen("moonclip://engine-stopped", () => {
+          void refresh();
+        });
       } catch (err) {
         console.error(err);
       }
@@ -46,6 +51,7 @@ export function useEngine(onClipSaved: () => void) {
     return () => {
       window.clearInterval(poll);
       unlisten?.();
+      unlistenStopped?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refresh]);

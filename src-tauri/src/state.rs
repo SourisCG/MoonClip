@@ -10,4 +10,6 @@ pub struct AppState {
     pub recorder: Mutex<Option<Engine>>,
     /// Last audio-gain apply outcome (None = ok/never). Shown in UI, no silent fails.
     pub audio_error: Mutex<Option<String>>,
+    /// Last engine death/exit error (None = ok/never). Shown in UI.
+    pub engine_error: Mutex<Option<String>>,
 }

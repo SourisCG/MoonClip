@@ -127,6 +127,11 @@ export default function App() {
                 {engineError && (
                   <p className="mt-1.5 break-all font-mono text-[11px] text-red-400">{engineError}</p>
                 )}
+                {status.engine_error && (
+                  <p className="mt-1.5 break-all font-mono text-[11px] text-amber-400">
+                    {status.engine_error}
+                  </p>
+                )}
               </div>
               <div className="hidden items-center justify-between rounded-xl border border-white/5 bg-black/30 px-3 py-2 text-xs lg:flex">
                 <span className="text-slate-400">{t("lang.label")}</span>

@@ -160,6 +160,16 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 commands::backfill_durations(&handle).await;
             });
+            // Backend liveness watchdog: the webview (and its engine_status
+            // poll) is paused while the window is hidden to tray, so a dead
+            // GSR would otherwise go unnoticed until the user reopens the UI.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    commands::sweep_engine_liveness(&handle).await;
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

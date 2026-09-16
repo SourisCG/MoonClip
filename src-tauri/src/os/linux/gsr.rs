@@ -5,19 +5,27 @@
 
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncRead};
 use tokio::process::{Child, Command};
 use tokio::time::sleep;
 
 use super::super::{CaptureConfig, CaptureEngine, SavePlan};
+
+/// How many GSR log lines we keep for diagnostics (bounded memory).
+const LOG_TAIL_LINES: usize = 200;
 
 pub struct LinuxGsrEngine {
     child: Option<Child>,
     output_dir: PathBuf,
     audio_args: Vec<String>,
     save_plan: Option<SavePlan>,
+    /// Bounded tail of GSR's stdout/stderr, shared with the reader tasks.
+    log_ring: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl LinuxGsrEngine {
@@ -27,6 +35,7 @@ impl LinuxGsrEngine {
             output_dir: PathBuf::new(),
             audio_args: Vec::new(),
             save_plan: None,
+            log_ring: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -99,13 +108,12 @@ impl CaptureEngine for LinuxGsrEngine {
         } else {
             config.source.trim()
         };
-        cmd.args([
-            "-w", source,
-            "-f", &config.fps.to_string(),
-            "-k", &config.codec,
-            "-c", "mp4",
-            "-r", &config.duration_seconds.to_string(),
-        ]);
+        cmd.args(["-w", source, "-f", &config.fps.to_string()]);
+        // `x264` is our CPU option: GSR rejects `h264_software` as a `-k`
+        // value (it only reports it in `--info`), so the software path is
+        // `-k h264 -encoder cpu`.
+        cmd.args(gsr_codec_args(&config.codec));
+        cmd.args(["-c", "mp4", "-r", &config.duration_seconds.to_string()]);
         if let Some(scale) = scale_arg(config.out_height) {
             cmd.args(["-s", &scale]);
         }
@@ -115,10 +123,13 @@ impl CaptureEngine for LinuxGsrEngine {
             "-tune", "quality",
             "-keyint", "2",
         ]);
-        if let Some(opts) = &config.nvenc_opts {
-            cmd.args(["-ffmpeg-video-opts", opts]);
+        // NVENC HQ passthrough is for GPU encoding only.
+        if config.codec != "x264" {
+            if let Some(opts) = &config.nvenc_opts {
+                cmd.args(["-ffmpeg-video-opts", opts]);
+            }
         }
-        let child = cmd
+        let mut child = cmd
             .arg("-a")
             .arg(&audio_args[0])
             .arg("-a")
@@ -136,6 +147,16 @@ impl CaptureEngine for LinuxGsrEngine {
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("cannot launch {}: {e}", bin.display()))?;
+        // GSR is chatty on stdout/stderr (frame telemetry, warnings). With
+        // piped stdio that nobody reads, the 64 KB pipe buffer fills and GSR
+        // blocks mid-capture (seen under heavy game load). Drain both pipes in
+        // background readers and keep a bounded tail for diagnostics.
+        if let Some(stdout) = child.stdout.take() {
+            spawn_log_reader(stdout, self.log_ring.clone());
+        }
+        if let Some(stderr) = child.stderr.take() {
+            spawn_log_reader(stderr, self.log_ring.clone());
+        }
         self.output_dir = config.output_dir;
         self.audio_args = audio_args;
         self.save_plan = if config.save_height > 0 {
@@ -200,6 +221,58 @@ impl CaptureEngine for LinuxGsrEngine {
     fn save_plan(&self) -> Option<SavePlan> {
         self.save_plan.clone()
     }
+
+    fn check_alive(&mut self) -> bool {
+        match self.child.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        }
+    }
+
+    fn log_tail(&self) -> Vec<String> {
+        self.log_ring
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect()
+    }
+}
+
+/// App codec id -> GSR `-k` args. `x264` (CPU option) = `-k h264 -encoder cpu`.
+fn gsr_codec_args(codec: &str) -> Vec<String> {
+    match codec {
+        "x264" => vec![
+            "-k".into(),
+            "h264".into(),
+            "-encoder".into(),
+            "cpu".into(),
+        ],
+        other => vec!["-k".into(), other.into()],
+    }
+}
+
+/// Drain a GSR stdio pipe into the bounded ring (and the dev console for
+/// error/warning lines). Prevents the pipe buffer from filling and blocking
+/// the recorder.
+fn spawn_log_reader<R>(reader: R, ring: Arc<Mutex<VecDeque<String>>>)
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(reader).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let lower = line.to_lowercase();
+            if lower.contains("error") || lower.contains("failed") || lower.contains("warning") {
+                eprintln!("[gsr] {line}");
+            }
+            let mut ring = ring.lock().unwrap_or_else(|e| e.into_inner());
+            if ring.len() >= LOG_TAIL_LINES {
+                ring.pop_front();
+            }
+            ring.push_back(line);
+        }
+    });
 }
 
 /// GSR `-s` value for ladder heights (16:9 box, kept aspect). None = original.
@@ -256,5 +329,52 @@ mod tests {
             None
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn codec_args_map_cpu_option() {
+        use super::gsr_codec_args;
+        assert_eq!(gsr_codec_args("h264"), vec!["-k", "h264"]);
+        assert_eq!(gsr_codec_args("hevc"), vec!["-k", "hevc"]);
+        assert_eq!(
+            gsr_codec_args("x264"),
+            vec!["-k", "h264", "-encoder", "cpu"]
+        );
+    }
+
+    #[tokio::test]
+    async fn check_alive_tracks_child_exit() {
+        use super::LinuxGsrEngine;
+        use crate::os::CaptureEngine;
+        use tokio::process::Command;
+
+        let mut engine = LinuxGsrEngine::new();
+        assert!(!engine.check_alive());
+        let child = Command::new("sleep").arg("0.05").spawn().unwrap();
+        engine.child = Some(child);
+        assert!(engine.check_alive());
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!engine.check_alive());
+    }
+
+    #[tokio::test]
+    async fn log_reader_keeps_bounded_tail() {
+        use super::{spawn_log_reader, LOG_TAIL_LINES};
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+        use tokio::io::AsyncWriteExt;
+
+        let (mut tx, rx) = tokio::io::duplex(1024);
+        let ring = Arc::new(Mutex::new(VecDeque::new()));
+        spawn_log_reader(rx, ring.clone());
+        for i in 0..(LOG_TAIL_LINES + 5) {
+            tx.write_all(format!("line {i}\n").as_bytes()).await.unwrap();
+        }
+        drop(tx);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let got = ring.lock().unwrap();
+        assert_eq!(got.len(), LOG_TAIL_LINES);
+        assert_eq!(got.back().unwrap(), &format!("line {}", LOG_TAIL_LINES + 4));
+        assert_eq!(got.front().unwrap(), &format!("line {}", 5));
     }
 }

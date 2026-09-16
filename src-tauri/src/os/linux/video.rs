@@ -30,7 +30,7 @@ fn parse_vendor(info: &str) -> String {
     "unknown".into()
 }
 
-/// Codec ids from `--info` (`section=video_codecs`). Raw list, unfiltered.
+/// Codec ids from `--info` (`section=video_codecs`), mapped to app ids.
 /// The ffmpeg path is Windows-only surface (probes); Linux ignores it.
 pub async fn offered_codecs(bin: &Path, _ffmpeg: &Path) -> Vec<String> {
     let Ok(out) = tokio::process::Command::new(bin)
@@ -52,11 +52,26 @@ pub async fn offered_codecs(bin: &Path, _ffmpeg: &Path) -> Vec<String> {
             in_codecs = line == "section=video_codecs";
             continue;
         }
-        if in_codecs && !line.is_empty() && !ids.contains(&line.to_string()) {
-            ids.push(line.to_string());
+        if in_codecs && !line.is_empty() {
+            if let Some(id) = app_codec_id(line) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
         }
     }
     ids
+}
+
+/// GSR `--info` codec id -> app codec id. The H.264 software encoder is our
+/// `x264` (spawned as `-k h264 -encoder cpu`); other `_software` variants
+/// have no app id yet, so `None` keeps dead options out of the UI.
+fn app_codec_id(gsr_id: &str) -> Option<String> {
+    match gsr_id {
+        "h264_software" => Some("x264".to_string()),
+        other if other.ends_with("_software") => None,
+        other => Some(other.to_string()),
+    }
 }
 
 /// One capture monitor (`--list-monitors`, `NAME|WxH` lines).
@@ -97,7 +112,12 @@ fn parse_monitors(out: &str) -> Vec<Monitor> {
 /// Intel/AMD capture works through backend defaults (VAAPI); this only picks
 /// the re-encode path. AMD/VAAPI transcode needs render-node plumbing that is
 /// only validated on real HW, so it returns None (caller keeps source file).
-pub fn transcode_encoder(vendor: &str, _codec: &str) -> Option<TranscodeEncoder> {
+pub fn transcode_encoder(vendor: &str, codec: &str) -> Option<TranscodeEncoder> {
+    // Software capture (x264) stays software on save-scale: the user picked
+    // CPU on purpose and the source pixels are already software-encoded.
+    if codec == "x264" {
+        return Some(TranscodeEncoder::X264);
+    }
     match vendor {
         "nvidia" => Some(TranscodeEncoder::Nvenc),
         "intel" => Some(TranscodeEncoder::Qsv),
@@ -124,6 +144,17 @@ mod tests {
         assert_eq!(transcode_encoder("intel", "h264"), Some(TranscodeEncoder::Qsv));
         assert_eq!(transcode_encoder("amd", "h264"), None);
         assert_eq!(transcode_encoder("unknown", "h264"), None);
+        // CPU capture stays CPU on save-scale, regardless of vendor.
+        assert_eq!(transcode_encoder("nvidia", "x264"), Some(TranscodeEncoder::X264));
+    }
+
+    #[test]
+    fn software_codecs_map_to_app_ids() {
+        use super::app_codec_id;
+        assert_eq!(app_codec_id("h264"), Some("h264".to_string()));
+        assert_eq!(app_codec_id("h264_software"), Some("x264".to_string()));
+        assert_eq!(app_codec_id("hevc"), Some("hevc".to_string()));
+        assert_eq!(app_codec_id("hevc_software"), None);
     }
 
     #[test]

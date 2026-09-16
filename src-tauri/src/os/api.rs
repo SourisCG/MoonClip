@@ -65,6 +65,15 @@ pub trait CaptureEngine: Send + Sync {
     fn save_plan(&self) -> Option<SavePlan> {
         None
     }
+    /// Engine liveness. Native backends own their threads and default to true;
+    /// subprocess backends report whether the child is still running.
+    fn check_alive(&mut self) -> bool {
+        true
+    }
+    /// Bounded backend log tail (last lines) for diagnostics after a failure.
+    fn log_tail(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 /// One capture device from `--list-audio-devices` (or OS enumeration).
