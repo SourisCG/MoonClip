@@ -38,9 +38,96 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// Default clip hotkey (used when unset or when the stored one is taken).
+const DEFAULT_HOTKEY: &str = "F9";
+
+/// Stored hotkey setting, or the default when unset/blank.
+fn stored_hotkey(app: &tauri::AppHandle) -> String {
+    app.try_state::<storage::DbState>()
+        .and_then(|db| db.get_settings().ok())
+        .and_then(|s| s.get("hotkey").cloned())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
+}
+
+/// Modifier-less shortcuts are restricted to function keys and a few
+/// dedicated keys, so a plain letter can never hijack system-wide input.
+fn is_allowed_single_key(key: &str) -> bool {
+    let k = key.to_ascii_uppercase();
+    if let Some(num) = k.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()) {
+        return (1..=12).contains(&num);
+    }
+    matches!(k.as_str(), "PRINTSCREEN" | "PAUSE")
+}
+
+/// Parse + canonicalize a shortcut string, enforcing the single-key rule.
+fn normalize_hotkey(input: &str) -> Result<String, String> {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("empty shortcut".into());
+    }
+    let shortcut = Shortcut::from_str(trimmed).map_err(|e| e.to_string())?;
+    if shortcut.mods.is_empty() && !is_allowed_single_key(&shortcut.key.to_string()) {
+        return Err(format!(
+            "{trimmed}: needs a modifier (Ctrl/Alt/Shift/Super) — only function keys can be used alone"
+        ));
+    }
+    Ok(shortcut.into_string())
+}
+
+/// Register the persisted hotkey. If it cannot be registered (taken by
+/// another app), fall back to the default so saving always has a binding.
+fn register_stored_hotkey(app: &tauri::AppHandle) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let stored = stored_hotkey(app);
+    let gs = app.global_shortcut();
+    let _ = gs.unregister(stored.as_str());
+    match gs.register(stored.as_str()) {
+        Ok(()) => eprintln!("[moonclip] global shortcut {stored} registered"),
+        Err(e) => {
+            eprintln!(
+                "[moonclip] could not register {stored} ({e}); falling back to {DEFAULT_HOTKEY}"
+            );
+            let _ = gs.unregister(DEFAULT_HOTKEY);
+            match gs.register(DEFAULT_HOTKEY) {
+                Ok(()) => eprintln!("[moonclip] global shortcut {DEFAULT_HOTKEY} registered"),
+                Err(e) => eprintln!("[moonclip] could not register {DEFAULT_HOTKEY}: {e}"),
+            }
+        }
+    }
+}
+
 #[tauri::command]
-fn get_hotkey() -> String {
-    "F9".to_string()
+fn get_hotkey(app: tauri::AppHandle) -> String {
+    stored_hotkey(&app)
+}
+
+/// Change the clip hotkey: canonicalize, re-register (restoring the previous
+/// binding if the new one fails) and persist. Returns the canonical string.
+#[tauri::command]
+fn set_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<String, String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let canonical = normalize_hotkey(&hotkey)?;
+    let previous = stored_hotkey(&app);
+    let gs = app.global_shortcut();
+    if canonical == previous && gs.is_registered(canonical.as_str()) {
+        return Ok(canonical);
+    }
+    let _ = gs.unregister(previous.as_str());
+    if let Err(e) = gs.register(canonical.as_str()) {
+        // Never leave the user without a working hotkey.
+        let _ = gs.register(previous.as_str());
+        return Err(format!("{canonical}: {e}"));
+    }
+    let db = app.state::<storage::DbState>();
+    db.set_setting("hotkey", &canonical)?;
+    eprintln!("[moonclip] hotkey changed: {previous} -> {canonical}");
+    Ok(canonical)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -144,17 +231,14 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // --- Global shortcut F9 ---
-            use tauri_plugin_global_shortcut::GlobalShortcutExt;
-            match app.global_shortcut().register("F9") {
-                Ok(_) => eprintln!("[moonclip] global shortcut F9 registered"),
-                Err(e) => eprintln!("[moonclip] could not register F9: {}", e),
-            }
-
             // --- Persistence (Phase 2) ---
             let db = storage::DbState::open(app.handle()).map_err(std::io::Error::other)?;
             app.manage(db);
             app.manage(state::AppState::default());
+
+            // --- Global shortcut (configurable, default F9) ---
+            register_stored_hotkey(app.handle());
+
             // One-time duration backfill for pre-probing rows (background).
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -182,6 +266,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             get_hotkey,
+            set_hotkey,
             commands::list_clips,
             commands::toggle_favorite,
             commands::delete_clip,
@@ -211,4 +296,34 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod hotkey_tests {
+    use super::{is_allowed_single_key, normalize_hotkey};
+
+    #[test]
+    fn canonicalizes_valid_shortcuts() {
+        assert_eq!(normalize_hotkey("f9").unwrap(), "F9");
+        assert_eq!(
+            normalize_hotkey(" Ctrl + Shift + KeyS ").unwrap(),
+            "shift+control+KeyS"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_and_bare_letters() {
+        assert!(normalize_hotkey("").is_err());
+        assert!(normalize_hotkey("KeyS").is_err());
+        assert!(normalize_hotkey("not-a-key").is_err());
+    }
+
+    #[test]
+    fn allows_function_and_special_singles() {
+        assert_eq!(normalize_hotkey("F8").unwrap(), "F8");
+        assert_eq!(normalize_hotkey("PrintScreen").unwrap(), "PrintScreen");
+        assert!(is_allowed_single_key("F12"));
+        assert!(!is_allowed_single_key("F13"));
+        assert!(!is_allowed_single_key("KeyS"));
+    }
 }

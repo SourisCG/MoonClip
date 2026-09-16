@@ -114,7 +114,7 @@ pnpm build
 
 ## Usage
 
-- `F9` — save clip (global, works in fullscreen exclusive).
+- `F9` (default, changeable in Settings → Clip hotkey) — save clip (global, works in fullscreen exclusive).
 - Tray icon — buffer status (active/idle), show/hide, quit. Main window minimizes to tray while gaming.
 - Settings — buffer length, fps (30/60), quality ladder, monitor, `gain_game/gain_mic` + mutes, base folder, locale ES/EN, hotkey (F9 default).
 - Clips live in `~/Videos/MoonClip` by default. DB stores only `file_name`, resolved at runtime as `base_dir.join(file_name)` — move the folder freely.

@@ -158,7 +158,7 @@ export default function App() {
               <>
                 <h2 className="text-xl font-bold text-slate-100">{t("nav.settings")}</h2>
                 <div className="mt-4">
-                  <SettingsModal engineStatus={status} />
+                  <SettingsModal engineStatus={status} onHotkeyChange={setHotkey} />
                 </div>
               </>
             )}

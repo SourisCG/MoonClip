@@ -52,6 +52,11 @@
     "browse": "Examinar",
     "buffer": "Búfer de repetición (segundos)",
     "max_gb": "Almacenamiento máx. (GB)",
+    "hotkey": "Atajo de clip",
+    "hotkey_edit": "Clic para cambiar",
+    "hotkey_press": "Pulsa una tecla… (Esc cancela)",
+    "hotkey_reset": "Restablecer F9",
+    "hotkey_needs_mod": "Usa un modificador (Ctrl/Alt/Shift/Super) o una tecla de función (F1–F12).",
     "secret": {
       "title": "Bóveda de secretos (keyring del SO)",
       "test": "Probar escritura/lectura",

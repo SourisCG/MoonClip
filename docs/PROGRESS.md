@@ -27,6 +27,37 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **Configurable clip hotkey (2026-09-16)** — Settings gains a recorder-style
+  "Clip hotkey" row: click, press a combo, Esc cancels; "Reset to F9" appears
+  when changed. `set_hotkey` canonicalizes/validates via `HotKey::from_str`,
+  re-registers through the global-shortcut plugin (restoring the previous
+  binding if the new one is taken) and persists in `settings.hotkey`; startup
+  now registers the stored value (fallback F9 + console warning when it is
+  unavailable). Bare keys are limited to F1–F12/PrintScreen/Pause, anything
+  else needs a modifier. Status card refreshes via `onHotkeyChange`; IPC list
+  + README updated; unit tests for normalization.
+
+- **Capture robustness + CPU (x264) option (2026-09-14)**
+  - Root-caused the mid-game capture stall: GSR's stdout/stderr were piped but
+    never read; the 64 KB pipe buffer fills (GSR logs frame telemetry several
+    times per second, more under shader-compile/game load) and GSR blocks
+    mid-capture. Both pipes are now drained by background readers into a
+    bounded 200-line ring; error/warning lines also reach the dev console.
+  - Engine liveness: `check_alive()` (`try_wait`) runs on the `engine_status`
+    poll and on a 2 s backend watchdog (the webview pauses while tray-hidden,
+    so the UI poll alone cannot detect it during gaming); a dead engine is
+    dropped, the last GSR error lines surface in the UI, and
+    `moonclip://engine-stopped` fires + notification. No auto-restart by
+    design.
+  - Optional CPU encoding: GSR `--info` `h264_software` maps to the app's
+    `x264` codec, spawned as `-k h264 -encoder cpu` (GSR rejects
+    `h264_software` as a `-k` value). Save-scale uses `libx264` for x264;
+    locale labels/notes updated (ES/EN).
+  - Caps fix: `os/linux/caps.rs` checks/sets `cap_sys_admin` on
+    `gsr-kms-server` (upstream's actual target; without it GSR launches the
+    helper through `pkexec` and prompts for admin on every capture start).
+    README + docs 02 corrected.
+
 - **Audio device list + save robustness + hotkey test card removed (2026-09-14)**
   - `list_audio_devices` used `LinuxGsrEngine::resolve_binary`, which only
     checks next-to-exe/PATH, so it failed in dev (sidecar lives in

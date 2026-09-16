@@ -52,6 +52,11 @@
     "browse": "Browse",
     "buffer": "Replay buffer (seconds)",
     "max_gb": "Max storage (GB)",
+    "hotkey": "Clip hotkey",
+    "hotkey_edit": "Click to change",
+    "hotkey_press": "Press a key… (Esc cancels)",
+    "hotkey_reset": "Reset to F9",
+    "hotkey_needs_mod": "Use a modifier (Ctrl/Alt/Shift/Super) or a function key (F1–F12).",
     "secret": {
       "title": "Secret vault (OS keyring)",
       "test": "Test round-trip",

@@ -83,7 +83,8 @@ Core commands: `list_clips`, `toggle_favorite`, `delete_clip`,
 `stop_buffer`, `engine_status`, `save_clip_now`, `audio_levels`,
 `set_track_gain`, `set_track_mute`, `gsr_info`, `fix_gsr_caps`,
 `list_audio_devices`, `preview_track`, `open_clip_external`, `video_options`,
-`get_hotkey`. Events: `moonclip://clip-hotkey`, `moonclip://clip-saved`.
+`get_hotkey`, `set_hotkey`. Events: `moonclip://clip-hotkey`, `moonclip://clip-saved`,
+`moonclip://engine-stopped`.
 
 > **IPC naming rule (Tauri v2, learned the hard way):** `#[tauri::command]`
 > auto-converts Rust `snake_case` params to **camelCase wire keys**

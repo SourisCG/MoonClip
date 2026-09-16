@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -11,12 +11,70 @@ import type { EngineStatus } from "../../hooks/useEngine";
 
 const SECRET_TEST_ALIAS = "phase2_selftest";
 
-export function SettingsModal({ engineStatus }: { engineStatus: EngineStatus }) {
+export function SettingsModal({
+  engineStatus,
+  onHotkeyChange,
+}: {
+  engineStatus: EngineStatus;
+  onHotkeyChange?: (hotkey: string) => void;
+}) {
   const { t } = useTranslation();
   const { locale, setLocale } = useLocale();
   const { settings, loading, error, setSetting } = useSettings();
   const [saving, setSaving] = useState<string | null>(null);
   const [secretStatus, setSecretStatus] = useState<string | null>(null);
+  const [hotkey, setHotkey] = useState("F9");
+  const [capturing, setCapturing] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<string>("get_hotkey")
+      .then(setHotkey)
+      .catch((e) => setHotkeyError(String(e)));
+  }, []);
+
+  const applyHotkey = async (value: string) => {
+    setHotkeyError(null);
+    try {
+      const canonical = await invoke<string>("set_hotkey", { hotkey: value });
+      setHotkey(canonical);
+      onHotkeyChange?.(canonical);
+      return true;
+    } catch (e) {
+      setHotkeyError(String(e));
+      return false;
+    }
+  };
+
+  /**
+   * Recorder: Esc cancels, lone modifiers are ignored and bare non-function
+   * keys are rejected here (the backend enforces the same rule as defense).
+   */
+  const onHotkeyKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      setCapturing(false);
+      setHotkeyError(null);
+      return;
+    }
+    if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
+    const mods: string[] = [];
+    if (e.ctrlKey) mods.push("control");
+    if (e.altKey) mods.push("alt");
+    if (e.shiftKey) mods.push("shift");
+    if (e.metaKey) mods.push("super");
+    const code = e.code;
+    const singleAllowed = /^F([1-9]|1[0-2])$/.test(code) || ["PrintScreen", "Pause"].includes(code);
+    if (mods.length === 0 && !singleAllowed) {
+      setHotkeyError(t("settings.hotkey_needs_mod"));
+      return;
+    }
+    void applyHotkey([...mods, code].join("+")).then((ok) => {
+      if (ok) setCapturing(false);
+    });
+  };
 
   const save = async (key: string, value: string) => {
     setSaving(key);
@@ -124,6 +182,35 @@ export function SettingsModal({ engineStatus }: { engineStatus: EngineStatus }) 
           <option value="en">{t("lang.en")}</option>
         </select>
       </div>
+
+      <div className={row}>
+        <span className={label}>{t("settings.hotkey")}</span>
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          <button
+            onClick={() => {
+              setHotkeyError(null);
+              setCapturing(true);
+            }}
+            onKeyDown={onHotkeyKeyDown}
+            onBlur={() => setCapturing(false)}
+            className={`${input} text-left font-mono ${capturing ? "border-cyan-500/50 text-cyan-200" : ""}`}
+            title={t("settings.hotkey_edit")}
+          >
+            {capturing ? t("settings.hotkey_press") : hotkey}
+          </button>
+          {!capturing && hotkey !== "F9" && (
+            <button
+              onClick={() => void applyHotkey("F9")}
+              className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-cyan-500/40 hover:text-cyan-200"
+            >
+              {t("settings.hotkey_reset")}
+            </button>
+          )}
+        </div>
+      </div>
+      {hotkeyError && (
+        <p className="break-all font-mono text-xs text-red-400">{hotkeyError}</p>
+      )}
 
       <div className={row}>
         <span className={label}>
