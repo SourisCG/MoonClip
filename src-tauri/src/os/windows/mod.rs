@@ -16,3 +16,6 @@ pub use wgc::WindowsCaptureEngine as Engine;
 pub fn backend_name() -> &'static str {
     "windows-capture (stub)"
 }
+
+/// Windows (WebView2) needs no WebKitGTK/Wayland workarounds.
+pub fn prepare_environment() {}

@@ -132,6 +132,9 @@ fn set_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Wayland/WebKitGTK workaround: must run before any window is created so
+    // packaged builds behave like cargo dev runs (see os::prepare_environment).
+    crate::os::prepare_environment();
     tauri::Builder::default()
         .manage(Mutex::new(HotkeyState::default()))
         .plugin(tauri_plugin_dialog::init())
