@@ -110,6 +110,13 @@ pnpm build
 # Tauri bundle -> src-tauri/target/release/bundle/
 ```
 
+Linux local install (fully embedded: GSR + static ffmpeg in the same package):
+
+```bash
+pnpm tauri:build:linux   # RPM with sidecars under /usr/lib/MoonClip/binaries/
+pnpm app:install         # replace install + KMS cap + taskbar association
+```
+
 > Windows SmartScreen (early builds): app is unsigned OSS yet. Click `More info → Run anyway`. Builds are auditable via GitHub Actions. Signing via Store/MSIX comes after Phase 7.
 
 ## Usage

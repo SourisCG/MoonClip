@@ -26,14 +26,18 @@ Minimum supported Windows version: **Windows 10 version 1903 (build 18362)+**
 this floor so the installer refuses older builds instead of installing a
 build whose capture backend cannot initialize.
 
-Sidecars in `src-tauri/binaries/`: `ffmpeg-x86_64-pc-windows-msvc.exe`, `ffmpeg-x86_64-unknown-linux-gnu` (static: BtbN / johnvansickle musl). The
-Windows ffmpeg ships via `bundle.resources` (raw binary pipes — the
+Sidecars in `src-tauri/binaries/`: `ffmpeg-x86_64-pc-windows-msvc.exe` and
+`ffmpeg-x86_64-unknown-linux-gnu` (static BtbN `win64-gpl` / `linux64-gpl`).
+The ffmpeg sidecar ships via `bundle.resources` (raw binary pipes — the
 shell-plugin sidecar API is line-events only and cannot carry them), added
-through a **per-OS CI config overlay** (`tauri build --config ...`), never
-in the base `tauri.conf.json`, so Linux bundles never carry the `.exe`.
-Plus `moonclip-gsr/gpu-screen-recorder` (+ `gsr-kms-server`) for Linux targets,
-built in CI from the pinned snapshot in `docs/THIRD_PARTY.md`. Full ship matrix
-(user installs nothing extra) is defined there.
+through a **per-OS config overlay** (`tauri build --config ...`), never in the
+base `tauri.conf.json` so Linux bundles never carry the `.exe` and vice versa.
+The Linux overlay exists today:
+`pnpm tauri:build:linux` bundles `binaries/x86_64-unknown-linux-gnu/*`
+(GSR + `gsr-kms-server` + ffmpeg) into `/usr/lib/MoonClip/`, so the RPM is
+fully self-contained; `pnpm app:install` replaces the install, re-applies the
+KMS cap and the KDE/Wayland desktop alias. Full ship matrix (user installs
+nothing extra) is defined in `docs/THIRD_PARTY.md`.
 Windows agent: MSVC toolchain + `pnpm install` (pnpm via corepack/npm);
 `host_triple()` in `sidecar.rs` already emits `x86_64-pc-windows-msvc`.
 No GSR build needed on Windows (native WGC backend).

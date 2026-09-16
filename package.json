@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:build:linux": "tauri build --bundles rpm --config '{\"bundle\":{\"resources\":[\"icons/tray-icon.png\",\"binaries/x86_64-unknown-linux-gnu/*\"]}}'",
+    "app:install": "bash build-aux/install-local.sh",
     "desktop:install": "bash build-aux/install-dev-desktop.sh"
   },
   "dependencies": {

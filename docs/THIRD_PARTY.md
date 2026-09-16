@@ -22,8 +22,9 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   plus our build flags (this file + the script). No modifications to GSR itself.
 - **Ship model per format:**
   - `.rpm` / `.deb` / `.AppImage`: prebuilt sidecar under
-    `<app>/moonclip-gsr/`; system deps (`libdrm`, `libva`, pipewire, pulse)
-    come from official distro repos via `Requires`/`Depends`.
+    `<app>/binaries/<triple>/` (Tauri resources, resolved by
+    `sidecar::search_bundled`); system deps (`libdrm`, `libva`, pipewire,
+    pulse) come from official distro repos via `Requires`/`Depends`.
   - Flatpak/Flathub: `gpu-screen-recorder` compiled as a manifest module
     (mirrors upstream manifest), `finish-args: --device=all
     --socket=pulseaudio --socket=wayland --socket=fallback-x11`.
@@ -40,8 +41,8 @@ component shipped inside MoonClip installers and what the GPL requires for each.
 - **What:** `ffmpeg` CLI sidecar for thumbnails, lossless cuts, vertical presets
   (Linux editor + saver) and for the whole Windows capture path (live
   encode, save mux, codec probes).
-- **Upstream:** https://ffmpeg.org (static builds: BtbN for Windows,
-  johnvansickle musl for Linux).
+- **Upstream:** https://ffmpeg.org (static builds: BtbN `win64-gpl` for
+  Windows and `linux64-gpl` for Linux).
 - **Pinned Windows build (CI/dev fetch from this):**
   BtbN `win64-gpl` monthly `autobuild-2026-08-31-13-27`,
   asset `ffmpeg-N-126342-gf88b741dbf-win64-gpl.zip`
@@ -51,6 +52,15 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   h264/hevc, libx264, aac), staged at
   `src-tauri/binaries/x86_64-pc-windows-msvc/ffmpeg-x86_64-pc-windows-msvc.exe`
   (gitignored, like GSR). Bump the pin by updating the script defaults.
+- **Pinned Linux build (dev/local installs):** BtbN `linux64-gpl`
+  `autobuild-2026-09-15-13-18`, asset
+  `ffmpeg-N-126574-g912208af28-linux64-gpl.tar.xz`
+  (`sha256:7c5b4fd54be55970595f3c62b22c8a502587abe61c3e5e37a2cb81630093bad4`,
+  151,537,292 bytes). Fetched via `build-aux/fetch-ffmpeg.sh` (sha256 + size
+  + encoders: libx264, h264_nvenc, hevc_nvenc, aac), staged at
+  `src-tauri/binaries/x86_64-unknown-linux-gnu/ffmpeg-x86_64-unknown-linux-gnu`.
+  johnvansickle (previously planned) was dropped: its static build has no
+  NVENC, which `save-scale` needs for lanczos downscales.
 - **Ship model:** `tauri.conf.json > bundle.resources` includes the staged
   exe on Windows builds (per-OS CI config overlay — the base conf stays
   platform-neutral so Linux bundles never carry the `.exe`). Resolved at
@@ -59,8 +69,8 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   the engine needs raw binary pipes, not line events.
 - **Dev fallback:** system `ffmpeg` from `PATH` when no sidecar is present,
   with a log warning. Production always ships the pinned sidecar.
-- **License:** the static builds we ship (BtbN for Windows, johnvansickle
-  musl for Linux) are GPL builds — they link `libx264`/`libx265`, which
+- **License:** the static builds we ship (BtbN `win64-gpl` and `linux64-gpl`)
+  are GPL builds — they link `libx264`/`libx265`, which
   MoonClip needs for the `x264` CPU fallback codec (Windows `offered_codecs`
   always lists it; save-time `TranscodeEncoder::X264` maps to `libx264`).
   This is compliant because MoonClip as a whole is already `GPL-3.0-only`
