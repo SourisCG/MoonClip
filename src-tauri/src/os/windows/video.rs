@@ -1,19 +1,24 @@
-//! Windows video discovery: DXGI adapters (vendor) + WGC monitors + codec offer.
-//! OS floor: Windows 10 1903+ (WGC). No sidecar binary is involved — the
-//! `_bin` params exist only for signature parity with `os/linux/video`, and
-//! are ignored. `ffmpeg` for encoder probes resolves via `capture_ffmpeg()`
-//! (MOONCLIP_FFMPEG override, else PATH); the Phase 7 bundled sidecar plugs
-//! into the same helper.
+//! Windows video discovery: DXGI adapters (vendor) + monitors with native
+//! HMONITOR handles + codec offer. OS floor: Windows 10 1903+ (WGC, used by
+//! ffmpeg's `gfxcapture`). No sidecar binary is involved — the `_bin` params
+//! exist only for signature parity with `os/linux/video`, and are ignored.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use windows::Win32::Foundation::POINT;
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+};
+use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
+
 use super::super::TranscodeEncoder;
 
-/// ffmpeg binary for capture/probe duties: explicit override, else PATH.
-/// (The Phase 7 BtbN sidecar is wired here once `externalBin` ships.)
+/// Last-resort ffmpeg for direct engine use: explicit override, the bundled
+/// sidecar checked into `src-tauri/binaries/` (dev/tests), else PATH.
+/// Normal startup passes the resolved bundled sidecar via `ffmpeg_bin`.
 pub fn capture_ffmpeg() -> PathBuf {
     if let Ok(path) = std::env::var("MOONCLIP_FFMPEG") {
         let p = PathBuf::from(&path);
@@ -21,7 +26,22 @@ pub fn capture_ffmpeg() -> PathBuf {
             return p;
         }
     }
+    let triple = crate::sidecar::host_triple();
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(triple)
+        .join(format!("ffmpeg-{triple}.exe"));
+    if dev.exists() {
+        return dev;
+    }
     PathBuf::from("ffmpeg")
+}
+
+/// True when this backend scales the capture on the GPU live (ffmpeg's
+/// `gfxcapture` does), so saves are copy-only and the settings plan must
+/// capture at the delivered height instead of buffering the source.
+pub fn scales_live() -> bool {
+    true
 }
 
 /// PCI vendor id → our vendor slug.
@@ -39,9 +59,6 @@ fn vendor_from_pci_id(id: u32) -> &'static str {
 /// adapter with the most VRAM so a dGPU wins over an iGPU. Skips the
 /// Microsoft Basic Render Driver (software).
 fn pick_adapter() -> Option<(String, usize)> {
-    use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
-    };
     unsafe {
         let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
         let mut best: Option<(String, usize)> = None;
@@ -90,48 +107,155 @@ pub struct Monitor {
     pub height: u32,
 }
 
-/// Full monitor list via WGC enumeration. Empty if capture is unsupported.
-pub async fn list_monitors(_bin: &Path) -> Vec<Monitor> {
-    tokio::task::spawn_blocking(|| {
-        let mut out = Vec::new();
-        let Ok(monitors) = windows_capture::monitor::Monitor::enumerate() else {
-            return out;
+/// A monitor with its native HMONITOR, which is what the ffmpeg
+/// `gfxcapture` filter takes (`hmonitor=<value>`) — validated cross-process,
+/// so the Rust-side list is authoritative and index-order cannot drift.
+/// `index` is the DXGI/output order used by the `ddagrab` fallback;
+/// `refresh_hz` is the real mode refresh (0 when the driver will not say).
+#[derive(Debug, Clone)]
+pub struct MonitorTarget {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub hmonitor: isize,
+    pub index: u32,
+    pub refresh_hz: u32,
+}
+
+/// Current mode refresh rate for a GDI device name (`\\.\DISPLAY1`), 0 when
+/// unavailable. The engine clamps its capture cap to this so WGC never runs
+/// above the panel; the cap itself is 2x the output rate (`capture_max_fps`).
+fn refresh_hz(device_name: &str) -> u32 {
+    use windows::core::PCWSTR;
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS,
+    };
+    let mut name: Vec<u16> = device_name.encode_utf16().collect();
+    name.push(0);
+    let mut dm: DEVMODEW = unsafe { std::mem::zeroed() };
+    dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    let ok = unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm) };
+    if ok.as_bool() {
+        dm.dmDisplayFrequency
+    } else {
+        0
+    }
+}
+
+/// Foreground window handle, unless it belongs to this process (clicking
+/// Start would otherwise capture our own UI). Used by the opt-in window
+/// capture mode (`MOONCLIP_CAPTURE_SOURCE=window`).
+pub fn foreground_window() -> Option<isize> {
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == GetCurrentProcessId() {
+            return None;
+        }
+        Some(hwnd.0 as isize)
+    }
+}
+
+fn wide_name(buf: &[u16]) -> String {
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16_lossy(&buf[..end])
+}
+
+fn enumerate_monitors() -> Vec<MonitorTarget> {
+    let mut out = Vec::new();
+    unsafe {
+        let factory: IDXGIFactory1 = match CreateDXGIFactory1() {
+            Ok(f) => f,
+            Err(_) => return out,
         };
-        for m in monitors {
-            let name = m
-                .name()
-                .unwrap_or_else(|_| format!("display-{}", out.len() + 1));
-            if let (Ok(w), Ok(h)) = (m.width(), m.height()) {
-                if w > 0 && h > 0 {
-                    out.push(Monitor {
-                        name,
-                        width: w,
-                        height: h,
-                    });
+        let mut i = 0u32;
+        loop {
+            let Ok(adapter) = factory.EnumAdapters1(i) else {
+                break;
+            };
+            i += 1;
+            if let Ok(desc) = adapter.GetDesc1() {
+                if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+                    continue;
                 }
             }
+            let mut j = 0u32;
+            loop {
+                let Ok(output) = adapter.EnumOutputs(j) else {
+                    break;
+                };
+                j += 1;
+                let Ok(desc) = output.GetDesc() else {
+                    continue;
+                };
+                let rect = desc.DesktopCoordinates;
+                let width = (rect.right - rect.left).max(0) as u32;
+                let height = (rect.bottom - rect.top).max(0) as u32;
+                if width == 0 || height == 0 {
+                    continue;
+                }
+                out.push(MonitorTarget {
+                    name: wide_name(&desc.DeviceName),
+                    width,
+                    height,
+                    hmonitor: desc.Monitor.0 as isize,
+                    index: out.len() as u32,
+                    refresh_hz: refresh_hz(&wide_name(&desc.DeviceName)),
+                });
+            }
         }
-        out
+    }
+    out
+}
+
+/// Full monitor list (same shape/order as before: DXGI device names like
+/// `\\.\DISPLAY1`, which is also what the WGC enumeration returned).
+pub async fn list_monitors(_bin: &Path) -> Vec<Monitor> {
+    tokio::task::spawn_blocking(|| {
+        enumerate_monitors()
+            .into_iter()
+            .map(|m| Monitor {
+                name: m.name,
+                width: m.width,
+                height: m.height,
+            })
+            .collect()
     })
     .await
     .unwrap_or_default()
 }
 
-/// Resolve the WGC monitor for a `source` setting: exact name match,
-/// otherwise the primary monitor. `None` when capture is unsupported.
-pub fn resolve_monitor(source: &str) -> Option<windows_capture::monitor::Monitor> {
-    let want = source.trim();
-    if !want.is_empty() {
-        if let Ok(monitors) = windows_capture::monitor::Monitor::enumerate() {
-            for m in &monitors {
-                if m.name().as_deref().unwrap_or("") == want {
-                    let idx = m.index().ok()?;
-                    return windows_capture::monitor::Monitor::from_index(idx).ok();
-                }
+/// Resolve the monitor for a `source` setting: exact name match, otherwise
+/// the primary monitor. `None` when no monitor can be enumerated.
+pub async fn resolve_monitor(source: &str) -> Option<MonitorTarget> {
+    let want = source.trim().to_string();
+    tokio::task::spawn_blocking(move || {
+        let monitors = enumerate_monitors();
+        if monitors.is_empty() {
+            return None;
+        }
+        if !want.is_empty() {
+            if let Some(m) = monitors.iter().find(|m| m.name == want) {
+                return Some(m.clone());
             }
         }
-    }
-    windows_capture::monitor::Monitor::primary().ok()
+        // Primary first (MonitorFromPoint on the origin), else the first one.
+        let primary = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
+        monitors
+            .iter()
+            .find(|m| m.hmonitor as *mut core::ffi::c_void == primary.0)
+            .cloned()
+            .or_else(|| monitors.first().cloned())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Conservative static codec offer per vendor (used when no ffmpeg is
@@ -166,7 +290,6 @@ pub fn capture_encoder_name(vendor: &str, codec: &str) -> Option<&'static str> {
     }
 }
 
-/// Candidate ffmpeg encoder names per codec id for the probe.
 fn probe_encoder_name(vendor: &str, codec: &str) -> Option<&'static str> {
     capture_encoder_name(vendor, codec)
 }
@@ -278,9 +401,9 @@ pub fn transcode_encoder(vendor: &str, codec: &str) -> Option<TranscodeEncoder> 
 
 #[cfg(test)]
 mod tests {
-    use super::{static_codecs_for_vendor, vendor_from_pci_id};
-    use super::transcode_encoder;
     use super::super::super::TranscodeEncoder as TE;
+    use super::transcode_encoder;
+    use super::{static_codecs_for_vendor, vendor_from_pci_id};
 
     #[test]
     fn pci_ids_map() {
@@ -309,5 +432,10 @@ mod tests {
         // x264 is software: resolves on any vendor, unknown included.
         assert_eq!(transcode_encoder("unknown", "x264"), Some(TE::X264));
         assert_eq!(transcode_encoder("nvidia", "x264"), Some(TE::X264));
+    }
+
+    #[test]
+    fn scales_live_on_windows() {
+        assert!(super::scales_live());
     }
 }

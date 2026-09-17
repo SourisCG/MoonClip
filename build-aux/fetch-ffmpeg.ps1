@@ -46,6 +46,11 @@ try {
   foreach ($Need in @("h264_nvenc", "hevc_nvenc", "av1_nvenc", "h264_amf", "hevc_amf", "h264_qsv", "hevc_qsv", "libx264", "aac")) {
     if ($Enc -notmatch [regex]::Escape($Need)) { throw "pinned ffmpeg lacks $Need" }
   }
+  Write-Host "==> verifying capture filter (gfxcapture = Windows.Graphics.Capture)"
+  # The Windows engine captures through this filter (D3D11 zero-copy); a pin
+  # without it breaks the recorder entirely.
+  $Filters = & $OutExe -hide_banner -filters 2>&1 | Out-String
+  if ($Filters -notmatch "gfxcapture") { throw "pinned ffmpeg lacks the gfxcapture filter" }
   & $OutExe -hide_banner -version | Select-Object -First 1
   Write-Host "OK: $OutExe"
 } finally {

@@ -190,3 +190,11 @@ pub async fn apply_gains(
 pub async fn linked_count(known_args: &[String]) -> usize {
     gsr_streams(known_args).await.map(|s| s.len()).unwrap_or(0)
 }
+
+/// Peak levels of the last refresh window, for the UI signal meters. Linux
+/// captures through GSR (its own process), so per-track peaks are not
+/// available here — Windows implements this from its cpal rings. `None`
+/// hides the meters.
+pub fn recent_peaks() -> Option<(f32, f32)> {
+    None
+}

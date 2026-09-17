@@ -3,6 +3,13 @@
 use super::super::TranscodeEncoder;
 use std::path::Path;
 
+/// GSR's live scaler proved soft on text at non-integer ratios, so this
+/// backend buffers at source resolution and downscales with lanczos at save
+/// (see `commands.rs` capture plan). Windows scales on the GPU live.
+pub fn scales_live() -> bool {
+    false
+}
+
 /// GPU vendor, lowercase (`nvidia`/`amd`/`intel`/…), from `--info`.
 pub async fn vendor(bin: &Path) -> String {
     let Ok(out) = tokio::process::Command::new(bin)

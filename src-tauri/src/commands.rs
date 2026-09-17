@@ -106,12 +106,14 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
         out_height
     };
     let bitrate = video_quality::bitrate_kbps(ladder_height, &codec);
-    // Capture plan: the backend's live scaler proved soft on text at
-    // non-integer ratios (1080p->720p), so when the target sits below the
-    // source we buffer at source resolution and downscale with lanczos on
-    // save. Otherwise capture directly at the requested height.
+    // Capture plan. Backends that scale on the GPU live (Windows gfxcapture)
+    // buffer directly at the delivered height, so saves are copy-only. The
+    // GSR backend keeps the source-resolution buffer + lanczos save transcode
+    // (its live scaler proved soft on text at non-integer ratios).
     let (capture_height, buffer_bitrate, save_height, save_bitrate) =
-        if out_height != 0 && source_height > 0 && out_height < source_height {
+        if video::scales_live() {
+            (out_height, bitrate, 0, bitrate)
+        } else if out_height != 0 && source_height > 0 && out_height < source_height {
             (0, video_quality::bitrate_kbps(source_height, &codec), out_height, bitrate)
         } else {
             (out_height, bitrate, 0, bitrate)
@@ -124,6 +126,12 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     };
     // Save-time encoder per GPU vendor (None = keep source file on save).
     let save_encoder = video::transcode_encoder(&vendor, &codec);
+    // Compatibility mode: 1 audio track (Mix) instead of 3, for players that
+    // ignore the MP4 default-track flags. Applies at save time, no restart.
+    let single_track = matches!(
+        setting_str(&db, "audio_single_track", "0").as_str(),
+        "1" | "true"
+    );
     eprintln!("[moonclip] video: codec={codec} height={} fps={fps} vendor={vendor} cbr={bitrate}kbps nvenc_hq={} monitor={} capture={} save={} save_enc={:?}",
         if out_height == 0 { "source".to_string() } else { out_height.to_string() },
         nvenc_opts.is_some(),
@@ -154,6 +162,7 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
             save_encoder,
             nvenc_opts,
             ffmpeg_bin,
+            audio_single_track: single_track,
         })
         .await?;
     let tracks = audio::linked_count(&engine.audio_args()).await;
@@ -214,6 +223,12 @@ async fn stop_engine(app: &AppHandle) -> Result<EngineStatus, String> {
 
 #[tauri::command]
 pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    // Keep the previous value: a restart with an unusable new value (device
+    // unplugged, codec missing) must not leave the buffer stopped.
+    let previous = {
+        let db = app.state::<DbState>();
+        db.get_settings().ok().and_then(|s| s.get(&key).cloned())
+    };
     {
         let db = app.state::<DbState>();
         db.set_setting(&key, &value)?;
@@ -228,6 +243,7 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
         "out_height",
         "fps",
         "monitor",
+        "audio_single_track",
     ];
     if RESTART_KEYS.contains(&key.as_str()) {
         let running = {
@@ -239,7 +255,22 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
         };
         if running {
             stop_engine(&app).await?;
-            start_engine(&app).await?;
+            if let Err(e) = start_engine(&app).await {
+                // Revert + retry with the previous value; the UI still gets
+                // the original error so the user knows what failed.
+                if let Some(prev) = previous.as_deref() {
+                    let db = app.state::<DbState>();
+                    let _ = db.set_setting(&key, prev);
+                    if start_engine(&app).await.is_ok() {
+                        notify(
+                            &app,
+                            "Cambio no aplicado; se restauró la configuración anterior",
+                            "Change not applied; previous configuration restored",
+                        );
+                    }
+                }
+                return Err(e);
+            }
             notify(&app, "Búfer reiniciado con la nueva configuración", "Buffer restarted with new configuration");
         }
     }
@@ -434,6 +465,10 @@ pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
 /// Stage timings go to the backend log (`[moonclip] save ...`) so slow saves
 /// can be attributed instead of guessed.
 pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> {
+    // One save at a time: a second F9 while the first is mid-pipeline must
+    // queue, not interleave (per-second clip names + mux -y + DB insert).
+    let state = app.state::<AppState>();
+    let _save_guard = state.save_lock.lock().await;
     let t_total = std::time::Instant::now();
     let path = {
         let st = app.state::<AppState>();
@@ -675,6 +710,19 @@ pub async fn audio_levels(app: AppHandle) -> Result<TrackGains, String> {
     Ok(read_gains(&app))
 }
 
+/// Live signal peaks (linear 0.0–1.0+) per captured stream, for the UI
+/// meters. `null` on backends that do not expose them (Linux/GSR).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AudioPeaks {
+    pub game: f32,
+    pub mic: f32,
+}
+
+#[tauri::command]
+pub async fn audio_peaks() -> Result<Option<AudioPeaks>, String> {
+    Ok(audio::recent_peaks().map(|(game, mic)| AudioPeaks { game, mic }))
+}
+
 fn check_track(track: &str) -> Result<(), String> {
     if track == "game" || track == "mic" {
         Ok(())
@@ -869,9 +917,12 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
             .map(|m| m.height)
             .unwrap_or(max_source_height)
     };
-    // Same capture plan as start_engine: buffer at source when downscaling.
-    let transcoding =
-        current_height != 0 && source_height > 0 && current_height < source_height;
+    // Same capture plan as start_engine: live GPU scaling has no save
+    // transcode; the source-buffer plan flags it for the UI note.
+    let transcoding = !video::scales_live()
+        && current_height != 0
+        && source_height > 0
+        && current_height < source_height;
     let buffer_height = if transcoding { source_height } else { current_height };
     let heights = q::HEIGHTS
         .iter()

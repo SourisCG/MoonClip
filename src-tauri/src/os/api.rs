@@ -37,6 +37,9 @@ pub struct CaptureConfig {
     /// first, dev PATH fallback). None = resolve via env/PATH legacy path.
     /// The Linux GSR backend ignores this (it shells its own sidecar setup).
     pub ffmpeg_bin: Option<PathBuf>,
+    /// Compatibility mode: save with a single audio track (the Mix) so any
+    /// player plays it. False = 3 tracks (Mix, Game, Mic; Linux parity).
+    pub audio_single_track: bool,
 }
 
 /// Background downscale applied at save time (lanczos, per-vendor encoder).

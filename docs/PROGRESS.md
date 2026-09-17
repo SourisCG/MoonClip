@@ -11,7 +11,7 @@ Details per phase live in `ROADMAP_PHASES.md`; technical specs in `01_*`–`08_*
 | license | GPL-3.0-only (required by gpu-screen-recorder) | ✅ done | `2b99add` | Verbatim LICENSE + metadata + README |
 | 2 | rusqlite persistence (relative paths) + keyring secrets + settings UI | ✅ done | `c72edba` | CRUD, vault OK, folder picker fixed |
 | 3 | Capture engine Linux (GSR embedded, 3-track mix-first, gains, ladder, 30/60fps, monitor select) | ✅ done (Linux) | `5ffd70d`+ui | F9 → `.mp4` 3×aac, thumbs, durations, gains — user-verified |
-| 3-win | Capture engine Windows trip (WGC + WASAPI + AMF/QSV/x264, same behaviors) | ✅ done (code, HW-verified; user in-game F9 pass pending) | `7078a13` | See `09_WINDOWS_HANDOFF.md`; e2e-tested on RTX 3060 |
+| 3-win | Capture engine Windows trip (ffmpeg `gfxcapture` WGC 0-copy + WASAPI, AMF/QSV/x264, same behaviors) | ✅ done (code, HW-verified; user in-game F9 pass pending) | `7078a13`→rewrite | See `09_WINDOWS_HANDOFF.md`; e2e-tested on RTX 3060, A/V ±1 frame |
 | 3-ui | Transparent tray icon, i18n codec labels, opener perms, disk note | ✅ done | `7c5d733` (batch) | user-verified pending |
 
 ## Cross-platform gate (project rule)
@@ -26,6 +26,421 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 | 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
 
 ## Log
+
+- **Windows: in-game probe on COD — P7 is the real ceiling (2026-09-16)** —
+  isolated probes while COD (foreground) ran, no app:
+  | Probe (20 s, real path unless noted) | Frames pulled | Dups |
+  |---|---|---|
+  | WGC capture only (`wrapped_avframe`) | 1028 (51 fps) | — |
+  | DDA capture only (`ddagrab dup_frames=0`) | 516 (26 fps) | — |
+  | WGC → P7 → CFR 60 | **392 (19.6 fps)** | **852** |
+  | WGC → P6 → CFR 60 | 1155 (57.8 fps) | 126 |
+  | WGC → P5 → CFR 60 | 1000 (50 fps) | 207 |
+  | WGC → P1 → CFR 60 | 964 (48 fps) | 237 |
+  | testsrc2 → P7 → null (encoder only) | 900 in 28 s | speed 0.526x |
+  - Capture is fine (WGC ~51 fps; DDA worse here, so WGC stays default);
+    **NVENC P7 collapses under game load** (~0.5x realtime; the CFR filter
+    then emits 852 duplicates per 20 s).
+  - **Windows default preset is now p5** (the preset OBS's own Auto
+    Configuration Wizard picked for this hardware; env
+    `MOONCLIP_NVENC_PRESET` swaps it: `p4` more headroom, `p7` Linux parity).
+    Same ladder, same CBR, same HQ/AQ/BF2 as the user's OBS. Note: the earlier
+    "OBS P7" screenshot was *MoonLit* (the user's old app), not OBS; OBS's
+    wizard recommends P5, which resolves the contradiction.
+  - **Final config: p5 @ 20000 kbps** (Medal ladder). A live p6 + 10000 kbps
+    pass was run through the app (`MOONCLIP_CAPTURE_BITRATE_KBPS` test hook)
+    and discarded: 10 Mbps is the wizard's *streaming* number, and the user
+    prefers the full 20 Mbps ladder.
+  - Gate: 47 unit tests green (p5 assert + bitrate-override parse test).
+
+- **Windows: encoder pipe depth + CPU class + windowed telemetry (2026-09-16)** —
+  measured the real stdout pipe with `PeekNamedPipe`: **32 KB**, i.e. ~13 ms of
+  slack at 20 Mbps. Any scheduling hiccup in our drain threads blocked ffmpeg
+  mid-capture and `-r 60 -fps_mode cfr` filled the gap with duplicates — a
+  mechanism that only shows under game CPU/GPU load. Fixes (preset untouched
+  in this pass: the later in-game probes found p7 collapses under COD — see the
+  entry above — and the Windows default was moved to p5):
+  - `engine.rs::big_pipe()`: `CreatePipe` with an 8 MB TS stdout buffer
+    (stderr 1 MB), inheritable write end only; parent-side write ends dropped
+    right after spawn so a dead ffmpeg still surfaces as EOF. `-flush_packets
+    1` removed (one syscall per packet, pointless with the deep pipe).
+  - `cpu_priority_class`: encoder child CPU class **HIGH by default**
+    (`MOONCLIP_CAPTURE_CPU_PRIO=0` → ABOVE_NORMAL, `normal` → NORMAL).
+  - `ts.rs`: `capture:` telemetry is now a **last-10 s window**
+    (`CAPTURE_WINDOW_NS`) instead of a session average; the old average read
+    55 fps while the saved clip ran at ~30 because idle desktop periods
+    masked in-game starvation.
+  - Gate: 46 unit tests + `live_buffer_and_save{,_single_track}` green
+    (saves 0.35 s, GPU priority applied, sync telemetry sane).
+  - Pending user in-game pass (camera movement) + `ddagrab` A/B: OBS display
+    capture defaults to DXGI Desktop Duplication, which is our `ddagrab`
+    fallback (`MOONCLIP_CAPTURE_SOURCE=ddagrab`).
+
+- **Windows: in-game GPU budget pass — priority, cap, orphan sweep (2026-09-16)** —
+  saved clips still showed ~25-34 unique fps under game load (measured 2612
+  exact duplicates / 7215 frames = 58% on a 120 s clip; 9-50 fps per 10 s
+  window) while the same chain on the desktop kept 58.75 fps unique with only
+  **3.4% realtime headroom** (`speed=0.966x`, p7+HQ 1080p60 CBR, RTX 3060) and
+  the game itself stayed smooth (solo el clip sale mal). Root cause: GPU
+  scheduling starvation — with the game saturating the GPU, the WGC copy stops
+  getting fresh frames and `-r fps -fps_mode cfr` fills the gaps with
+  duplicates. OBS/Medal survive because they capture at 60 and raise the GPU
+  scheduling class; we captured at the full 164 Hz refresh with that lever
+  off. Fixes (A/V pipeline untouched):
+  - **GPU scheduling priority HIGH by default** for the ffmpeg child
+    (`tune_child_priority` + `gpu_priority_level`; `MOONCLIP_CAPTURE_GPU_PRIO`
+    unset = HIGH(4), `0/off/false` disables, `2..=4` picks a class, `1` stays
+    the legacy alias). dxgkrnl rejects the call with `STATUS_INVALID_PARAMETER`
+    while the target has no live GPU context (measured: fails right after
+    spawn; the same call on the bundled ffmpeg mid-NVENC succeeds; GPU-less
+    processes like ping/cmd always fail), so a background retry
+    (`retry_gpu_priority`, ~10 s) applies it and the read-back is logged
+    (`applied after 250ms (read_back=4)` on the dev rig).
+  - **Capture cap = 2x output, clamped to refresh** (`capture_max_fps`): 164
+    Hz → 120 (was 164, not the pathological 60) so the CFR filter always has
+    two candidates per slot; `MOONCLIP_CAPTURE_MAX_FPS` overrides.
+  - **Orphan ffmpeg sweep** (`kill_orphan_ffmpeg`, called at `start_buffer`):
+    a force-killed host left its capture+encode child running (seen live with a
+    dead parent); leftovers stack NVENC sessions and only bite in-game. Only
+    the exact bundled binary with a dead parent is killed.
+  - **Two-phase save cut** (`ts.rs::cut_plan` + `CutPlan::assemble`): the
+    ~300 MB ring snapshot copies `Arc` chunk handles under the lock and the
+    payload outside it, so a save can no longer stall the encoder pipe.
+  - Gate: `cargo check` + 44 unit tests green (2 new: cap headroom, GPU
+    priority env mapping). Pending user in-game pass: `capture: F fps` >= 55
+    and no freeze > 100 ms in the saved clip.
+
+- **Windows: process/thread hardening + in-game isolation rig (2026-09-16)** —
+  the user's in-game capture still stalled to ~1 frame every 2-3 s while
+  OBS/Medal *display capture* works focused on the same machine, so the
+  compositor is not the blocker; our host process is. Root suspects: the host
+  had no priority class and no anti-throttling (only the ffmpeg child did),
+  and both engine pipes (TS ~2.5 MB/s and `showinfo` ~50 KB/s, 64 KB each)
+  were drained by default-priority threads — if a drain is parked while a
+  focused game owns the CPU, ffmpeg blocks mid-capture in multi-second bursts.
+  - `os/windows/mod.rs`: `prepare_environment()` now sets the host to
+    ABOVE_NORMAL and disables power throttling (EcoQoS); new
+    `boost_current_thread()` (TIME_CRITICAL) called by the TS and stderr
+    drains.
+  - GPU scheduling priority is now **opt-in** (`MOONCLIP_CAPTURE_GPU_PRIO=1`):
+    it may preempt the game instead of helping.
+  - Test envs: `MOONCLIP_NO_SHOWINFO=1` (drop pre-encoder logging; A/V falls
+    back to the coarser PES-arrival calibration) and
+    `MOONCLIP_NVENC_PRESET=p5` (NVENC load A/B; default stays p7 = Linux
+    quality).
+  - Isolation rig `%TEMP%\opencode\capture-diag.ps1`: runs the exact engine
+    ffmpeg chain (no app) for 4 variants in-game (wgc p7±showinfo, wgc p5,
+    ddagrab) so the bottleneck can be attributed from the saved `.ts` files;
+    validated on the desktop at 59-60 fps real for all variants.
+  - Gate: 42 unit tests, live save tests green, saves 0.17-0.21 s.
+
+- **Windows: capture-rate, ring and save-speed pass (2026-09-16)** — with the
+  log flood gone, in-game clips measured 26-41 unique fps with bursty
+  seconds (p25=9, p75=44) while a 60 fps source captured at ~49 fps with an
+  idle GPU. Four self-inflicted causes fixed, quality untouched (p7/HQ/ladder
+  identical to Linux):
+  - **Chunked ring (O(1) trim).** The 120 s buffer (327 MB) memmoved ~326 MB
+    under the mutex every ~0.4 s (measured 19-60 ms), stalling the encoder
+    pipe. `ts.rs` now stores 1 MB chunks; cross-chunk packets are assembled
+    188 bytes at a time.
+  - **No more 60 cap.** `max_framerate` = the monitor's real refresh (DXGI +
+    `EnumDisplaySettingsW`, fallback `max(120, 2×fps)`); ffmpeg owns CFR.
+    Measured end-to-end: **59.9 fps real capture** vs ~49 before.
+  - **HIGH GPU scheduling priority** for the ffmpeg child
+    (`D3DKMTSetProcessSchedulingPriorityClass`) plus the existing
+    ABOVE_NORMAL CPU class, so a saturated game cannot starve capture.
+  - **Fast save:** cut TS over stdin (no ~300 MB staging write+read) and Mix
+    built by `amix normalize=0` instead of a third WAV. Mux 0.17-0.25 s on
+    10-16 MB clips; on the user's old SATA SSD the 2 min case should drop
+    from ~12 s to ~4-6 s.
+  - A/B sources via env (all ~59.5-59.9 fps on the rig):
+    `MOONCLIP_CAPTURE_SOURCE=ddagrab|window`, `MOONCLIP_CAPTURE_WINDOW_EXE`.
+  - New telemetry: `capture: N real frames in T s = F fps` per save.
+  - Gate: 42 unit tests (chunk-boundary packets, trim, filter shapes), 5 live
+    tests, A/V rig **+10 ms**, `pnpm build`, zero-cfg grep.
+
+- **Windows: capture freeze root-caused (log flood + mic reopen churn, 2026-09-16)**
+  — the user reported "one frame every few seconds" in-match. Evidence: the
+  in-match clips had 2-4 unique frames per 120 s (mpdecimate/freezedetect)
+  while lobby/desktop clips had 1.2-4.4k, and a controlled 60 fps source on
+  the same monitor captured at ~51 fps — so WGC/GPU were fine. The console
+  showed the real cause: `open_stream` reset the stall episode, so the
+  watchdog reopened the mic every tick (**840 "stalled, reopening" lines and
+  one WASAPI stream per tick**), and every non-`pts_time` `showinfo`
+  continuation line was `eprintln!`-ed (~300/s) plus `-progress` (~600/s).
+  A blocked console stalls the stderr drain, ffmpeg's 64 KB stderr pipe
+  fills and the filtergraph blocks mid-capture: duplicates-only clips.
+  - `audio.rs`: stall invariants restored (only a delivered block clears the
+    episode; `open_stream` never resets it; the supervisor always arms the
+    30 s slow retry), with a pure `stall_action()` + regression test.
+  - `engine.rs`: all `showinfo` lines except `pts_time` are discarded, only
+    error-ish lines reach the console, `-progress`/`frames_encoded` removed
+    (stderr is now ~60 lines/s).
+  - Verified: 42 unit tests, 5 live tests, and an end-to-end motion capture
+    through the exact engine chain gave **273 unique frames in 5.6 s (~49
+    fps)** where the same setup previously produced 7; saves 0.26-0.62 s;
+    `video_lag` ~0.2-0.6 s (encoder lookahead) with no stalls.
+  - Pending user in-game pass with the fixed build.
+
+- **Windows capture engine rewritten around FFmpeg `gfxcapture` (2026-09-16)** —
+  the old engine (WGC callback in-process → CPU readback → rawvideo pipe →
+  swscale → NVENC, CFR pacer, frame stamps) froze under game load: two user
+  clips were a single frame repeated for 2 minutes with all three audio stems
+  at −91 dB. Root causes: ~500 MB/s of CPU copies + software conversion, a
+  4-frame queue that dropped every frame while `write_all` was blocked (the
+  pacer then re-emitted the last frame for minutes), and audio callbacks that
+  allocated/locked and could be starved.
+  - New `os/windows/engine.rs`: one child process owns capture + encode +
+    mux — `gfxcapture=hmonitor=<H>(,resize GPU bicubic),showinfo → enc →
+    -r fps -fps_mode cfr → mpegts`. Frames never leave the GPU; saves are
+    copy-only. Measured ~8-11% of one core for 1080p60 vs ~26% for the old
+    conversion alone, plus ~0.5 GB/s of pipe traffic. `windows-capture` dep
+    removed (DXGI monitor/vendor discovery via `windows`); the 4th-session
+    ACCESS_VIOLATION class of bug goes with it. `ddagrab` fallback via
+    `MOONCLIP_CAPTURE_SOURCE`; app/window capture will reuse `gfxcapture`'s
+    window selectors later.
+  - New `os/windows/ts.rs`: MPEG-TS/PES index (PTS 90 kHz unwrapped, H.264
+    IDR / HEVC IRAP keyframes, PAT/PMT for exact staging) + QPC calibration
+    from pre-encoder `showinfo` lines. Encoder lookahead (~0.5 s) no longer
+    shifts A/V. PES header offsets bug caught by tests (flags at 7/8/9).
+  - `os/windows/audio.rs` rewritten: lock-free SPSC from the callbacks (no
+    allocs/locks), MMCSS "Pro Audio", i16 timestamped 10 ms blocks, QPC-grid
+    window builder with drift resampling (only >50 ms gaps become silence),
+    keep-alive + default-follow + stall reopen kept.
+  - Save: latest keyframe ≤ `end − duration`, staged TS starts at the
+    keyframe with PAT/PMT prepended (no `-ss`, no probe, no decode), WAVs in
+    parallel, `-c:v copy` + 3×AAC, alternate-group patch. Fixtures:
+    save 0.3-0.45 s (debug build), video starts at 0.
+  - A/V with the flash+beep rig: **median −3 ms, max ±13 ms** (was −546 ms
+    after the first rewrite attempt). The only constant is
+    `DEFAULT_SYNC_BIAS_MS = 70` (override `MOONCLIP_SYNC_BIAS_MS`), a
+    rig-measured compositor/frame-pool delivery lag — same for `gfxcapture`
+    and `ddagrab`, not per codec.
+  - Gate: 41 unit tests (new TS/keyframe/window/SPSC tests), 5 live tests
+    (`live_buffer_and_save{,_single_track}`, `live_engine_restart`,
+    `live_tone_coverage`, `live_av_offset_capture`), `pnpm build`, zero-cfg
+    grep. Docs 01/02/09 + README updated; `fetch-ffmpeg.ps1` now asserts the
+    pinned build ships `gfxcapture`.
+  - Pending user pass: F9 in a heavy game (no freezes, <1 s save, RAM),
+    audible gain sliders, device/monitor/codec restart notices.
+
+- **A/V: audio window anchored at the CUT instant (2026-09-16)** — the
+  frame-stamp anchor (`-progress frame=`) was read **after** the two ffmpeg
+  probes (duration + keyframe), so it counted frames encoded while probing
+  that are NOT in the clip: the audio window stretched and h264 NVENC HQ
+  stayed ~0.1 s off (previous measurement: −28/−80/−100/−127 ms by codec).
+  Fix: `save_clip` snapshots `frames_encoded` + the newest capture stamp
+  **inside the ring-cut critical section** (`cut_encoded`/`cut_stamp`) and
+  maps the audio window end from that value; the probes below never touch
+  the anchor. Never move the anchor read back after the probes.
+  - Re-measured with the flash+beep reference and a browser-free rig
+    (fullscreen WPF `MediaElement` player + `analyze_av.py`, which validates
+    0.00 ms on `ref.mp4`): h264 **−15 / +2 / +28 ms** across runs (players
+    add ±20 ms of their own render skew), hevc **−8 ms**; before the fix the
+    same rig shows the ~0.1 s stretch.
+  - Regression green: `live_buffer_and_save` (3×AAC + alternate_group),
+    `live_buffer_and_save_single_track` (1×AAC), `live_engine_restart`
+    (keyframe trim + duration) and 35 unit tests.
+
+- **Default audio track: MP4 `alternate_group` + "Mix only" compatibility mode (2026-09-16)**
+  - The 3-track clip already complied (Mix = first audio + only `enabled`/
+    default; solos `disabled`, titles `Mix/Game/Mic`), but the Windows 11
+    Media Player ignored the flags and picked another track. ffmpeg cannot
+    write `alternate_group` from the CLI (muxer side-data only), so
+    `wgc.rs::patch_audio_alternate_group` patches the `tkhd` of every audio
+    track (`soun` handler) to group `1` **in place** after the mux: moov read
+    into memory, mdat seeked over, only the 2 u16 fields rewritten. Best
+    effort: a failure logs and the clip is kept. Unit tests cover both tkhd
+    versions, the byte-diff (video untouched, nothing else changed) and the
+    no-audio case; `live_buffer_and_save` now asserts 3 tracks / one group /
+    only the first enabled.
+  - New setting **`audio_single_track`** ("Guardar solo el Mix (1 pista)",
+    Settings → Audio, default OFF): the mux maps only `0:v` + `1:a`, so any
+    player plays the Mix because there is nothing else. Restarts the buffer
+    like the other capture settings (the running engine holds the flag);
+    capture/A-V code untouched. `CaptureConfig` carries the flag; new live
+    test `live_buffer_and_save_single_track` asserts 1×AAC.
+  - Gate: 35 unit tests + `live_buffer_and_save{,_single_track}` +
+    `live_engine_restart` green (`alternate_group=1 on 3/1 audio track(s)`),
+    `pnpm build` green.
+
+- **Windows audio: keep-alive + stall-churn fix + frame-stamped A/V alignment (2026-09-16)**
+  - Root cause of "only the voice OR the PC audio" and the missing desktop
+    audio: the stall watchdog reopened the game loopback every ~0.5 s forever
+    (`game stream stalled … reopening` … in the user console). WASAPI delivers
+    no packets while the render engine is idle (normal), the watchdog took it
+    for a dead stream, and `clear_stream_error` cleared the "handled" flag on
+    every reopen → infinite churn. One session's game stem ended with
+    `silence=33.7s` inside a 31.9 s window. Fixes: a **silent keep-alive
+    render stream** on the captured endpoint (the engine never sleeps, the
+    loopback delivers silence continuously → 100% coverage), the stall flag is
+    only cleared by a real delivered block, a 30 s slow retry per episode and
+    a grace period after each reopen.
+  - A/V alignment rewritten to OBS/Game Bar semantics **without constants**:
+    `Frame::timestamp()` (WGC, QPC 100 ns) travels with every frame through
+    the pacer, which records `(frame_index, capture_qpc)`; ffmpeg's
+    `-progress frame=` tells how many frames the encoder has emitted, so at
+    save the audio window ends exactly at the capture instant of the last
+    encoded frame (`-stats_period 0.02`). Audio blocks carry QPC as well:
+    one clock for everything, no cross-domain mapping. The 258/264/48 ms
+    per-codec constants are gone.
+  - Measured with the flash+beep reference clip (Edge kiosk + local ffmpeg
+    pattern): residual **−28 ms (hevc), −80 ms (x264), −100/−127 ms (h264
+    NVENC HQ, two runs)** vs ±1.5 s before — every codec and run lands within
+    ~0.1 s with zero tuning. Tone tests: 100% coverage, zero stalls/reopens.
+  - Full gate: 33 unit tests, 2 live tone tests, 3 live A/V captures green;
+    `pnpm build` green.
+
+- **Windows A/V sync measured and fixed (2026-09-16)** — the remaining
+  "audio is out of sync" report was quantified with a **flash+beep reference
+  video** (generated with the embedded ffmpeg: 100 ms white flash + 1 kHz
+  beep every 2 s, perfectly synchronized by construction; the reference
+  measures 0.0 ms with the same analysis). Playing it fullscreen while the
+  engine records and measuring the flash (per-frame `signalstats YAVG` peak)
+  against the beep (game stem energy burst) in the saved clip showed the
+  audio **258 ms ahead** with the default NVENC HQ h264 config.
+  - Cause: the video pipeline (WGC → CFR pacer → encoder lookahead → TS mux)
+    lags the audio path by a constant that depends on the encoder.
+  - Fix: `av_sync_offset_millis(codec, enc_name)` in `wgc.rs` moves the audio
+    window end earlier by the measured amount (no user calibration, no
+    slider). Constants measured on this machine at 1080p60/HQ:
+    **h264 NVENC 258 ms, hevc NVENC 264 ms, libx264 48 ms**.
+  - Verified per codec with the same test: h264 **+7 ms**, x264 **−3 ms**,
+    hevc **+25 ms** (imperceptible). Re-measure with
+    `live_av_offset_capture` (env `MOONCLIP_AVTEST_CODEC`) after encoder,
+    preset or fps changes and update the constants.
+  - New live probes (ignored by default): `live_tone_coverage` (continuous
+    1 kHz tone on the captured device → game stem covered 100%, 0 gaps),
+    `live_tone_after_silence` (8 s of silence then the tone → the loopback
+    resumes and captures it), `live_av_offset_capture` (flash+beep). They
+    prove the loopback itself is reliable while audio renders; the missing
+    desktop-audio heads seen in user clips correspond to periods with **no
+    rendering stream** on the captured endpoint (the engine idles and WASAPI
+    delivers no packets). The UI signal meters now make that visible live.
+
+- **Windows A/V: keyframe-aligned clip start (2026-09-16)** — the video window
+  is cut by bytes (CBR) at arbitrary positions, so it could start mid-GOP: the
+  muxer dropped the pre-keyframe packets and the video track started up to
+  1.6 s after the audio (measured `start` offsets 1.567 s / 0.517 s / 0.733 s
+  on real clips, GOP = 2 s). Players that ignore the MP4 edit list shifted the
+  audio against the video by that amount (the visible delay); players that
+  honor it showed a black/frozen head. OBS's replay buffer never has this: it
+  cuts at a keyframe and aligns audio to the same timestamp.
+  - Fix: after staging the cut TS, probe the first decodable frame's PTS with
+    the embedded ffmpeg (`-vf showinfo -frames:v 1 -f null -`; the decoder
+    skips to the IDR) and mux with `-ss <t+1ms>` on all four inputs (TS + the
+    3 WAVs), so the file starts at 0 with video and audio aligned. Fallback
+    `t=0` when the probe fails; trim sanitized (0.05–3.5 s, must leave ≥1 s).
+  - Live verification: `live_engine_restart` (two sessions — the settings
+    change path — with a mid-GOP cut) asserts 3×AAC, video track starts at 0
+    and duration 4.5–6.5 s; `live_buffer_and_save` also asserts the video
+    start; unit tests cover the `pts_time` parser and trim sanitization.
+  - Known caveat: running the whole `live_` suite in ONE process triggers an
+    ACCESS_VIOLATION inside `windows-capture`'s `start_free_threaded` on the
+    fourth session (multiple tokio runtimes + capture sessions). Every live
+    test passes alone and the app's restart path (single runtime) is fine;
+    run live tests individually until upstream fixes it (2.0.1 is the latest).
+
+- **Windows audio: click-free assembly + stall recovery + telemetry (2026-09-16)**
+  — the "static/ground noise" in saved clips came from the per-block absolute
+  placement: WASAPI block timestamps drift a few samples from their sample
+  count and every sub-millisecond drift was materialized as silence
+  (measured 289 sub-50 ms gaps in a 6 s capture, ~48/s). Stems are now
+  assembled by **sample continuity** (`build_stem_window`): gaps ≤ 50 ms are
+  fused, only real holes become silence. Live test: `fused=289 gaps=0
+  silence=0.0s`.
+  - Delivery telemetry per save:
+    `stems: window=… game(lag=… lat=… covered=… fused=… gaps=… silence=…)
+    mic(…)` — `covered` vs `window` exposes a loopback that stops delivering
+    (a real session showed game covered 20.2 s of a 32 s window while mic
+    covered 38 s).
+  - **Stall watchdog**: a stream with no blocks for > 3 s is reopened once
+    per episode (driver stalls raised no error before); when the selection is
+    `default_output`/`default_input` the supervisor follows Windows default
+    device changes (2 s poll) and re-links automatically.
+  - UI signal meters now publish **windowed peaks** every 500 ms (cumulative
+    max is still logged), so a stalled capture visibly drops to zero instead
+    of showing a stale peak.
+  - cpal delivery latency is now measured per stream
+    (`callback - capture`): 0 ms loopback / ~10 ms mic on the test machine —
+    i.e. the residual A/V offset is NOT delivery latency and needs the
+    sync-test measurement (see `09_WINDOWS_HANDOFF.md` §6).
+  - Gate: 31 unit tests (new: sub-fuse drift fusion, latency offset,
+    window clip/pad), 3 live tests green, `pnpm build` green.
+
+- **Windows audio sync fix (2026-09-16)** — the desktop (game) stem could be
+  seconds out of sync: WASAPI loopback delivery is not continuous (idle
+  endpoints deliver nothing, device changes kill the stream, drivers can lag)
+  and the save path assumed "last sample = now". Measured on real clips: the
+  game stem ended 4.8–6.5 s before the clip end while the mic covered the
+  full window, so the desktop audio played late and the first track (Mix,
+  the one every player uses) inherited the shift.
+  - `os/windows/audio.rs` rewritten around **timestamp-anchored rings**: each
+    block keeps the QPC capture timestamp cpal reports; the save path
+    rebuilds both stems over the same wall-clock window ending at the newest
+    capture across streams, inserting silence where a stream has gaps. A
+    lagging/gappy loopback can never drag the track out of position again
+    (the old sample-count tail also truncated the Mix when one stem was
+    shorter).
+  - All cpal sample formats supported for loopback/mic (I8/I16/I32/I64/U8/
+    U16/U32/U64/F32/F64) — only F32/I16/U16 worked before.
+  - Stream errors mark the stream dead and a supervisor thread reopens it on
+    the same device (endpoint invalidated / unplugged) keeping ring history;
+    `stream_errors()` feeds the save log.
+  - Save log now reports sync telemetry: `stems: window=… game_lag=… ms
+    mic_lag=… ms captured=(game …s, mic …s)`.
+  - Device list offers `default_output`/`default_input` ("system default")
+    again on Windows (Linux already had them via GSR); matching is
+    case-insensitive; a failed device/codec restart reverts the setting and
+    brings the buffer back with the previous value; mux stderr is captured
+    (no more `non-existing PPS` console spam).
+  - UI: live game/mic signal meters + "no signal from the selected device"
+    hint + 3-track note in Settings → Audio (`audio_peaks` command; Linux
+    returns null and hides the meters).
+  - Gate: 29 unit tests (incl. new window-placement regressions), 3 live
+    tests green (6 s live buffer: `game_lag=0 ms`, `mic_lag=23 ms`),
+    `pnpm build` green, zero-`cfg` grep empty.
+
+- **Windows trip: toolchain + engine bug pass (2026-09-16)** — fresh machine
+  setup plus six parity bugs fixed in the WGC backend; unit-tested and
+  live-verified on the RTX 3060:
+  - Environment was blocked: VS BuildTools 18 had headers/libs but no compiler
+    binaries and no Windows SDK (`cargo check` died with `linker link.exe not
+    found`). VCTools workload + Windows SDK 10.0.26100 installed via
+    `vs_installer modify`. pnpm 12.4.2 installed (user prefix), `pnpm install`,
+    pinned BtbN ffmpeg fetched with `build-aux/fetch-ffmpeg.ps1` (sha256 +
+    encoder assert).
+  - `pump_frames` rewritten to a wall-clock CFR schedule. WGC delivers at
+    monitor refresh (`MinimumUpdateIntervalSettings::Default` does not
+    throttle), and every fresh frame used to be written and timestamped as
+    `1/fps` — a 60 Hz desktop at fps=30 or a 144 Hz monitor at fps=60 advanced
+    the encoded timeline up to ~2.4x and desynced the saved clip. Now fresh
+    frames are absorbed (freshest wins) and exactly one frame is written per
+    CFR tick; regression test floods 50 frames at 10 fps and asserts ≤1 write.
+  - A/V alignment in `save_clip`: the audio snapshot is taken back-to-back
+    with the ring cut (was taken after ~200-500 ms of TS staging), the cut TS
+    is probed, and `video_window - audio_tail` becomes leading silence
+    prepended to each stem (sample-exact, no keyframe seeks). Previously the
+    audio window (duration) was muxed at t=0 against a video window of
+    duration+2 s, so saved clips played with audio ~2 s ahead of the image.
+  - ffmpeg stderr is drained by a background reader into a bounded 200-line
+    ring (an unread 64 KB pipe can block the encoder mid-capture — same class
+    the Linux GSR backend already fixed). `log_tail()` returns it.
+  - `check_alive()` + `log_tail()` implemented: a closed encoder pipe or an
+    exited child now marks the engine dead, so the 2 s watchdog and the UI
+    poll surface encoder crashes instead of a silently frozen buffer.
+    `impl Drop` stops the WGC session on a helper thread (`CaptureControl`
+    has no Drop; the watchdog drops dead engines without `stop_buffer()`, so
+    the capture thread leaked).
+  - Save pipeline serialized (`AppState.save_lock`) and Windows clip names get
+    `_2`, `_3`… when the second already has a file: same-second saves used to
+    overwrite the previous clip before it was indexed (`mux -y` + per-second
+    name), leaving a ghost DB row and losing the clip.
+  - Cosmetic: `backend_name()` no longer returns "(stub)" (shown raw by the UI).
+  - Gate: `cargo check` + `cargo test` (28 pass, 3 live ignored) green, live
+    WGC/NVENC/WASAPI tests pass (1920x1080@60, save 751 ms, 2/2 audio),
+    `pnpm build` green, zero-cfg grep empty.
+  - Still pending: user in-game F9 pass (see `09_WINDOWS_HANDOFF.md` §4).
 
 - **Embedded local install (2026-09-16)** — `pnpm tauri:build:linux` bundles
   the resolved sidecars via a per-OS resource overlay: prebuilt GSR

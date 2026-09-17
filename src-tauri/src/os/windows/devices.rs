@@ -22,20 +22,34 @@ pub async fn list_audio_devices(_app: &AppHandle) -> Result<Vec<AudioDevice>, St
     let host = cpal::default_host();
     let mut devices = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut push = |id: String, kind: &str| {
+    let mut push = |id: String, description: String, kind: &str| {
         if seen.insert((id.clone(), kind.to_string())) {
             devices.push(AudioDevice {
-                id: id.clone(),
-                description: id,
+                id,
+                description,
                 kind: kind.to_string(),
             });
         }
     };
+    // Magic entries first: "follow the OS default" (resolved again at every
+    // buffer start, so a Windows output switch is tracked automatically).
+    // Linux lists the same ids from GSR; Windows must offer them too or the
+    // user can never go back to automatic after picking a concrete device.
+    let default_out = host
+        .default_output_device()
+        .and_then(|d| dev_name(&d))
+        .unwrap_or_default();
+    push("default_output".into(), default_out, "desktop");
+    let default_in = host
+        .default_input_device()
+        .and_then(|d| dev_name(&d))
+        .unwrap_or_default();
+    push("default_input".into(), default_in, "mic");
     match host.output_devices() {
         Ok(list) => {
             for d in list {
                 if let Some(n) = dev_name(&d) {
-                    push(n, "desktop");
+                    push(n.clone(), n, "desktop");
                 }
             }
         }
@@ -45,7 +59,7 @@ pub async fn list_audio_devices(_app: &AppHandle) -> Result<Vec<AudioDevice>, St
         Ok(list) => {
             for d in list {
                 if let Some(n) = dev_name(&d) {
-                    push(n, "mic");
+                    push(n.clone(), n, "mic");
                 }
             }
         }
@@ -59,7 +73,9 @@ pub async fn list_audio_devices(_app: &AppHandle) -> Result<Vec<AudioDevice>, St
 
 /// Resolve a `cpal` device by the id `list_audio_devices` returned
 /// (the OS friendly name). `render=true` searches outputs (loopback game
-/// capture), `render=false` searches inputs (mic).
+/// capture), `render=false` searches inputs (mic). Matching is
+/// case-insensitive because Windows may change capitalization after a
+/// driver reinstall.
 pub fn find_device(id: &str, render: bool) -> Option<cpal::Device> {
     let host = cpal::default_host();
     let list = if render {
@@ -67,7 +83,9 @@ pub fn find_device(id: &str, render: bool) -> Option<cpal::Device> {
     } else {
         host.input_devices().ok()?
     };
-    list.into_iter().find(|d| dev_name(d).as_deref() == Some(id))
+    let want = id.trim().to_lowercase();
+    list.into_iter()
+        .find(|d| dev_name(d).map(|n| n.to_lowercase()).as_deref() == Some(want.as_str()))
 }
 
 /// GSR magic ids (Linux defaults, also seeded into `settings` by migration

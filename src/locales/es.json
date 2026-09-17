@@ -22,6 +22,13 @@
     "mic_src": "Micrófono",
     "desktop_src": "Fuente de juego / escritorio",
     "linked": "{{n}} pistas enlazadas",
+    "device_default": "Predeterminado del sistema ({{name}})",
+    "signal": "Señal",
+    "no_signal": "Sin señal del dispositivo elegido",
+    "save_tracks_note": "El clip guardado lleva 3 pistas: Mix, Juego, Mic. El Mix es la primera y la única activa por defecto.",
+    "single_track": "Guardar solo el Mix (1 pista)",
+    "single_track_hint": "Máxima compatibilidad: cualquier reproductor reproduce el Mix. El archivo pierde las pistas Juego y Mic.",
+    "single_track_note": "El clip guardado llevará solo el canal Mix, reproducible en cualquier reproductor.",
     "stopped_hint": "Inicia el búfer para enlazar las pistas de audio."
   },
   "video": {

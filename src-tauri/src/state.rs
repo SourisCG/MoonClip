@@ -8,6 +8,10 @@ pub type Engine = crate::os::Engine;
 #[derive(Default)]
 pub struct AppState {
     pub recorder: Mutex<Option<Engine>>,
+    /// Serializes the whole save pipeline (engine flush → dedupe → scale →
+    /// thumb → DB): two hotkey presses must never interleave file writes or
+    /// race the DB insert (Windows names files per second and muxes with -y).
+    pub save_lock: Mutex<()>,
     /// Last audio-gain apply outcome (None = ok/never). Shown in UI, no silent fails.
     pub audio_error: Mutex<Option<String>>,
     /// Last engine death/exit error (None = ok/never). Shown in UI.

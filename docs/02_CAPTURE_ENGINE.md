@@ -45,9 +45,12 @@ on NVIDIA + h264/hevc only: `preset=p7;tune=hq;profile=high;bf=2;spatial-aq=1;mu
 (all keys validated live against our bundled GSR: accepted, saves clean,
 bitrate on target).
 
-> **Windows trip:** same ladder + same bitrates via native WGC + NVENC/AMF/
-> QuickSync (no GSR on Windows — see `09_WINDOWS_HANDOFF.md`). Per-vendor
-> save-transcode mapping lives in `os::video::transcode_encoder`
+> **Windows trip:** same ladder + same bitrates, captured by the bundled
+> FFmpeg `gfxcapture` filter (Windows.Graphics.Capture → D3D11 zero-copy)
+> and encoded by NVENC/AMF/QuickSync (no GSR on Windows — see §3 and
+> `09_WINDOWS_HANDOFF.md`). Windows scales on the GPU live, so the
+> save-transcode ladder below does not apply there (`save_plan()` is `None`).
+> Per-vendor save-transcode mapping lives in `os::video::transcode_encoder`
 > (Nvenc/Amf/Qsv); VAAPI save-transcode on AMD/Linux is intentionally
 > unmapped (render-node plumbing needs real-HW validation) → saver keeps the
 > source file with a visible log, never silently.
@@ -60,7 +63,14 @@ bitrate on target).
 | 1080p | 20M (= old-MoonLit 20000 Kbps table) | 12M | 8M | ~150 MB |
 | 1440p | 25M | 20M | 15M | ~188 MB |
 
-Notes: 1080p@20M matches the old-MoonLit advanced table 1:1 (CBR/P7/HQ/AQ/BF2/keyint-2s).
+Notes: 1080p@20M matches the old-MoonLit advanced table 1:1 (CBR/HQ/AQ/BF2/keyint-2s).
+On Windows the default NVENC preset is **P5**, the preset OBS's own Auto
+Configuration Wizard picks for this hardware (the user's OBS recipe is
+otherwise identical). Measured on an RTX 3060 under COD with the real
+zero-copy chain: P7 pulled only 19.6 fps with 852 dups / 20 s (~0.5x realtime),
+P6 57.8 fps / 126 dups, P5 50 fps / 207. Remaining dups are the game's own fps
+(a 60 fps CFR clip of a ~58 fps game has ~2 dups/s; OBS identical).
+Linux GSR keeps the P7 HQ passthrough (parity with the validated table above).
 `x264` (Windows CPU fallback, always listed) follows the h264 ladder row;
 save-time it maps to `libx264` (`veryfast` + `zerolatency`).`preset=p7`/`profile=high` alone were tested and only work as part of the full
 set above (alone they starve keyframes in tiny test buffers — an artifact of
@@ -148,21 +158,82 @@ tokio = { version = "1", features = ["process", "time"] }
 rodio = "0.21" # confirmation ding (synthesized, no assets)
 ```
 
-## 3. Windows: `windows-capture` + hardware encoder
+## 3. Windows: bundled FFmpeg `gfxcapture` (WGC) + WASAPI
 
 - **OS floor: Windows 10 version 1903 (build 18362)+, Windows 11 supported.**
   WGC does not exist below 1903, so MoonClip for Windows requires 1903+;
   the installer targets that floor (see `08_CI_CD_DISTRIBUTION.md`).
-- No DLL injection (anti-cheat safe for Valorant/CS2). Use Windows Graphics Capture (WGC) / DXGI via `windows-capture` crate (Win10 1903+, Win11), 60/120 FPS.
-- Audio: two WASAPI streams via `cpal`:
-  - Thread A: `default_output` loopback (`eRender`) = game.
-  - Thread B: `default_input` (`eCapture`) = mic.
-- Mux as two AAC tracks in same `.mp4` with titles `Desktop/Game` and `Microphone`, or via FFmpeg sidecar:
-  ```bash
-  ffmpeg -f ddagrab -i desktop -f wasapi -i "default" -f wasapi -i "audio=Mic Name" \
-    -map 0:v -map 1:a -map 2:a -metadata:s:a:0 title="Game" -metadata:s:a:1 title="Mic" \
-    -c:v h264_nvenc -c:a aac output.mp4
+- No DLL injection (anti-cheat safe for Valorant/CS2). The bundled FFmpeg
+  captures through its `gfxcapture` filter — the same **Windows.Graphics.
+  Capture** API Xbox Game Bar uses — and encodes **on the GPU**: frames stay
+  in D3D11 textures (`AV_PIX_FMT_D3D11`) straight into NVENC/AMF/QSV. There
+  is no WGC callback in the app process, no CPU readback and no rawvideo
+  pipe: one child process owns capture + encode + mux. (`MOONCLIP_CAPTURE_
+  SOURCE=ddagrab` switches the monitor source to Desktop Duplication as a
+  fallback; window/app capture will use `gfxcapture`'s `window_title`/
+  `window_exe`/`hwnd` selectors later.)
+- Files: `os/windows/engine.rs` (process + ring + save), `os/windows/ts.rs`
+  (MPEG-TS/PES index: PTS, keyframes, QPC calibration), `os/windows/audio.rs`
+  (WASAPI loopback + mic), `os/windows/video.rs` (DXGI vendor/monitors).
+- Live chain (spawned at `start_buffer`):
   ```
+  ffmpeg -loglevel info \
+    -filter_complex "gfxcapture=hmonitor=<H>:max_framerate=<cap>:capture_cursor=1
+                     [,width=W:height=H:resize_mode=scale_aspect:scale_mode=bicubic],showinfo[out]" \
+    -map [out] -an -c:v h264_nvenc <CBR ladder + NVENC HQ> \
+    -r <fps> -fps_mode cfr -muxdelay 0 -muxpreload 0 \
+    -f mpegts pipe:1
+  ```
+  The TS goes over a custom 8 MB anonymous pipe (`big_pipe`), not
+  `Stdio::piped()`: the default is 32 KB ~13 ms of slack at 20 Mbps, so any
+  drain hiccup blocked ffmpeg and duplicated frames.
+  Monitor selection is by **HMONITOR** (cross-process handle, validated) so
+  the Rust-side DXGI list is authoritative. The buffer runs at the requested
+  height: scaling happens inside the filter on the GPU (`resize_mode`), so
+  saves are copy-only. `<cap>` is 2x the output rate clamped to the panel
+  refresh (`capture_max_fps`; `MOONCLIP_CAPTURE_MAX_FPS` overrides) — under a
+  game the full refresh would burn GPU copies the CFR filter discards.
+  `-r <fps> -fps_mode cfr` pins the CFR timeline
+  Medal/OBS style; `showinfo` logs each frame's PTS (100 ns, pre-encoder) on
+  stderr.
+- **A/V sync is two lines, no per-codec constants.** `ts.rs` parses PAT/PMT
+  and every video PES (PTS in 90 kHz, unwrapped) and indexes keyframes
+  (H.264 IDR / HEVC IRAP NAL scan; AV1 falls back to an `ffmpeg -ss` probe).
+  The PTS clock is anchored to QPC with `min(stderr_arrival - pts)`, taken
+  from `showinfo` **before the encoder**, so encoder lookahead (p7 + CBR can
+  buffer ~0.5 s) cannot shift the mapping. At save, the chosen keyframe's QPC
+  is `calib + key_pts` and both the video cut and the audio window start
+  there. A rig-measured constant (`DEFAULT_SYNC_BIAS_MS = 70`, override
+  `MOONCLIP_SYNC_BIAS_MS`) absorbs the compositor/frame-pool delivery lag
+  that `showinfo` cannot see; it is not per-codec. Residual on the
+  flash+beep rig: **median −3 ms, max ±13 ms**.
+- **Audio (`audio.rs`)** is a rewrite: per-stream lock-free SPSC from the
+  cpal callback (no allocations, no mutexes on the audio thread) into
+  timestamped 10 ms i16 blocks; MMCSS "Pro Audio" on the callbacks; a
+  supervisor follows the OS default device, reopens errors, and reopens a
+  silent stall once per episode (with a keep-alive render stream so WASAPI
+  loopback delivers silence while the game is quiet). At save, each stem is
+  rebuilt on the QPC grid (`build_window`): block timestamps resample the
+  stream (device-clock drift correction) and only gaps > 50 ms become
+  silence, so there are no boundary clicks and no cumulative drift.
+- **Save is copy-only** (target <1 s): the ring index selects the latest
+  keyframe at/before `end − duration`, the staged TS starts exactly at that
+  PES with the latest PAT/PMT prepended (no `-ss` seek: the output starts at
+  0), WAVs for Mix/Game/Mic are written in parallel and muxed with
+  `-c:v copy -c:a aac -b:a 160k` + `patch_audio_alternate_group`.
+- Robustness: the encoder child runs CPU class **HIGH by default**
+  (`cpu_priority_class`; `MOONCLIP_CAPTURE_CPU_PRIO=0` restores ABOVE_NORMAL)
+  with power throttling disabled and **GPU scheduling priority HIGH by default**
+  (`tune_child_priority`; `MOONCLIP_CAPTURE_GPU_PRIO=0` disables) — the same
+  lever OBS raises so WGC/NVENC do not starve behind a GPU-saturating game.
+  Leftover capture children from a force-killed session are swept at
+  `start_buffer` (`kill_orphan_ffmpeg`). A dead child/pipe stops the engine
+  (`check_alive` + 200-line stderr tail); a source with no fresh PES for 3 s
+  is reported as stalled (`log_tail`) instead of fabricating frozen frames.
+- Per-track live gain/mute (0–200%) works exactly as on Linux: the gain is
+  applied in our capture path (atomics read by the callback), never the OS
+  mixer; `audio_peaks` publishes windowed peaks for the UI meters.
+
 
 ## 4. Rust trait (frozen interface)
 

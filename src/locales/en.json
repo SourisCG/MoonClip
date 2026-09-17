@@ -22,6 +22,13 @@
     "mic_src": "Microphone",
     "desktop_src": "Game / desktop source",
     "linked": "{{n}} tracks linked",
+    "device_default": "System default ({{name}})",
+    "signal": "Signal",
+    "no_signal": "No signal from the selected device",
+    "save_tracks_note": "Saved clips carry 3 tracks: Mix, Game, Mic. Mix is first and the only enabled one by default.",
+    "single_track": "Save Mix only (1 track)",
+    "single_track_hint": "Maximum compatibility: any player plays the Mix. The file loses the Game and Mic tracks.",
+    "single_track_note": "Saved clips will carry only the Mix track, playable in any player.",
     "stopped_hint": "Start the buffer to link audio tracks."
   },
   "video": {

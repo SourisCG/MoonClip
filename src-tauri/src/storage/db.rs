@@ -313,6 +313,7 @@ impl DbState {
             "gain_mic",
             "mute_game",
             "mute_mic",
+            "audio_single_track",
             "mic_device",
             "desktop_device",
             "video_codec",

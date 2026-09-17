@@ -288,6 +288,7 @@ pub fn run() {
             commands::engine_status,
             commands::save_clip_now,
             commands::audio_levels,
+            commands::audio_peaks,
             commands::set_track_gain,
             commands::set_track_mute,
             commands::gsr_info,

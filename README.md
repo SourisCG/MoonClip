@@ -138,7 +138,7 @@ pnpm app:install         # replace install + KMS cap + taskbar association
 
 - **App:** Tauri v2 + React 19 + TypeScript + Vite + Tailwind v3 + `react-i18next` + Wavesurfer v7 + Lucide
 - **Backend:** Rust (tokio, serde, rusqlite, keyring, rodio, uuid, dirs, nix/image on Linux)
-- **Capture Linux:** `gpu-screen-recorder` sidecar (KMS/DRM, NVENC/AMF/QSV/VA-API). **Windows:** WGC + WASAPI + `windows-capture`/`cpal` (trip in progress)
+- **Capture Linux:** `gpu-screen-recorder` sidecar (KMS/DRM, NVENC/AMF/QSV/VA-API). **Windows:** bundled FFmpeg `gfxcapture` (Windows.Graphics.Capture, D3D11 zero-copy) + WASAPI via `cpal`
 - **Sidecars:** static `ffmpeg` + `gpu-screen-recorder` in `src-tauri/binaries/`
 - **Rules:** HW-encode first, lossless-cut by default, lazy editor, relative paths, zero `cfg(target_os)` outside `os/`, IPC wire keys always camelCase
 
