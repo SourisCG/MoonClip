@@ -81,6 +81,7 @@ pub async fn probe_duration_ms(ffmpeg: &Path, input: &Path) -> Option<i64> {
 /// which proved soft on text at non-integer ratios (1080p→720p). Same CBR
 /// ladder bitrate as a direct capture would use. Returns false on any failure
 /// (caller keeps source).
+#[allow(clippy::too_many_arguments)]
 pub async fn scale_to_height(
     ffmpeg: &Path,
     input: &Path,

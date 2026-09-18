@@ -27,6 +27,110 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **Windows: in-game lag + save slowness pass (2026-09-17)** — a 120 s clip
+  saved from the field showed **~65 % duplicate frames** (mpdecimate: 2 563
+  unique of ~7 300) and saves of **7–19 s** (SATA). Root causes and fixes:
+  - **NVENC recipe was too heavy by default.** M2 had enabled the SPEC §9 full
+    recipe (`-temporal-aq 1 -multipass qres -rc-lookahead 20`, `bufsize` 2×)
+    on top of p5. The measured-light recipe is back as the default
+    (`spatial-aq 1`, `multipass disabled`, no look-ahead, `bufsize` 1×); the
+    heavy knobs are opt-in via **`MOONCLIP_ENCODER_HQ_FULL=1`**.
+  - **Vendor equivalents aligned** (SPEC §9) in both modes: AMF light drops
+    `preencode` (its pre-analysis/look-ahead; full adds `preencode 1 +
+    preanalysis 1 + pa_taq_mode 2`), QSV light keeps `async_depth 4` (full adds
+    `look_ahead 1 + look_ahead_depth 20`), x264 stays
+    `veryfast + zerolatency`. `bufsize` is 1× for every vendor.
+  - **Save I/O halved:** `+faststart` is now a setting (**default OFF**; it
+    rewrites the whole mdat) and `patch_audio_alternate_group` no longer calls
+    `sync_all()` inside the save path (it forced the OS to flush the whole
+    ~300 MB file; measured ~2.4 s). New `capture_max_fps` setting (0 = auto
+    2×, clamped to the panel refresh) to trade motion sampling for GPU
+    headroom on high-refresh panels (164 Hz → 120 default; 90 is a good A/B).
+  - **`dsp::build_window` hot loop optimized:** rational 20833+1/3 ns
+    accumulator and i64 math, no division per sample (debug builds spent
+    ~1.2 s on a 120 s window).
+  - Stage telemetry per save: `mux: snapshot=… wav=… mux=…` + patch time.
+  - **Measured (debug build, SATA):** 120 s save **3.08 s** (snapshot 1.18 /
+    wav 0.64 / mux 0.62 / patch 0.57); short clips 0.33–0.41 s. Release
+    builds cut the CPU stages further.
+  - Pending: user in-game A/B (BO7) with `capture:` fps + `video_lag` lines,
+    comparing Auto vs cap 90, and re-checking duplicates with mpdecimate.
+
+- **Windows V2 rewrite — SPEC-driven (2026-09-17)** — the Windows engine was
+  rebuilt milestone by milestone (M0–M8) against the V2 SPEC, keeping the
+  proven process architecture (option A: one ffmpeg child owns
+  capture+encode+mux) and replacing the rest. All gates green:
+  `cargo clippy -- -D warnings`, 58 unit tests, `cargo check --target
+  x86_64-pc-windows-msvc`, `pnpm build`, zero-`cfg` grep outside `os/`,
+  anticheat grep empty.
+  - **Architecture (decision, recorded):** option A. ffmpeg child with
+    `gfxcapture` (WGC) / `ddagrab` (DXGI fallback) → NVENC/AMF/QSV/x264 →
+    MPEG-TS over an 8 MB custom pipe → Rust ring/PES index → copy-only save.
+    The in-process `windows-capture` + `ffmpeg-next` option B was discarded
+    because the SPEC's own §9/§11/§14 require the child-process pipes/PES path
+    and the FFI risk is not justified by the measured results.
+  - **New module layout** (`os/windows/`): `detector.rs` (DXGI vendor,
+    monitors+refresh, probed `offered_codecs`), `pts.rs` (single QPC clock,
+    `DEFAULT_SYNC_BIAS_MS=70`, `qpc_ticks_to_ns` for WASAPI), `ring.rs`
+    (1 MB chunks O(1), PES/keyframes, two-phase `CutPlan`), `encode.rs` (§9
+    per-vendor args, NVENC p5 + auto-P4 recommendation when `video_lag>0.8 s`),
+    `video.rs` (source cascade + filter graph + `source_fallback`),
+    `dsp.rs` (conversion/gain/mix/peaks/`build_window`), `audio.rs` (WASAPI),
+    `mux.rs` (copy-only mux, §10 tracks, faststart, alternate_group, mp4/mkv).
+    `cpal` and the old `ts.rs` are gone.
+  - **Audio:** `wasapi 0.24` (endpoint loopback = render + `Direction::Capture`,
+    `BufferInfo::timestamp` = raw QPC ticks), SPSC lock-free rings, silent
+    keep-alive render stream, default-device follow, stall watchdog without
+    churn, MMCSS. Track layout §10 verified inside the file: `name` metadata
+    `Master Mix [Game+Voice]` / `Game/Desktop` / `Microphone`, AAC 320/320/192,
+    `-movflags +faststart` (moov at byte 36), `alternate_group=1`.
+  - **Ladder/§17 backend:** `video_quality` now covers 360/480/720/1080/1440/
+    2160 with CQP export 24/23/22/20/19/18; custom mode settings
+    (`video_mode`, `custom_bitrate_kbps` 3–100 M, `custom_fps` clamped to
+    30/60 with notice); atomic `set_settings` (one restart) and
+    `set_video_quality` (codec+height+fps+exits custom); `system_memory`
+    (free RAM for the warning; Windows `GlobalMemoryStatusEx`, Linux `None`
+    until its owner wires it).
+  - **UI §17:** `QualityTable.tsx` (moon presets `New Moon 720p / First
+    Quarter 1080p / Waning Gibbous 1440p / Full Moon 2160p`, EN names in both
+    languages, tags `bajo/recomendado/alto/ultra` · `low/recommended/high/
+    ultra`, AV1 only when offered, badges, duration 15/30/60/120 s + 5/10 min
+    + free custom with >2 min risk checkbox and free-RAM warning, container
+    MP4/MKV, hover preview) and `SetupWizard.tsx` (first run via
+    `settings.setup_done`, NVIDIA suggests 1080p, otherwise 720p; reopenable
+    from Settings). `VideoSection` keeps the monitor selector and the KMS
+    banner; the old codec/resolution/fps selects were replaced.
+  - **Decisions logged:** HDR is OUT of V2 (capture stays SDR/normal video);
+    PID-isolated loopback is OUT of Windows V2 and left to the Linux owner
+    (documented here); `QualityTable` is shared UI (Linux backend maps 480 via
+    save-lanczos and 2160 at source until its owner aligns GSR); the
+    `buffer_seconds` 300 s cap is gone (only ≥5 s is enforced; >120 s is a UI
+    warning); default NVENC preset stays **p5** with the documented P4
+    step-down recommendation.
+  - **Measured (RTX 3060, 1080p60, SATA SSD C:):** live WGC+NVENC+WASAPI save
+    0.23–0.29 s; A/V flash+beep Game track **+8.33 ms**; drift smoke at
+    minute 1/3: **−8.33 / +1.67 ms** (no accumulation); inter-audio
+    Master vs Game **0.00 ms** and Master vs clamped sum **0 exact**;
+    `live_tone_coverage` 100 %; 120 s gold save **3.44 s / 289 MB** (SATA
+    ceiling is 5 s; <3 s is the NVMe target); `ddagrab` source override and
+    x264 fallback save 3×AAC.
+  - **Test rig note:** WGC/DDA deliver frames only on change, so live video
+    tests need screen motion. PROGRESS rig: a background PowerShell mouse
+    mover (cursor positions in a loop) plus `playfull.ps1 <ref.mp4> <secs>`
+    (loops automatically) for the flash+beep reference.
+  - **Tooling:** `build-aux/analyze_interaudio.py` (pure Python FFT
+    cross-correlation, `--selftest`, Master-vs-sum check) and the existing
+    `analyze_av.py` / `playfull.ps1` rig.
+  - **Packaging:** `src-tauri/tauri.windows.conf.json` bundles the pinned
+    ffmpeg sidecar as a resource; `pnpm tauri:build:windows` builds NSIS+MSI
+    (SmartScreen note applies; installer build still to be smoke-tested).
+  - **Pending user passes (M7 manual):** BO7 10 min at 1080p60 and 1440p60
+    (<3 % 1 % lows, `video_lag` 0.2–0.6 s), 30-min drift
+    (`MOONCLIP_DRIFT_SECS=1800 cargo test … live_drift_capture`), Kdenlive
+    multitrack (3 stems + labels), legacy FSE (best effort; BO7 uses
+    borderless/eFSE), and the Linux regression (`cargo check` + `pnpm build`
+    on Linux CI).
+
 - **Windows: in-game probe on COD — P7 is the real ceiling (2026-09-16)** —
   isolated probes while COD (foreground) ran, no app:
   | Probe (20 s, real path unless noted) | Frames pulled | Dups |

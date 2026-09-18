@@ -40,6 +40,22 @@ pub struct CaptureConfig {
     /// Compatibility mode: save with a single audio track (the Mix) so any
     /// player plays it. False = 3 tracks (Mix, Game, Mic; Linux parity).
     pub audio_single_track: bool,
+    /// Force a capture source for this start (`gfxcapture`/`ddagrab`); `None`
+    /// = backend default/env. Used by the mid-session source fallback.
+    #[allow(dead_code)] // Linux GSR picks its own source
+    pub source_override: Option<String>,
+    /// Capture-rate cap override (0 = backend auto: 2x output, clamped to the
+    /// panel refresh). Lowering it trades motion sampling for GPU headroom.
+    #[allow(dead_code)]
+    pub capture_max_fps: u32,
+    /// MP4 `+faststart` (moov relocation). Off by default: it rewrites the
+    /// whole file and doubles save I/O on SATA/HDD.
+    #[allow(dead_code)]
+    pub faststart: bool,
+    /// Output container: `mp4` (default, faststart) or `mkv`. The Linux GSR
+    /// backend keeps its own container handling and ignores this.
+    #[allow(dead_code)]
+    pub container: String,
 }
 
 /// Background downscale applied at save time (lanczos, per-vendor encoder).
@@ -76,6 +92,13 @@ pub trait CaptureEngine: Send + Sync {
     /// Bounded backend log tail (last lines) for diagnostics after a failure.
     fn log_tail(&self) -> Vec<String> {
         vec![]
+    }
+    /// A native backend may request a capture-source switch mid-session
+    /// (e.g. WGC stalled/black -> DXGI Duplication). Taken once; `None` when
+    /// there is nothing to do. Subprocess backends never request one.
+    #[allow(dead_code)] // consumed by the liveness sweep in commands.rs
+    fn source_fallback_request(&mut self) -> Option<String> {
+        None
     }
 }
 

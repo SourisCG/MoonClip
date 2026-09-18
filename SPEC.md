@@ -2,17 +2,27 @@
 
 > Open-source, lightweight, zero-cloud Medal.tv alternative for Linux + Windows. Bilingual app (ES/EN). Docs in English.
 
-## Status: Phase 3 done on Linux, Windows trip is next
+## Status: Phase 3 done on Linux; Windows V2 rewrite complete (user in-game pass pending)
 
 - Working (Linux, user-verified): tray + F9 replay buffer (GSR embedded),
   3-track mix-first audio, live gains, Medal CBR ladder + NVENC HQ, 30/60fps,
   monitor select, lanczos-on-save, gallery with thumbs + real durations,
   settings (SQLite relative paths) + OS keyring vault, frameless MoonClip UI.
-- Next: **Windows trip** — implement `os/windows/*` behind the same surface
-  (WGC + WASAPI + AMF/QSV). Start at `docs/09_WINDOWS_HANDOFF.md`.
+- Windows V2 (2026-09-17, `docs/09_WINDOWS_HANDOFF.md`): same IPC surface with
+  a rewritten engine under `os/windows/` (WGC `gfxcapture` + DXGI `ddagrab`
+  fallback → NVENC/AMF/QSV/x264 → TS ring → copy-only save), WASAPI audio
+  (`wasapi` crate, QPC timestamps, keep-alive, watchdog), §10 container
+  (320/320/192 + titles, faststart, mp4/mkv), Medal ladder incl. 480p/2160p +
+  CQP export, QualityTable + SetupWizard UI (moon presets, custom mode).
+  Gates: clippy `-D warnings`, 58 unit tests, `pnpm build`, zero-`cfg` grep.
+  Measured: saves 0.23–0.29 s, A/V ±8 ms, 120 s save 3.44 s on SATA.
+  Pending: BO7 10-min stress (1080p60/1440p60), 30-min drift, Kdenlive
+  multitrack, legacy FSE, Linux CI regression.
+- HDR is out of V2 (capture treated as normal SDR video); PID-isolated
+  loopback is left to the Linux owner (logged in PROGRESS).
 - Stack: Tauri v2 + React 19 + TS + Vite + Tailwind v3 + `react-i18next` +
   Wavesurfer + Lucide. Rust: tokio, serde, rusqlite, keyring, rodio, uuid,
-  dirs, nix (Linux), image. Package manager: **pnpm**.
+  dirs, nix (Linux), image, wasapi (Windows). Package manager: **pnpm**.
 
 ## Doc map
 

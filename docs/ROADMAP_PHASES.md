@@ -16,7 +16,7 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 
 ## Phase 3 — Capture engine (replay + dual audio)
 
-- `CaptureEngine` trait; Linux GSR sidecar (`-r 30 -a "default_output|default_input"`, `SIGUSR1` via `nix`); Windows: bundled FFmpeg `gfxcapture` (WGC, D3D11 zero-copy) + `cpal`; `rodio` ding; tray status.
+- `CaptureEngine` trait; Linux GSR sidecar (`-r 30 -a "default_output|default_input"`, `SIGUSR1` via `nix`); Windows: bundled FFmpeg `gfxcapture` (WGC, D3D11 zero-copy) + WASAPI (`wasapi` crate); `rodio` ding; tray status.
 - **Accept:** F9 → `.mp4` <1s with 2 audio tracks; indexed in DB with thumbnail.
 
 ## Phase 4 — Game detection + launchers

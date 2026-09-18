@@ -1,14 +1,20 @@
 //! Windows backend assembly (ffmpeg `gfxcapture` WGC capture + WASAPI audio
-//! via cpal). Same surface as os/linux so shared code never branches on OS.
+//! via the `wasapi` crate). Same surface as os/linux so shared code never
+//! branches on OS.
 
 pub mod audio;
 pub mod binary;
 pub mod caps;
+pub mod detector;
 pub mod devices;
+mod dsp;
+mod encode;
 mod engine;
+mod mux;
 pub mod open;
 pub mod paths;
-mod ts;
+mod pts;
+mod ring;
 pub mod video;
 
 pub use engine::WindowsCaptureEngine as Engine;

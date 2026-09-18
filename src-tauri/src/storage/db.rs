@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::AppHandle;
 
@@ -87,7 +87,7 @@ impl DbState {
             .map_err(|e| format!("cannot save clips_directory: {e}"))?;
         } else if let Some(legacy) = crate::os::paths::legacy_default_clips_dir() {
             let fresh = paths::default_clips_dir();
-            if PathBuf::from(current.trim()) == legacy && legacy != fresh && legacy.is_dir() {
+            if Path::new(current.trim()) == legacy.as_path() && legacy != fresh && legacy.is_dir() {
                 let moved = paths::migrate_legacy_clips_dir(&legacy, &fresh)?;
                 conn.execute(
                     "UPDATE settings SET value = ?1 WHERE key = 'clips_directory'",
@@ -320,9 +320,40 @@ impl DbState {
             "out_height",
             "fps",
             "monitor",
+            "container",
+            "video_mode",
+            "custom_bitrate_kbps",
+            "custom_fps",
+            "setup_done",
+            "capture_max_fps",
+            "faststart",
         ];
         if !ALLOWED.contains(&key) {
             return Err(format!("unknown setting: {key}"));
+        }
+        match key {
+            "container" if !matches!(value, "mp4" | "mkv") => {
+                return Err("container must be mp4 or mkv".into());
+            }
+            "video_mode" if !matches!(value, "ladder" | "custom") => {
+                return Err("video_mode must be ladder or custom".into());
+            }
+            "setup_done" if !matches!(value, "0" | "1") => {
+                return Err("setup_done must be 0 or 1".into());
+            }
+            "faststart" if !matches!(value, "0" | "1") => {
+                return Err("faststart must be 0 or 1".into());
+            }
+            "capture_max_fps" => {
+                let v: u32 = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| "capture_max_fps must be a number".to_string())?;
+                if v != 0 && !(30..=1000).contains(&v) {
+                    return Err("capture_max_fps must be 0 (auto) or 30-1000".into());
+                }
+            }
+            _ => {}
         }
         if key == "clips_directory" {
             let dir = PathBuf::from(value);

@@ -19,7 +19,7 @@
 //! of per-codec offsets.
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
@@ -31,9 +31,14 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 
 use super::super::{CaptureConfig, CaptureEngine, SavePlan};
-use super::audio::{self, AudioCapture};
-use super::ts::{CutPlan, TsRing};
-use super::video;
+use super::audio::AudioCapture;
+use super::detector::MonitorTarget;
+use super::dsp;
+use super::encode;
+use super::mux;
+use super::pts;
+use super::ring::{CutPlan, TsRing};
+use super::video::{self, CaptureSource};
 
 /// Extra seconds kept beyond the configured buffer (ring headroom).
 const RING_MARGIN_SECS: u64 = 8;
@@ -51,105 +56,10 @@ const TS_READ_BUF: usize = 64 * 1024;
 /// Kernel buffer for the encoder's TS stdout pipe (see `big_pipe`).
 const TS_PIPE_BYTES: u32 = 8 * 1024 * 1024;
 /// Kernel buffer for the encoder's stderr pipe (showinfo clock ~25 KB/s).
-const ERR_PIPE_BYTES: u32 = 1 * 1024 * 1024;
-
-// ---------------------------------------------------------------------------
-// Pure helpers (unit-tested)
-// ---------------------------------------------------------------------------
-
-/// ffmpeg args for the live encoder **after** `-c:v <enc>`. CBR ladder +
-/// 2 s GOP everywhere (Medal parity); HQ knobs only where valid
-/// (NVIDIA + h264/hevc).
-pub fn live_encoder_args(
-    enc_name: &str,
-    codec: &str,
-    bitrate_kbps: u32,
-    fps: u32,
-    nvenc_hq: bool,
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut flag = |k: &str, v: &str| {
-        out.push(k.to_string());
-        out.push(v.to_string());
-    };
-    if enc_name.ends_with("_nvenc") {
-        if nvenc_hq {
-            // HQ recipe: preset + HQ + profile + BF2 + Spatial AQ +
-            // single-pass. Default **p5**, the preset OBS's own Auto
-            // Configuration Wizard picks for this hardware. Measured on an
-            // RTX 3060 under COD (real zero-copy chain): p7 pulls only
-            // 19.6 fps and emits 852 dups / 20 s (NVENC ~0.5x realtime under
-            // game load), p6 57.8 fps / 126 dups, p5 50 fps / 207. The
-            // remaining wall is the game's own fps (a 60 fps CFR clip of a
-            // ~58 fps game has ~2 dups/s; OBS is identical).
-            // `MOONCLIP_NVENC_PRESET` swaps the preset (`p4` for more
-            // headroom, `p7` = Linux parity) without rebuilding.
-            let preset = std::env::var("MOONCLIP_NVENC_PRESET").unwrap_or_else(|_| "p5".into());
-            flag("-preset", &preset);
-            flag("-tune", "hq");
-            flag("-profile:v", if codec == "hevc" { "main" } else { "high" });
-            flag("-bf", "2");
-            flag("-spatial-aq", "1");
-            flag("-multipass", "disabled");
-        }
-        flag("-rc", "cbr");
-    } else if enc_name.ends_with("_amf") {
-        flag("-rc", "cbr");
-        flag("-quality", "quality");
-    } else if enc_name.ends_with("_qsv") {
-        flag("-preset", "fast");
-    } else if enc_name == "libx264" {
-        flag("-preset", "veryfast");
-        flag("-tune", "zerolatency");
-        flag("-profile:v", "high");
-        flag("-bf", "2");
-    }
-    let gop = (fps.max(1) * 2).to_string();
-    flag("-b:v", &format!("{bitrate_kbps}k"));
-    flag("-maxrate", &format!("{bitrate_kbps}k"));
-    flag("-bufsize", &format!("{bitrate_kbps}k"));
-    flag("-g", &gop);
-    out
-}
-
-/// True when the GPU chain can take D3D11 frames straight from `gfxcapture`
-/// (validated: NVENC). AMD/Intel run the hwdownload fallback until their
-/// zero-copy chain is validated on real hardware.
-fn gpu_zero_copy(vendor: &str, codec: &str) -> bool {
-    vendor == "nvidia" && codec != "x264"
-}
-
-/// Even output width for a target height, preserving the source aspect.
-fn scaled_width(mw: u32, mh: u32, out_height: u32) -> u32 {
-    if mh == 0 {
-        return mw;
-    }
-    let w = ((mw as f64 * out_height as f64 / mh as f64).round() as u32).max(2);
-    w & !1
-}
-
-/// Capture rate cap for WGC. Two candidates per CFR slot (2x the output rate,
-/// min 90; fallback 120 when the refresh is unknown) so a suppressed WGC
-/// present becomes a dropped excess frame instead of a duplicate. Never the
-/// full 164 Hz refresh: that triples the WGC copy/filter work under a game
-/// for frames the CFR filter then throws away. `MOONCLIP_CAPTURE_MAX_FPS`
-/// overrides it (clamped to >= fps).
-pub fn capture_max_fps(refresh_hz: u32, fps: u32) -> u32 {
-    let headroom = (fps * 2).max(90);
-    let cap = if refresh_hz >= 30 {
-        refresh_hz.min(headroom)
-    } else {
-        (fps * 2).max(120)
-    };
-    cap.max(fps)
-}
-
-/// CBR target override from `MOONCLIP_CAPTURE_BITRATE_KBPS` (test/A-B only):
-/// swaps the ladder bitrate without rebuilding. Values below 500 kbps are
-/// ignored (a typo must not produce an unusable clip).
-fn capture_bitrate_override(env: Option<&str>) -> Option<u32> {
-    env?.trim().parse::<u32>().ok().filter(|v| *v >= 500)
-}
+const ERR_PIPE_BYTES: u32 = 1024 * 1024;
+/// `signalstats` YAVG under which a probed frame counts as black. Limited
+/// range puts pure black at 16; a real game frame sits far above 20.
+const BLACK_YAVG: f64 = 20.0;
 
 /// CPU priority class for the encoder child from `MOONCLIP_CAPTURE_CPU_PRIO`:
 /// unset = HIGH (games run at HIGH; ABOVE_NORMAL loses the CPU under load),
@@ -182,107 +92,57 @@ fn gpu_priority_level(env: Option<&str>) -> Option<i32> {
     }
 }
 
-/// What to capture and at what maximum rate. Monitor selection is by native
-/// HMONITOR (cross-process safe, validated) so the Rust-side monitor list is
-/// authoritative — no index-order guessing. `max_fps` is the capture cap
-/// (`capture_max_fps`: 2x the output rate, clamped to the panel refresh —
-/// `MOONCLIP_CAPTURE_MAX_FPS` overrides). Window capture is opt-in
-/// (`MOONCLIP_CAPTURE_SOURCE=window` or `MOONCLIP_CAPTURE_WINDOW_EXE=regex`).
-#[derive(Debug, Clone)]
-pub struct CaptureSource<'a> {
-    /// `gfxcapture` (WGC: monitors and windows) or `ddagrab` (DDA, monitor).
-    pub kind: &'a str,
-    pub hmonitor: isize,
-    pub monitor_idx: u32,
-    /// WGC window selectors; `hwnd` wins over `window_exe`.
-    pub hwnd: Option<u64>,
-    pub window_exe: Option<&'a str>,
-    pub max_fps: u32,
-}
+// ---------------------------------------------------------------------------
+// Launch plan (unit-tested)
+// ---------------------------------------------------------------------------
 
-impl CaptureSource<'_> {
-    fn is_window(&self) -> bool {
-        self.kind == "gfxcapture" && (self.hwnd.is_some() || self.window_exe.is_some())
-    }
-    fn describe(&self) -> String {
-        if let Some(h) = self.hwnd {
-            format!("window hwnd={h}")
-        } else if let Some(exe) = self.window_exe {
-            format!("window exe~'{exe}'")
-        } else if self.kind == "ddagrab" {
-            format!("ddagrab output {}", self.monitor_idx)
-        } else {
-            format!("monitor hmonitor={}", self.hmonitor)
-        }
-    }
-}
-
-/// The capture filtergraph. Scaling happens inside the filter on the GPU
-/// (bicubic) for the zero-copy chain; the download fallback uses lanczos.
-/// `showinfo` runs pre-encoder and feeds the PTS<->QPC clock anchor.
-pub fn capture_filter(
-    vendor: &str,
-    codec: &str,
-    src: &CaptureSource<'_>,
-    mw: u32,
-    mh: u32,
+/// Everything needed to (re)launch the capture child. Stored at start so the
+/// WGC->DXGI fallback (black picture / legacy exclusive fullscreen) can
+/// respawn without re-running discovery or the codec probe.
+struct SpawnPlan {
+    ffmpeg: PathBuf,
+    vendor: String,
+    codec: String,
+    enc_name: &'static str,
+    monitor: MonitorTarget,
     out_height: u32,
+    bitrate_kbps: u32,
     fps: u32,
-) -> String {
-    let scale = out_height > 0 && out_height < mh;
-    // ddagrab has no working GPU resizer here (`scale_d3d11` refuses its
-    // frames); window capture scales through the download path too (its
-    // canvas is the window, not the monitor).
-    let zero = gpu_zero_copy(vendor, codec) && !(src.kind == "ddagrab" && scale) && !(src.is_window() && scale);
-    let mut f = if src.kind == "ddagrab" {
-        // `dup_frames=0`: deliver on change only. Duplicates are ffmpeg's job
-        // (`-r fps -fps_mode cfr`); paying the OS to fabricate them here would
-        // multiply the capture cost for nothing.
-        format!(
-            "ddagrab=output_idx={}:framerate={}:dup_frames=0",
-            src.monitor_idx, src.max_fps
-        )
-    } else if let Some(h) = src.hwnd {
-        format!(
-            "gfxcapture=hwnd={h}:max_framerate={}:capture_cursor=1",
-            src.max_fps
-        )
-    } else if let Some(exe) = src.window_exe {
-        format!(
-            "gfxcapture=window_exe='{exe}':max_framerate={}:capture_cursor=1",
-            src.max_fps
-        )
-    } else {
-        format!(
-            "gfxcapture=hmonitor={}:max_framerate={}:capture_cursor=1",
-            src.hmonitor, src.max_fps
-        )
-    };
-    if zero {
-        if scale {
-            let tw = scaled_width(mw, mh, out_height);
-            f.push_str(&format!(
-                ":width={tw}:height={out_height}:resize_mode=scale_aspect:scale_mode=bicubic"
-            ));
+    nvenc_hq: bool,
+    nvenc_preset: String,
+    encoder_full: bool,
+    env_source: String,
+    env_window_exe: Option<String>,
+    max_fps: u32,
+}
+
+impl SpawnPlan {
+    /// CaptureSource for a given source kind (`gfxcapture`/`ddagrab`). Window
+    /// selectors only apply to WGC; the DDA fallback always targets the
+    /// monitor.
+    fn source<'a>(&'a self, kind: &'a str) -> CaptureSource<'a> {
+        let window_mode = self.env_source == "window" || self.env_window_exe.is_some();
+        let (mut hwnd, mut window_exe) = (None, None);
+        if window_mode && kind == "gfxcapture" {
+            match self.env_window_exe.as_deref() {
+                Some(exe) => window_exe = Some(exe),
+                None => hwnd = video::foreground_window().map(|h| h as u64),
+            }
         }
-    } else {
-        f.push_str(",hwdownload,format=bgra");
-        if scale {
-            f.push_str(&format!(",scale=-2:{out_height}:flags=lanczos"));
+        if window_mode && hwnd.is_none() && window_exe.is_none() {
+            eprintln!(
+                "[moonclip] window capture requested but no target window found; falling back to monitor"
+            );
         }
-        f.push_str(",format=yuv420p");
+        CaptureSource {
+            kind,
+            hmonitor: self.monitor.hmonitor,
+            monitor_idx: self.monitor.index,
+            hwnd,
+            window_exe,
+            max_fps: self.max_fps,
+        }
     }
-    // showinfo runs pre-encoder and logs each frame's PTS (100 ns) on stderr:
-    // the engine uses the log arrival QPC as the PTS<->QPC clock anchor, so
-    // encoder lookahead can never shift A/V (see `note_clock_sample`).
-    // `MOONCLIP_NO_SHOWINFO=1` drops it for load A/B tests (A/V falls back to
-    // the coarser PES-arrival calibration).
-    if std::env::var("MOONCLIP_NO_SHOWINFO").as_deref() != Ok("1") {
-        f.push_str(",showinfo");
-    }
-    f.push_str("[out]");
-    let _ = fps;
-    f
 }
 
 /// Parse a `showinfo` frame line's PTS tick count (`pts: 12345`).
@@ -295,28 +155,6 @@ fn parse_showinfo_pts(line: &str) -> Option<i64> {
     rest[..end].parse::<i64>().ok()
 }
 
-/// GSR-style clip name with a free suffix when the second already exists:
-/// the muxer runs `-y`, so a same-second save must never target a live file.
-pub fn unique_dest(dir: &Path, base: &str) -> PathBuf {
-    let stem = base.strip_suffix(".mp4").unwrap_or(base);
-    let mut cand = dir.join(base);
-    let mut n = 2u32;
-    while cand.exists() {
-        cand = dir.join(format!("{stem}_{n}.mp4"));
-        n += 1;
-    }
-    cand
-}
-
-fn replay_filename() -> String {
-    use windows::Win32::System::SystemInformation::GetLocalTime;
-    let t = unsafe { GetLocalTime() };
-    format!(
-        "replay_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.mp4",
-        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
-    )
-}
-
 /// dBFS for the save stats line (-inf when the stem is digital silence).
 fn dbfs(v: f32) -> String {
     if v <= 0.0 {
@@ -324,201 +162,6 @@ fn dbfs(v: f32) -> String {
     } else {
         format!("{:.1}dB", 20.0 * v.log10())
     }
-}
-
-/// MIX track from the two solo stems (sample sum, clamped). Stems share the
-/// 48 kHz stereo grid and the same window, so they are sample aligned.
-pub fn mix_i16(game: &[i16], mic: &[i16]) -> Vec<i16> {
-    let n = game.len().min(mic.len());
-    game[..n]
-        .iter()
-        .zip(&mic[..n])
-        .map(|(&g, &m)| (g as i32 + m as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
-        .collect()
-}
-
-/// Minimal PCM-16 WAV writer (stereo 48 kHz).
-pub fn write_wav(path: &Path, samples: &[i16]) -> std::io::Result<()> {
-    use std::io::BufWriter;
-    let data_bytes = (samples.len() * 2) as u32;
-    let mut hdr = [0u8; 44];
-    hdr[0..4].copy_from_slice(b"RIFF");
-    hdr[4..8].copy_from_slice(&(36 + data_bytes).to_le_bytes());
-    hdr[8..12].copy_from_slice(b"WAVE");
-    hdr[12..16].copy_from_slice(b"fmt ");
-    hdr[16..20].copy_from_slice(&16u32.to_le_bytes());
-    hdr[20..22].copy_from_slice(&1u16.to_le_bytes()); // PCM
-    hdr[22..24].copy_from_slice(&2u16.to_le_bytes()); // stereo
-    hdr[24..28].copy_from_slice(&48_000u32.to_le_bytes());
-    hdr[28..32].copy_from_slice(&(48_000u32 * 2 * 2).to_le_bytes());
-    hdr[32..34].copy_from_slice(&4u16.to_le_bytes());
-    hdr[34..36].copy_from_slice(&16u16.to_le_bytes());
-    hdr[36..40].copy_from_slice(b"data");
-    hdr[40..44].copy_from_slice(&data_bytes.to_le_bytes());
-    let f = std::fs::File::create(path)?;
-    let mut w = BufWriter::with_capacity(1024 * 1024, f);
-    w.write_all(&hdr)?;
-    let mut bytes = Vec::with_capacity(samples.len() * 2);
-    for s in samples {
-        bytes.extend_from_slice(&s.to_le_bytes());
-    }
-    w.write_all(&bytes)?;
-    w.flush()
-}
-
-// ---------------------------------------------------------------------------
-// MP4 default-track hardening
-// ---------------------------------------------------------------------------
-
-/// Offset of the `alternate_group` u16 inside a `tkhd` payload.
-fn tkhd_alternate_group_off(version: u8) -> Option<usize> {
-    match version {
-        0 => Some(34),
-        1 => Some(46),
-        _ => None,
-    }
-}
-
-fn box_at(buf: &[u8], off: usize) -> Option<([u8; 4], usize, usize, usize)> {
-    if off + 8 > buf.len() {
-        return None;
-    }
-    let size = u32::from_be_bytes(buf[off..off + 4].try_into().ok()?) as u64;
-    let mut typ = [0u8; 4];
-    typ.copy_from_slice(&buf[off + 4..off + 8]);
-    let (header, total) = match size {
-        0 => (8u64, (buf.len() - off) as u64),
-        1 => {
-            if off + 16 > buf.len() {
-                return None;
-            }
-            let large = u64::from_be_bytes(buf[off + 8..off + 16].try_into().ok()?);
-            (16, large)
-        }
-        n => (8, n),
-    };
-    let total = total as usize;
-    if total < header as usize || off + total > buf.len() {
-        return None;
-    }
-    Some((typ, off + header as usize, total - header as usize, off + total))
-}
-
-fn box_children(buf: &[u8], start: usize, len: usize) -> Vec<([u8; 4], usize, usize)> {
-    let mut out = Vec::new();
-    let end = start.saturating_add(len).min(buf.len());
-    let mut off = start;
-    while off < end {
-        let Some((typ, payload, plen, next)) = box_at(buf, off) else {
-            break;
-        };
-        if next <= off {
-            break;
-        }
-        out.push((typ, payload, plen));
-        off = next;
-        if out.len() > 4096 {
-            break;
-        }
-    }
-    out
-}
-
-/// `alternate_group` offsets (relative to the `moov` payload) of every audio
-/// track. A track counts as audio when its `mdia/hdlr` handler is `soun`.
-fn audio_tkhd_alt_group_offsets(moov: &[u8]) -> Vec<usize> {
-    let mut offs = Vec::new();
-    for (typ, pstart, plen) in box_children(moov, 0, moov.len()) {
-        if &typ != b"trak" {
-            continue;
-        }
-        let mut tkhd: Option<usize> = None;
-        let mut is_audio = false;
-        for (t2, p2, l2) in box_children(moov, pstart, plen) {
-            if &t2 == b"tkhd" {
-                tkhd = Some(p2);
-            } else if &t2 == b"mdia" {
-                for (t3, p3, l3) in box_children(moov, p2, l2) {
-                    if &t3 == b"hdlr" && l3 >= 12 && &moov[p3 + 8..p3 + 12] == b"soun" {
-                        is_audio = true;
-                    }
-                }
-            }
-        }
-        if !is_audio {
-            continue;
-        }
-        let Some(t) = tkhd else { continue };
-        let Some(ver) = moov.get(t).copied() else {
-            continue;
-        };
-        let Some(rel) = tkhd_alternate_group_off(ver) else {
-            continue;
-        };
-        if t + rel + 2 <= moov.len() {
-            offs.push(t + rel);
-        }
-    }
-    offs
-}
-
-/// Put every audio track of `path` into alternate group `group`: the standard
-/// "these tracks are alternatives, use the enabled/default one" signal. Only
-/// the 2-byte fields are rewritten in place. Best effort by design.
-pub fn patch_audio_alternate_group(path: &Path, group: u16) -> Result<usize, String> {
-    use std::io::{Read, Seek, SeekFrom, Write};
-    let mut f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
-    let file_len = f.metadata().map_err(|e| format!("stat: {e}"))?.len();
-    let mut off = 0u64;
-    let mut moov: Option<(u64, usize)> = None;
-    while off + 8 <= file_len {
-        f.seek(SeekFrom::Start(off))
-            .map_err(|e| format!("seek: {e}"))?;
-        let mut hdr = [0u8; 16];
-        if f.read(&mut hdr[..8]).map_err(|e| format!("read: {e}"))? < 8 {
-            break;
-        }
-        let size = u32::from_be_bytes(hdr[0..4].try_into().unwrap()) as u64;
-        let typ = [hdr[4], hdr[5], hdr[6], hdr[7]];
-        let (header, total) = match size {
-            0 => (8u64, file_len - off),
-            1 => {
-                f.read_exact(&mut hdr[8..16])
-                    .map_err(|e| format!("read largesize: {e}"))?;
-                (16u64, u64::from_be_bytes(hdr[8..16].try_into().unwrap()))
-            }
-            n => (8, n),
-        };
-        if total < header || off + total > file_len {
-            return Err("corrupt mp4 (box size out of range)".into());
-        }
-        if &typ == b"moov" {
-            moov = Some((off + header, (total - header) as usize));
-            break;
-        }
-        off += total;
-    }
-    let Some((p_off, p_len)) = moov else {
-        return Ok(0);
-    };
-    let mut buf = vec![0u8; p_len];
-    f.seek(SeekFrom::Start(p_off))
-        .map_err(|e| format!("seek moov: {e}"))?;
-    f.read_exact(&mut buf)
-        .map_err(|e| format!("read moov: {e}"))?;
-    let offsets = audio_tkhd_alt_group_offsets(&buf);
-    for rel in &offsets {
-        f.seek(SeekFrom::Start(p_off + *rel as u64))
-            .map_err(|e| format!("seek field: {e}"))?;
-        f.write_all(&group.to_be_bytes())
-            .map_err(|e| format!("write field: {e}"))?;
-    }
-    f.sync_all().map_err(|e| format!("sync: {e}"))?;
-    Ok(offsets.len())
 }
 
 // ---------------------------------------------------------------------------
@@ -588,12 +231,21 @@ pub struct WindowsCaptureEngine {
     output_dir: PathBuf,
     audio_args: Vec<String>,
     audio_single_track: bool,
+    /// `mp4` (default) or `mkv`, from settings.
+    container: String,
+    /// MP4 `+faststart` (off by default: doubles save I/O).
+    faststart: bool,
     duration_secs: u32,
     bitrate_kbps: u32,
     fps: u32,
     ffmpeg: PathBuf,
     /// Ring capacity granted at start (for the legacy fallback window).
     ring_cap: usize,
+    /// Launch parameters, kept so the WGC->DXGI fallback can respawn.
+    plan: Option<SpawnPlan>,
+    source_kind: String,
+    fallback_done: bool,
+    fallback_requested: bool,
 }
 
 impl WindowsCaptureEngine {
@@ -609,33 +261,35 @@ impl WindowsCaptureEngine {
             output_dir: PathBuf::new(),
             audio_args: Vec::new(),
             audio_single_track: false,
+            container: "mp4".into(),
+            faststart: false,
             duration_secs: 0,
             bitrate_kbps: 0,
             fps: 60,
             ffmpeg: PathBuf::new(),
             ring_cap: 16 * 1024 * 1024,
+            plan: None,
+            source_kind: "gfxcapture".into(),
+            fallback_done: false,
+            fallback_requested: false,
         }
     }
 
     /// Spawn `ffmpeg (capture -> encoder -> mpegts)` and wire the drain
-    /// threads. The encoder process gets above-normal CPU priority, power
-    /// throttling disabled and HIGH GPU scheduling priority, so a heavy game
-    /// competing for the GPU does not starve the capture.
-    fn spawn_encoder(
-        &self,
-        ffmpeg: &Path,
-        vendor: &str,
-        codec: &str,
-        enc_name: &str,
-        src: &CaptureSource<'_>,
-        mw: u32,
-        mh: u32,
-        out_height: u32,
-        bitrate_kbps: u32,
-        fps: u32,
-        nvenc_hq: bool,
-    ) -> Result<Child, String> {
-        let filter = capture_filter(vendor, codec, src, mw, mh, out_height, fps);
+    /// threads. The encoder process gets HIGH CPU priority, power throttling
+    /// disabled and HIGH GPU scheduling priority, so a heavy game competing
+    /// for the GPU does not starve the capture.
+    fn spawn_encoder(&self, plan: &SpawnPlan, kind: &str) -> Result<Child, String> {
+        let src = plan.source(kind);
+        let filter = video::capture_filter(
+            &plan.vendor,
+            &plan.codec,
+            &src,
+            plan.monitor.width,
+            plan.monitor.height,
+            plan.out_height,
+            plan.fps,
+        );
         // Big kernel buffers for the encoder pipes. `Stdio::piped()` is a
         // 32 KB pipe (measured with PeekNamedPipe): at 20 Mbps that is ~13 ms
         // of slack, so any scheduling hiccup in our drains blocks ffmpeg
@@ -646,7 +300,7 @@ impl WindowsCaptureEngine {
         use std::os::windows::io::{FromRawHandle, IntoRawHandle};
         let ts_write_stdio = unsafe { Stdio::from_raw_handle(ts_write.into_raw_handle()) };
         let err_write_stdio = unsafe { Stdio::from_raw_handle(err_write.into_raw_handle()) };
-        let mut cmd = Command::new(ffmpeg);
+        let mut cmd = Command::new(&plan.ffmpeg);
         // No `-progress`: it wrote ~600 lines/s to stderr and the TS index
         // already owns the save-time telemetry. stderr carries only the
         // showinfo frame clock (~60 lines/s).
@@ -660,14 +314,23 @@ impl WindowsCaptureEngine {
             "[out]",
             "-an",
             "-c:v",
-            enc_name,
+            plan.enc_name,
         ]);
-        cmd.args(live_encoder_args(enc_name, codec, bitrate_kbps, fps, nvenc_hq));
+        cmd.args(encode::live_encoder_args(
+            plan.enc_name,
+            &plan.codec,
+            plan.bitrate_kbps,
+            plan.fps,
+            plan.out_height,
+            plan.nvenc_hq,
+            &plan.nvenc_preset,
+            plan.encoder_full,
+        ));
         // No `-flush_packets 1`: with an 8 MB pipe the per-packet flush buys
         // nothing and costs one syscall per packet.
         cmd.args([
             "-r",
-            &fps.to_string(),
+            &plan.fps.to_string(),
             "-fps_mode",
             "cfr",
             "-muxdelay",
@@ -684,7 +347,7 @@ impl WindowsCaptureEngine {
         .kill_on_drop(true);
         let child = cmd
             .spawn()
-            .map_err(|e| format!("cannot launch capture encoder ({}): {e}", ffmpeg.display()))?;
+            .map_err(|e| format!("cannot launch capture encoder ({}): {e}", plan.ffmpeg.display()))?;
         // Our copies of the child's pipe write ends must go: keeping them open
         // would hide EOF when ffmpeg dies (the drains would never end).
         drop(cmd);
@@ -721,7 +384,7 @@ impl WindowsCaptureEngine {
                             if trimmed.contains("Parsed_showinfo") {
                                 if trimmed.contains(" pts_time:") {
                                     if let Some(pts) = parse_showinfo_pts(trimmed) {
-                                        let qpc = audio::qpc_ns();
+                                        let qpc = pts::qpc_ns();
                                         if let Ok(mut ring) = clock_ring.lock() {
                                             ring.note_clock_sample(pts * 100, qpc);
                                         }
@@ -765,7 +428,7 @@ impl WindowsCaptureEngine {
                     match out.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
-                            let qpc = audio::qpc_ns();
+                            let qpc = pts::qpc_ns();
                             last_rx.store(qpc as i64, Ordering::Relaxed);
                             stall_logged.store(false, Ordering::Relaxed);
                             if let Ok(mut guard) = ring.lock() {
@@ -779,58 +442,6 @@ impl WindowsCaptureEngine {
             })
             .map_err(|e| format!("cannot spawn TS drain: {e}"))?;
         Ok(child)
-    }
-
-    /// Mux the staged TS + stems into the final clip. The audio stems are
-    /// already exactly `window_ns` long starting at the keyframe, so only the
-    /// video input is seeked (`-ss`) onto that same keyframe: both streams
-    /// start at 0 aligned, no per-input trims, no re-encode of video.
-    async fn mux_clip(
-        ffmpeg: &Path,
-        cut_ts: &Path,
-        wavs: &[(PathBuf, &str)],
-        dest: &Path,
-        ss_secs: f64,
-    ) -> Result<(), String> {
-        let mut cmd = Command::new(ffmpeg);
-        cmd.args(["-y", "-hide_banner", "-loglevel", "error"]);
-        // A hair before the keyframe (input seek drops PTS < target); only
-        // applied when the stage actually has pre-roll before the keyframe.
-        if ss_secs > 0.001 {
-            cmd.args(["-ss", &format!("{ss_secs:.3}")]);
-        }
-        cmd.arg("-i").arg(cut_ts);
-        for (p, _) in wavs {
-            cmd.arg("-i").arg(p);
-        }
-        cmd.args(["-map", "0:v"]);
-        for i in 0..wavs.len() {
-            cmd.arg("-map").arg(format!("{}:a", i + 1));
-        }
-        cmd.args(["-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]);
-        for (i, (_, title)) in wavs.iter().enumerate() {
-            cmd.arg(format!("-metadata:s:a:{i}")).arg(format!("title={title}"));
-        }
-        cmd.arg("-shortest");
-        let out = cmd
-            .arg(dest)
-            .output()
-            .await
-            .map_err(|e| format!("save mux failed: {e}"))?;
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            let tail = err
-                .lines()
-                .rev()
-                .take(5)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join(" | ");
-            return Err(format!("save mux failed (ffmpeg): {tail}"));
-        }
-        Ok(())
     }
 
     /// Write the stems and mux the clip. `window_ns`/`qpc_start_ns` come from
@@ -849,12 +460,14 @@ impl WindowsCaptureEngine {
     ) -> Result<PathBuf, String> {
         let ffmpeg = self.ffmpeg.clone();
         let t_save = std::time::Instant::now();
-        let samples = audio::window_frames(window_ns);
+        let samples = dsp::window_frames(window_ns);
+        let t_snap = std::time::Instant::now();
         let (game, mic) = self
             .audio
             .as_ref()
             .map(|a| a.snapshot_window(qpc_start_ns, samples))
             .unwrap_or_default();
+        let snap_elapsed = t_snap.elapsed();
         if let Some(a) = self.audio.as_ref() {
             let (ge, me) = a.stream_errors();
             if ge.is_some() || me.is_some() {
@@ -868,14 +481,14 @@ impl WindowsCaptureEngine {
                 window_ns as f64 / 1e9
             );
         }
-        let dest = unique_dest(&self.output_dir, &replay_filename());
+        let dest = mux::unique_dest(&self.output_dir, &self.container);
         let t_tmp = dest.with_extension("mux.tmp");
         let game_path = t_tmp.with_extension("game.wav");
         let mic_path = t_tmp.with_extension("mic.wav");
         // Only the legacy fallback needs a materialized Mix WAV; the fast path
         // lets ffmpeg sum the solos (`amix normalize=0`).
         let fallback_mix = if ss_secs > 0.001 {
-            Some(mix_i16(&game, &mic))
+            Some(mux::mix_i16(&game, &mic))
         } else {
             None
         };
@@ -883,8 +496,8 @@ impl WindowsCaptureEngine {
         {
             let (gp, mp) = (game_path.clone(), mic_path.clone());
             let (gw, mw) = tokio::join!(
-                tokio::task::spawn_blocking(move || write_wav(&gp, &game)),
-                tokio::task::spawn_blocking(move || write_wav(&mp, &mic)),
+                tokio::task::spawn_blocking(move || mux::write_wav(&gp, &game)),
+                tokio::task::spawn_blocking(move || mux::write_wav(&mp, &mic)),
             );
             gw.map_err(|e| format!("wav task failed: {e}"))?
                 .map_err(|e| format!("cannot write game wav: {e}"))?;
@@ -898,7 +511,7 @@ impl WindowsCaptureEngine {
             Some(mix) => {
                 // Legacy fallback: staged TS + per-input `-ss`; needs a Mix WAV.
                 let mix_path = t_tmp.with_extension("mix.wav");
-                write_wav(&mix_path, &mix).map_err(|e| format!("cannot write mix wav: {e}"))?;
+                mux::write_wav(&mix_path, &mix).map_err(|e| format!("cannot write mix wav: {e}"))?;
                 let wavs: Vec<(PathBuf, &str)> = if single {
                     vec![(mix_path.clone(), "Mix")]
                 } else {
@@ -912,93 +525,42 @@ impl WindowsCaptureEngine {
                 tokio::fs::write(&ts_path, &bytes)
                     .await
                     .map_err(|e| format!("cannot stage video window: {e}"))?;
-                let r = Self::mux_clip(&ffmpeg, &ts_path, &wavs, &dest, ss_secs).await;
+                let r = mux::mux_clip(&ffmpeg, &ts_path, &wavs, &dest, ss_secs, single, self.faststart).await;
                 let _ = tokio::fs::remove_file(&ts_path).await;
                 let _ = tokio::fs::remove_file(&mix_path).await;
                 r
             }
-            None => Self::mux_clip_pipe(&ffmpeg, bytes, &game_path, &mic_path, single, &dest).await,
+            None => {
+                mux::mux_clip_pipe(
+                    &ffmpeg,
+                    bytes,
+                    &game_path,
+                    &mic_path,
+                    single,
+                    &dest,
+                    &self.container,
+                    self.faststart,
+                )
+                .await
+            }
         };
         let _ = tokio::fs::remove_file(&game_path).await;
         let _ = tokio::fs::remove_file(&mic_path).await;
         res?;
         eprintln!(
-            "[moonclip] mux: wav={wav_elapsed:?} mux={:?}",
+            "[moonclip] mux: snapshot={snap_elapsed:?} wav={wav_elapsed:?} mux={:?}",
             t_mux.elapsed()
         );
-        match patch_audio_alternate_group(&dest, 1) {
-            Ok(n) => eprintln!("[moonclip] mp4: alternate_group=1 on {n} audio track(s)"),
+        let t_patch = std::time::Instant::now();
+        match mux::patch_audio_alternate_group(&dest, 1) {
+            Ok(n) => eprintln!(
+                "[moonclip] mp4: alternate_group=1 on {n} audio track(s) (patch {:?})",
+                t_patch.elapsed()
+            ),
             Err(e) => eprintln!("[moonclip] mp4: alternate_group patch skipped: {e}"),
         }
         eprintln!("[moonclip] save done in {:?}", t_save.elapsed());
         Ok(dest)
-    }
-
-    /// Fast mux: TS over stdin, solo stems as WAVs, Mix via `amix`.
-    async fn mux_clip_pipe(
-        ffmpeg: &Path,
-        ts: Vec<u8>,
-        game: &Path,
-        mic: &Path,
-        single: bool,
-        dest: &Path,
-    ) -> Result<(), String> {
-        use tokio::io::AsyncWriteExt;
-        let mut cmd = Command::new(ffmpeg);
-        cmd.args([
-            "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "mpegts", "-i", "pipe:0",
-        ]);
-        cmd.arg("-i").arg(game).arg("-i").arg(mic);
-        cmd.args([
-            "-filter_complex",
-            "[1:a][2:a]amix=inputs=2:normalize=0:dropout_transition=0[mix]",
-            "-map", "0:v", "-map", "[mix]",
-        ]);
-        if !single {
-            cmd.args(["-map", "1:a", "-map", "2:a"]);
-        }
-        cmd.args(["-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]);
-        cmd.args(["-metadata:s:a:0", "title=Mix"]);
-        if !single {
-            cmd.args([
-                "-metadata:s:a:1", "title=Game",
-                "-metadata:s:a:2", "title=Mic",
-            ]);
-        }
-        cmd.arg("-shortest")
-            .arg(dest)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        let mut child = cmd.spawn().map_err(|e| format!("save mux failed: {e}"))?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "mux stdin unavailable".to_string())?;
-        let writer = tokio::spawn(async move {
-            let _ = stdin.write_all(&ts).await;
-            let _ = stdin.shutdown().await;
-        });
-        let out = child
-            .wait_with_output()
-            .await
-            .map_err(|e| format!("save mux failed: {e}"))?;
-        let _ = writer.await;
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            let tail = err
-                .lines()
-                .rev()
-                .take(5)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join(" | ");
-            return Err(format!("save mux failed (ffmpeg): {tail}"));
-        }
-        Ok(())
     }
 
     /// Fallback for codecs without a keyframe scanner (e.g. AV1): stage the
@@ -1048,26 +610,30 @@ impl WindowsCaptureEngine {
             window_ns as f64 / 1e9,
         );
         let qpc_start = end_qpc - window_ns;
-        let samples = (window_ns * audio::STEM_RATE as i128 / 1_000_000_000) as usize;
+        let samples = (window_ns * dsp::STEM_RATE as i128 / 1_000_000_000) as usize;
         let (game, mic) = self
             .audio
             .as_ref()
             .map(|a| a.snapshot_window(qpc_start, samples))
             .unwrap_or_default();
-        let mix = mix_i16(&game, &mic);
-        let dest = unique_dest(&self.output_dir, &replay_filename());
+        let mix = mux::mix_i16(&game, &mic);
+        let dest = mux::unique_dest(&self.output_dir, &self.container);
         // Legacy mux: every input is trimmed by the same keyframe time.
         let single = self.audio_single_track;
         let mut stems: Vec<(Vec<i16>, &str)> = if single {
-            vec![(mix, "Mix")]
+            vec![(mix, mux::MIX_TITLE)]
         } else {
-            vec![(mix, "Mix"), (game, "Game"), (mic, "Mic")]
+            vec![
+                (mix, mux::MIX_TITLE),
+                (game, mux::GAME_TITLE),
+                (mic, mux::MIC_TITLE),
+            ]
         };
         let tmp = dest.with_extension("mux.tmp");
         let mut wavs: Vec<(PathBuf, &str)> = Vec::new();
         for (i, (samples, title)) in stems.drain(..).enumerate() {
             let p = tmp.with_extension(format!("stem{i}.wav"));
-            write_wav(&p, &samples).map_err(|e| format!("cannot write {title} wav: {e}"))?;
+            mux::write_wav(&p, &samples).map_err(|e| format!("cannot write {title} wav: {e}"))?;
             wavs.push((p, title));
         }
         let mut cmd = Command::new(&ffmpeg);
@@ -1086,9 +652,13 @@ impl WindowsCaptureEngine {
         for i in 0..wavs.len() {
             cmd.arg("-map").arg(format!("{}:a", i + 1));
         }
-        cmd.args(["-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]);
+        cmd.args(["-c:v", "copy", "-c:a", "aac"]);
         for (i, (_, title)) in wavs.iter().enumerate() {
+            cmd.args(["-b:a", if i == 2 { "192k" } else { "320k" }]);
             cmd.arg(format!("-metadata:s:a:{i}")).arg(format!("title={title}"));
+        }
+        if self.faststart {
+            cmd.args(["-movflags", "+faststart"]);
         }
         cmd.arg("-shortest");
         let out = cmd
@@ -1109,11 +679,127 @@ impl WindowsCaptureEngine {
                     .unwrap_or("unknown")
             ));
         }
-        match patch_audio_alternate_group(&dest, 1) {
+        match mux::patch_audio_alternate_group(&dest, 1) {
             Ok(n) => eprintln!("[moonclip] mp4: alternate_group=1 on {n} audio track(s)"),
             Err(e) => eprintln!("[moonclip] mp4: alternate_group patch skipped: {e}"),
         }
         Ok(dest)
+    }
+
+    /// Wait until the ring indexes its first frame, the encoder exits, or the
+    /// proof deadline passes. Returns `(frames_seen, exit_error)`.
+    async fn wait_first_frames(&mut self) -> (usize, Option<String>) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(FRAME_PROOF_MS);
+        loop {
+            if let Some(child) = self.child.as_mut() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    let err = self
+                        .stderr_ring
+                        .lock()
+                        .map(|ring| {
+                            ring.iter()
+                                .rev()
+                                .take(5)
+                                .rev()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(" | ")
+                        })
+                        .unwrap_or_default();
+                    self.child = None;
+                    return (0, Some(format!("capture encoder exited ({status}): {err}")));
+                }
+            }
+            let frames = self.ring.lock().map(|r| r.frame_count()).unwrap_or(0);
+            if frames > 0 || std::time::Instant::now() >= deadline {
+                return (frames, None);
+            }
+            tokio::time::sleep(Duration::from_millis(FRAME_PROOF_POLL_MS)).await;
+        }
+    }
+
+    /// Kill the running child (if any), reset the ring/telemetry and respawn
+    /// with `kind`. Used at start and by the source fallback.
+    async fn relaunch_source(&mut self, kind: &str) -> Result<usize, String> {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        if let Ok(mut ring) = self.ring.lock() {
+            ring.clear();
+        }
+        if let Ok(mut r) = self.stderr_ring.lock() {
+            r.clear();
+        }
+        self.video_dead.store(false, Ordering::Relaxed);
+        self.last_rx_qpc.store(pts::qpc_ns() as i64, Ordering::Relaxed);
+        self.stall_logged.store(false, Ordering::Relaxed);
+        let child = self.spawn_encoder(self.plan.as_ref().expect("spawn plan"), kind)?;
+        self.child = Some(child);
+        self.source_kind = kind.to_string();
+        self.fallback_done = kind == "ddagrab";
+        let (frames, exit_err) = self.wait_first_frames().await;
+        if let Some(e) = exit_err {
+            return Err(e);
+        }
+        Ok(frames)
+    }
+
+    /// Decode a few frames from the freshest ring window and report whether it
+    /// is (near) all-black: WGC cannot see a true legacy exclusive-fullscreen
+    /// swapchain and then emits black frames, while Desktop Duplication owns
+    /// the display. `None` when the probe cannot run (no keyframe yet).
+    async fn probe_black(&self) -> Option<bool> {
+        let cut = {
+            let mut ring = self.ring.lock().ok()?;
+            ring.finalize();
+            ring.cut(1_500_000_000, 0)?
+        };
+        let bytes = cut.bytes;
+        let path = std::env::temp_dir().join(format!(
+            "moonclip-black-probe-{}.ts",
+            std::process::id()
+        ));
+        if tokio::fs::write(&path, &bytes).await.is_err() {
+            return None;
+        }
+        let out = Command::new(&self.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "info", "-i"])
+            .arg(&path)
+            .args([
+                "-vf",
+                "signalstats,metadata=print",
+                "-frames:v",
+                "4",
+                "-f",
+                "null",
+                "-",
+            ])
+            .output()
+            .await
+            .ok();
+        let _ = tokio::fs::remove_file(&path).await;
+        let out = out?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let mut max_yavg = 0.0f64;
+        let mut seen = false;
+        for line in stderr.lines() {
+            if let Some(rest) = line.split("YAVG=").nth(1) {
+                if let Some(v) = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|x| x.parse::<f64>().ok())
+                {
+                    seen = true;
+                    max_yavg = max_yavg.max(v);
+                }
+            }
+        }
+        if seen {
+            Some(max_yavg < BLACK_YAVG)
+        } else {
+            None
+        }
     }
 }
 
@@ -1166,7 +852,7 @@ fn tune_child_priority(child: &Child) {
         PROCESS_POWER_THROTTLING_STATE,
     };
     let Some(raw) = child.raw_handle() else { return };
-    let h = HANDLE(raw as *mut core::ffi::c_void);
+    let h = HANDLE(raw);
     unsafe {
         // CPU class HIGH by default (games run at HIGH; ABOVE_NORMAL loses the
         // CPU under a saturated game). `MOONCLIP_CAPTURE_CPU_PRIO=0` restores
@@ -1300,7 +986,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         // A/B override (`MOONCLIP_CAPTURE_BITRATE_KBPS`, e.g. 10000): swaps
         // the CBR target without touching the shared Medal ladder. The ring
         // capacity follows it.
-        let bitrate_kbps = capture_bitrate_override(
+        let bitrate_kbps = encode::capture_bitrate_override(
             std::env::var("MOONCLIP_CAPTURE_BITRATE_KBPS").ok().as_deref(),
         )
         .unwrap_or(bitrate_kbps);
@@ -1312,7 +998,7 @@ impl CaptureEngine for WindowsCaptureEngine {
             *ring = TsRing::new(self.ring_cap, fps);
         }
         self.video_dead.store(false, Ordering::Relaxed);
-        self.last_rx_qpc.store(audio::qpc_ns() as i64, Ordering::Relaxed);
+        self.last_rx_qpc.store(pts::qpc_ns() as i64, Ordering::Relaxed);
         self.stall_logged.store(false, Ordering::Relaxed);
         if let Ok(mut r) = self.stderr_ring.lock() {
             r.clear();
@@ -1326,29 +1012,24 @@ impl CaptureEngine for WindowsCaptureEngine {
         // only shows under game load. Sweep ours before spawning a fresh one.
         super::kill_orphan_ffmpeg(&ffmpeg);
         let nvenc_hq = config.nvenc_opts.is_some();
+        let nvenc_preset =
+            encode::nvenc_preset(std::env::var("MOONCLIP_NVENC_PRESET").ok().as_deref());
+        let encoder_full =
+            encode::encoder_hq_full(std::env::var("MOONCLIP_ENCODER_HQ_FULL").ok().as_deref());
         // Capture source. Default: WGC monitor (`gfxcapture`). Opt-in A/B:
         //   MOONCLIP_CAPTURE_SOURCE=ddagrab  -> Desktop Duplication (monitor)
         //   MOONCLIP_CAPTURE_SOURCE=window   -> foreground window (WGC hwnd)
         //   MOONCLIP_CAPTURE_WINDOW_EXE=^cod.exe$ -> game window by regex
-        let env_source = std::env::var("MOONCLIP_CAPTURE_SOURCE").unwrap_or_default();
+        // `source_override` comes from the mid-session fallback path and wins
+        // over the environment.
+        let env_source = config
+            .source_override
+            .clone()
+            .unwrap_or_else(|| std::env::var("MOONCLIP_CAPTURE_SOURCE").unwrap_or_default());
         let env_window_exe = std::env::var("MOONCLIP_CAPTURE_WINDOW_EXE")
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
-        let window_mode = env_source == "window" || env_window_exe.is_some();
-        let kind = if env_source == "ddagrab" { "ddagrab" } else { "gfxcapture" };
-        let (mut hwnd, mut window_exe): (Option<u64>, Option<String>) = (None, None);
-        if window_mode {
-            match env_window_exe.as_deref() {
-                Some(exe) => window_exe = Some(exe.to_string()),
-                None => hwnd = video::foreground_window().map(|h| h as u64),
-            }
-        }
-        if window_mode && hwnd.is_none() && window_exe.is_none() {
-            eprintln!(
-                "[moonclip] window capture requested but no target window found; falling back to monitor"
-            );
-        }
         // Max capture rate = 2x the output rate (see `capture_max_fps`), never
         // the full refresh: under a game, full-refresh WGC copies + filtering
         // steal GPU time from NVENC and the CFR filter then discards those
@@ -1357,59 +1038,39 @@ impl CaptureEngine for WindowsCaptureEngine {
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
             .map(|v| v.max(fps))
-            .unwrap_or_else(|| capture_max_fps(monitor.refresh_hz, fps));
-        let source = CaptureSource {
-            kind,
-            hmonitor: monitor.hmonitor,
-            monitor_idx: monitor.index,
-            hwnd,
-            window_exe: window_exe.as_deref(),
-            max_fps,
-        };
-        let child = self.spawn_encoder(
-            &ffmpeg,
-            &vendor,
-            &config.codec,
+            .or_else(|| (config.capture_max_fps > 0).then_some(config.capture_max_fps.max(fps)))
+            .unwrap_or_else(|| video::capture_max_fps(monitor.refresh_hz, fps));
+        let initial_kind = if env_source == "ddagrab" { "ddagrab" } else { "gfxcapture" };
+        self.ffmpeg = ffmpeg.clone();
+        self.plan = Some(SpawnPlan {
+            ffmpeg,
+            vendor,
+            codec: config.codec.clone(),
             enc_name,
-            &source,
-            monitor.width,
-            monitor.height,
+            monitor,
             out_height,
             bitrate_kbps,
             fps,
             nvenc_hq,
-        )?;
-        self.child = Some(child);
+            nvenc_preset,
+            encoder_full,
+            env_source,
+            env_window_exe,
+            max_fps,
+        });
         // Prove the chain before committing: a bad combo (missing HW block,
         // unsupported filter option) exits within milliseconds, and indexed
-        // frames prove capture+encode+mux actually flow.
-        let deadline = std::time::Instant::now() + Duration::from_millis(FRAME_PROOF_MS);
-        let mut frames = 0usize;
-        while std::time::Instant::now() < deadline {
-            if let Some(child) = self.child.as_mut() {
-                if let Ok(Some(status)) = child.try_wait() {
-                    let err = self
-                        .stderr_ring
-                        .lock()
-                        .map(|ring| {
-                            ring.iter()
-                                .rev()
-                                .take(5)
-                                .rev()
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join(" | ")
-                        })
-                        .unwrap_or_default();
-                    self.child = None;
-                    return Err(format!("capture encoder exited ({status}): {err}"));
-                }
-            }
-            frames = self.ring.lock().map(|r| r.frame_count()).unwrap_or(0);
-            if frames > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(FRAME_PROOF_POLL_MS)).await;
+        // frames prove capture+encode+mux actually flow. A source that yields
+        // no frames — or an all-black picture on WGC (legacy exclusive
+        // fullscreen bypasses DWM) — is respawned once with DXGI Duplication.
+        let mut frames = self.relaunch_source(initial_kind).await?;
+        let black = if frames > 0 { self.probe_black().await } else { None };
+        if let Some(next) = video::source_fallback(self.source_kind.as_str(), frames > 0, black) {
+            eprintln!(
+                "[moonclip] source fallback: {} unusable (frames={frames}, black={black:?}); respawning with {next}",
+                self.source_kind
+            );
+            frames = self.relaunch_source(next).await?;
         }
         if frames == 0 {
             eprintln!(
@@ -1446,23 +1107,32 @@ impl CaptureEngine for WindowsCaptureEngine {
             config.mic_device.clone(),
         ];
         self.audio_single_track = config.audio_single_track;
+        self.container = if config.container == "mkv" {
+            "mkv".into()
+        } else {
+            "mp4".into()
+        };
+        self.faststart = config.faststart;
         self.duration_secs = config.duration_seconds;
         self.bitrate_kbps = bitrate_kbps;
         self.fps = fps;
-        self.ffmpeg = ffmpeg;
-        eprintln!(
-            "[moonclip] capture buffer: {}x{}@{} ({}, max {}) {} ({}) -> {}p{}kbps, audio {}/2",
-            monitor.width,
-            monitor.height,
-            fps,
-            source.describe(),
-            source.max_fps,
-            enc_name,
-            vendor,
-            out_height,
-            bitrate_kbps,
-            self.audio.as_ref().map(|a| a.live_count()).unwrap_or(0)
-        );
+        {
+            let kind = self.source_kind.clone();
+            let p = self.plan.as_ref().expect("spawn plan");
+            eprintln!(
+                "[moonclip] capture buffer: {}x{}@{} ({}, max {}) {} ({}) -> {}p{}kbps, audio {}/2",
+                p.monitor.width,
+                p.monitor.height,
+                p.fps,
+                p.source(&kind).describe(),
+                p.max_fps,
+                p.enc_name,
+                p.vendor,
+                p.out_height,
+                p.bitrate_kbps,
+                self.audio.as_ref().map(|a| a.live_count()).unwrap_or(0)
+            );
+        }
         Ok(())
     }
 
@@ -1520,18 +1190,19 @@ impl CaptureEngine for WindowsCaptureEngine {
         eprintln!(
             "[moonclip] capture: {crate_frames} real frames in {crate_span:.1}s = {crate_fps:.1} fps"
         );
-        let now = audio::qpc_ns();
+        let now = pts::qpc_ns();
         let end_qpc = cut.qpc_start_ns + cut.window_ns;
         let (g, m) = self
             .audio
             .as_ref()
             .map(|a| a.delivery_qpc())
             .unwrap_or((0, 0));
+        let lag_ms = (now - end_qpc) as f64 / 1e6;
         eprintln!(
             "[moonclip] sync: key_qpc={:.3}s end_qpc={:.3}s video_lag={:.0}ms audio_end game={:.0}ms mic={:.0}ms calib={:.3}s",
             cut.qpc_start_ns as f64 / 1e9,
             end_qpc as f64 / 1e9,
-            (now - end_qpc) as f64 / 1e6,
+            lag_ms,
             (g as i128 - end_qpc) as f64 / 1e6,
             (m as i128 - end_qpc) as f64 / 1e6,
             self.ring
@@ -1539,6 +1210,19 @@ impl CaptureEngine for WindowsCaptureEngine {
                 .map(|r| r.calib_ns().map(|c| c as f64 / 1e9).unwrap_or(0.0))
                 .unwrap_or(0.0),
         );
+        // SPEC §9: sustained encoder lag with a slow preset means the GPU is
+        // saturated; recommend the documented P4 Medium step-down (applied by
+        // the settings path with a restart notice, never silently).
+        if let Some(next) = self
+            .plan
+            .as_ref()
+            .and_then(|p| encode::preset_step_down(&p.nvenc_preset, lag_ms))
+        {
+            eprintln!(
+                "[moonclip] encoder lag {lag_ms:.0}ms > {:.0}ms: preset step-down {next} recommended",
+                encode::LAG_STEP_DOWN_MS
+            );
+        }
         let bytes = cut.assemble();
         let bytes_len = bytes.len();
         let dest = self
@@ -1591,7 +1275,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         };
         if alive {
             let last = self.last_rx_qpc.load(Ordering::Relaxed);
-            let age_ns = audio::qpc_ns() - last as i128;
+            let age_ns = pts::qpc_ns() - last as i128;
             let frames = self.ring.lock().map(|r| r.frame_count()).unwrap_or(0);
             if frames > 0
                 && age_ns > STALL_AFTER.as_nanos() as i128
@@ -1601,6 +1285,12 @@ impl CaptureEngine for WindowsCaptureEngine {
                     "[moonclip] video source stalled ({:.1}s without new frames; exclusive fullscreen?)",
                     age_ns as f64 / 1e9
                 );
+                // Mid-session degradation (WGC lost DWM, e.g. windowed ->
+                // legacy FSE): surface a one-shot source-fallback request for
+                // the owner to respawn with DXGI.
+                if self.source_kind == "gfxcapture" && !self.fallback_done {
+                    self.fallback_requested = true;
+                }
             }
         }
         alive
@@ -1616,6 +1306,15 @@ impl CaptureEngine for WindowsCaptureEngine {
             out.push("video source stalled: no new frames (exclusive fullscreen?)".into());
         }
         out
+    }
+
+    fn source_fallback_request(&mut self) -> Option<String> {
+        if self.fallback_requested && !self.fallback_done {
+            self.fallback_requested = false;
+            Some("ddagrab".into())
+        } else {
+            None
+        }
     }
 }
 
@@ -1633,23 +1332,23 @@ mod tests {
 
     fn audio_track_headers(path: &std::path::Path) -> Vec<(u8, u32, u16)> {
         let bytes = std::fs::read(path).unwrap();
-        let (_, start, len) = super::box_children(&bytes, 0, bytes.len())
+        let (_, start, len) = super::mux::box_children(&bytes, 0, bytes.len())
             .into_iter()
             .find(|(t, _, _)| t == b"moov")
             .expect("moov box");
         let moov = &bytes[start..start + len];
         let mut out = Vec::new();
-        for (t, p, l) in super::box_children(moov, 0, moov.len()) {
+        for (t, p, l) in super::mux::box_children(moov, 0, moov.len()) {
             if &t != b"trak" {
                 continue;
             }
             let mut tkhd = None;
             let mut audio = false;
-            for (t2, p2, l2) in super::box_children(moov, p, l) {
+            for (t2, p2, l2) in super::mux::box_children(moov, p, l) {
                 if &t2 == b"tkhd" {
                     tkhd = Some(p2);
                 } else if &t2 == b"mdia" {
-                    for (t3, p3, l3) in super::box_children(moov, p2, l2) {
+                    for (t3, p3, l3) in super::mux::box_children(moov, p2, l2) {
                         if &t3 == b"hdlr" && l3 >= 12 && &moov[p3 + 8..p3 + 12] == b"soun" {
                             audio = true;
                         }
@@ -1662,58 +1361,11 @@ mod tests {
             let Some(t) = tkhd else { continue };
             let ver = moov[t];
             let flags = u32::from_be_bytes([0, moov[t + 1], moov[t + 2], moov[t + 3]]);
-            let rel = super::tkhd_alternate_group_off(ver).expect("tkhd version");
+            let rel = super::mux::tkhd_alternate_group_off(ver).expect("tkhd version");
             let alt = u16::from_be_bytes([moov[t + rel], moov[t + rel + 1]]);
             out.push((ver, flags, alt));
         }
         out
-    }
-
-    #[test]
-    fn nvenc_hq_flags() {
-        let a = live_encoder_args("h264_nvenc", "h264", 20000, 60, true);
-        let s = a.join(" ");
-        assert!(s.contains("-preset p5"), "{s}");
-        assert!(s.contains("-tune hq"), "{s}");
-        assert!(s.contains("-profile:v high"), "{s}");
-        assert!(s.contains("-spatial-aq 1"), "{s}");
-        assert!(s.contains("-multipass disabled"), "{s}");
-        assert!(s.contains("-rc cbr"), "{s}");
-        assert!(s.contains("-g 120"), "{s}");
-    }
-
-    #[test]
-    fn nvenc_plain_no_hq() {
-        let a = live_encoder_args("av1_nvenc", "av1", 8000, 60, false);
-        let s = a.join(" ");
-        assert!(!s.contains("-preset"), "{s}");
-        assert!(s.contains("-rc cbr"), "{s}");
-    }
-
-    #[test]
-    fn x264_and_qsv_shapes() {
-        let x = live_encoder_args("libx264", "x264", 20000, 30, false).join(" ");
-        assert!(x.contains("-preset veryfast"), "{x}");
-        assert!(x.contains("zerolatency"), "{x}");
-        assert!(x.contains("-g 60"), "{x}");
-        let q = live_encoder_args("h264_qsv", "h264", 20000, 60, false).join(" ");
-        assert!(q.contains("-preset fast"), "{q}");
-    }
-
-    #[test]
-    fn capture_cap_keeps_two_candidates_per_slot() {
-        // 164 Hz monitor, 60 fps output -> 120, not the refresh and not 60:
-        // two source frames per CFR slot so a suppressed present drops instead
-        // of duplicating.
-        assert_eq!(capture_max_fps(164, 60), 120);
-        assert_eq!(capture_max_fps(144, 60), 120);
-        // A 60 Hz panel is already the cap (never above it).
-        assert_eq!(capture_max_fps(60, 60), 60);
-        // 30 fps output still gets the min-90 headroom.
-        assert_eq!(capture_max_fps(164, 30), 90);
-        // Unknown refresh falls back to >= 2x.
-        assert_eq!(capture_max_fps(0, 60), 120);
-        assert_eq!(capture_max_fps(24, 30), 120);
     }
 
     #[test]
@@ -1740,109 +1392,6 @@ mod tests {
         assert_eq!(cpu_priority_class(Some("above")).0, ABOVE_NORMAL_PRIORITY_CLASS.0);
         assert_eq!(cpu_priority_class(Some("normal")).0, NORMAL_PRIORITY_CLASS.0);
         assert_eq!(cpu_priority_class(Some("junk")).0, HIGH_PRIORITY_CLASS.0);
-    }
-
-    #[test]
-    fn capture_bitrate_override_parses_and_guards() {
-        assert_eq!(capture_bitrate_override(None), None);
-        assert_eq!(capture_bitrate_override(Some("")), None);
-        assert_eq!(capture_bitrate_override(Some("10000")), Some(10_000));
-        assert_eq!(capture_bitrate_override(Some(" 20000 ")), Some(20_000));
-        assert_eq!(capture_bitrate_override(Some("499")), None);
-        assert_eq!(capture_bitrate_override(Some("junk")), None);
-    }
-
-    #[test]
-    fn capture_filter_shapes() {
-        // NVENC zero-copy; max fps is the 2x-headroom cap (`capture_max_fps`).
-        let monitor = CaptureSource {
-            kind: "gfxcapture",
-            hmonitor: 65673,
-            monitor_idx: 0,
-            hwnd: None,
-            window_exe: None,
-            max_fps: 165,
-        };
-        let f = capture_filter("nvidia", "h264", &monitor, 1920, 1080, 720, 60);
-        assert!(f.starts_with("gfxcapture=hmonitor=65673:max_framerate=165"), "{f}");
-        assert!(f.contains("width=1280:height=720:resize_mode=scale_aspect:scale_mode=bicubic"), "{f}");
-        assert!(!f.contains("hwdownload"), "{f}");
-        assert!(f.ends_with("[out]"));
-        // Fallback path downloads + lanczos + yuv420p.
-        let amd = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: None, window_exe: None, max_fps: 120 };
-        let f = capture_filter("amd", "h264", &amd, 1920, 1080, 720, 30);
-        assert!(f.contains("hwdownload,format=bgra"), "{f}");
-        assert!(f.contains("scale=-2:720:flags=lanczos"), "{f}");
-        assert!(f.contains("format=yuv420p"), "{f}");
-        // x264 always downloads even on NVIDIA.
-        let big = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: None, window_exe: None, max_fps: 165 };
-        let f = capture_filter("nvidia", "x264", &big, 2560, 1440, 0, 60);
-        assert!(f.contains("hwdownload"), "{f}");
-        assert!(!f.contains("scale="), "{f}");
-        // Desktop Duplication fallback by output index, duplicates off.
-        let dda = CaptureSource { kind: "ddagrab", hmonitor: 1, monitor_idx: 2, hwnd: None, window_exe: None, max_fps: 165 };
-        let f = capture_filter("nvidia", "h264", &dda, 1920, 1080, 0, 60);
-        assert!(f.starts_with("ddagrab=output_idx=2:framerate=165:dup_frames=0"), "{f}");
-        assert!(!f.contains("hmonitor"), "{f}");
-        // ddagrab has no GPU resizer: scaling goes through the download path.
-        let f = capture_filter("nvidia", "h264", &dda, 1920, 1080, 720, 60);
-        assert!(f.contains("hwdownload,format=bgra"), "{f}");
-        assert!(f.contains("scale=-2:720:flags=lanczos"), "{f}");
-        // Window capture: hwnd wins; scaling falls to the download path.
-        let win = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: Some(4242), window_exe: None, max_fps: 144 };
-        let f = capture_filter("nvidia", "h264", &win, 1920, 1080, 720, 60);
-        assert!(f.starts_with("gfxcapture=hwnd=4242:max_framerate=144"), "{f}");
-        assert!(f.contains("hwdownload"), "{f}");
-        let win_exe = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: None, window_exe: Some("^cod.exe$"), max_fps: 144 };
-        let f = capture_filter("nvidia", "h264", &win_exe, 1920, 1080, 0, 60);
-        assert!(f.starts_with("gfxcapture=window_exe='^cod.exe$':max_framerate=144"), "{f}");
-        assert!(!f.contains("hwdownload"), "{f}");
-    }
-
-    #[test]
-    fn unique_dest_avoids_overwrite() {
-        let dir = std::env::temp_dir().join(format!("moonclip-unique-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let base = "replay_2026-09-16_10-00-00.mp4";
-        let first = unique_dest(&dir, base);
-        assert_eq!(first.file_name().unwrap().to_str().unwrap(), base);
-        std::fs::write(&first, b"x").unwrap();
-        let second = unique_dest(&dir, base);
-        assert_eq!(
-            second.file_name().unwrap().to_str().unwrap(),
-            "replay_2026-09-16_10-00-00_2.mp4"
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn mix_sums_aligned_tails() {
-        assert_eq!(mix_i16(&[1000, -1000], &[500, 500]), vec![1500, -500]);
-        assert_eq!(mix_i16(&[30000, 0], &[30000, 0]), vec![32767, 0]);
-        assert!(mix_i16(&[], &[1]).is_empty());
-    }
-
-    #[test]
-    fn wav_exact_size_and_pcm() {
-        let dir = std::env::temp_dir().join(format!("moonclip-wav-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("t.wav");
-        let samples = vec![0i16; 48_000 * 2];
-        write_wav(&p, &samples).unwrap();
-        let bytes = std::fs::read(&p).unwrap();
-        assert_eq!(bytes.len(), 44 + 48_000 * 2 * 2);
-        assert_eq!(&bytes[0..4], b"RIFF");
-        assert_eq!(&bytes[36..40], b"data");
-        assert_eq!(i16::from_le_bytes([bytes[44], bytes[45]]), 0);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn filename_shape() {
-        let n = replay_filename();
-        assert!(n.starts_with("replay_"), "{n}");
-        assert!(n.ends_with(".mp4"), "{n}");
-        assert_eq!(n.len(), "replay_YYYY-MM-DD_HH-MM-SS.mp4".len(), "{n}");
     }
 
     #[test]
@@ -1875,82 +1424,6 @@ mod tests {
         assert_eq!(cut_ts_window(&plain, 600).len(), 500);
     }
 
-    /// MP4 hardening: each audio `tkhd` gets `alternate_group` in place,
-    /// the video track and the rest stay byte identical.
-    #[test]
-    fn mp4_patch_audio_alternate_group() {
-        use super::{audio_tkhd_alt_group_offsets, patch_audio_alternate_group};
-
-        fn bx(typ: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-            let mut v = Vec::new();
-            v.extend_from_slice(&((payload.len() + 8) as u32).to_be_bytes());
-            v.extend_from_slice(typ);
-            v.extend_from_slice(payload);
-            v
-        }
-        fn tkhd(version: u8, track_id: u32) -> Vec<u8> {
-            let mut p = vec![0u8; if version == 0 { 84 } else { 96 }];
-            p[0] = version;
-            p[1..4].copy_from_slice(&[0, 0, 3]);
-            let id_off = if version == 0 { 12 } else { 20 };
-            p[id_off..id_off + 4].copy_from_slice(&track_id.to_be_bytes());
-            p
-        }
-        fn hdlr(handler: &[u8; 4]) -> Vec<u8> {
-            let mut p = vec![0u8; 16];
-            p[8..12].copy_from_slice(handler);
-            p
-        }
-        fn trak(version: u8, track_id: u32, handler: &[u8; 4]) -> Vec<u8> {
-            let mut kids = bx(b"tkhd", &tkhd(version, track_id));
-            kids.extend_from_slice(&bx(b"mdia", &bx(b"hdlr", &hdlr(handler))));
-            bx(b"trak", &kids)
-        }
-
-        let mut moov = Vec::new();
-        let video_trak_at = moov.len();
-        moov.extend_from_slice(&trak(0, 1, b"vide"));
-        let video_alt = video_trak_at + 16 + 34;
-        let a0_at = moov.len();
-        moov.extend_from_slice(&trak(0, 2, b"soun"));
-        let mut expected = vec![a0_at + 16 + 34];
-        let a1_at = moov.len();
-        moov.extend_from_slice(&trak(1, 3, b"soun"));
-        expected.push(a1_at + 16 + 46);
-        assert_eq!(audio_tkhd_alt_group_offsets(&moov), expected);
-
-        let mut file = bx(b"ftyp", &[0u8; 16]);
-        file.extend_from_slice(&bx(b"mdat", &[0u8; 32]));
-        let moov_payload = file.len() + 8;
-        file.extend_from_slice(&bx(b"moov", &moov));
-        let before = file.clone();
-        let path = std::env::temp_dir().join(format!(
-            "moonclip-mp4-group-{}.mp4",
-            std::process::id()
-        ));
-        std::fs::write(&path, &file).unwrap();
-
-        assert_eq!(patch_audio_alternate_group(&path, 1).unwrap(), 2);
-        let after = std::fs::read(&path).unwrap();
-        for (i, rel) in expected.iter().enumerate() {
-            let at = moov_payload + rel;
-            assert_eq!(&after[at..at + 2], &[0, 1], "audio track {i} not patched");
-        }
-        let vat = moov_payload + video_alt;
-        assert_eq!(&after[vat..vat + 2], &[0, 0], "video track was patched");
-        let diffs = before
-            .iter()
-            .zip(&after)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>();
-        let mut want: Vec<usize> = expected.iter().map(|r| moov_payload + r + 1).collect();
-        want.sort_unstable();
-        assert_eq!(diffs, want, "unexpected bytes changed");
-        let _ = std::fs::remove_file(&path);
-    }
-
     // -----------------------------------------------------------------------
     // Live tests (ignored by default: need a real desktop + NVENC + WASAPI).
     // Run: cargo test --target x86_64-pc-windows-msvc live_ -- --ignored
@@ -1974,6 +1447,10 @@ mod tests {
             nvenc_opts: None,
             ffmpeg_bin: None,
             audio_single_track: false,
+            source_override: None,
+            capture_max_fps: 0,
+            faststart: false,
+            container: "mp4".into(),
         }
     }
 
@@ -2056,6 +1533,131 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Source override (the settings mid-session fallback path): force Desktop
+    /// Duplication and prove capture + save flow.
+    #[tokio::test]
+    #[ignore]
+    async fn live_source_override_ddagrab() {
+        use super::super::super::CaptureEngine;
+
+        let dir = std::env::temp_dir().join("moonclip-e2e-dda");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = cfg(dir, 6, 60);
+        c.source_override = Some("ddagrab".into());
+        let mut eng = super::WindowsCaptureEngine::new();
+        eng.start_buffer(c).await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        let path = eng.save_clip().await.expect("save");
+        let probe = tokio::process::Command::new(super::super::video::capture_ffmpeg())
+            .args(["-hide_banner", "-i", &path.to_string_lossy()])
+            .output()
+            .await
+            .expect("probe");
+        let err = String::from_utf8_lossy(&probe.stderr);
+        assert!(err.contains("Video: h264"), "no h264 video:\n{err}");
+        assert_eq!(err.matches("Audio: aac").count(), 3, "want 3xAAC:\n{err}");
+        eng.stop_buffer().await.expect("stop");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// CPU (x264) fallback smoke: the buffer must save h264 + 3×AAC.
+    #[tokio::test]
+    #[ignore]
+    async fn live_buffer_and_save_x264() {
+        use super::super::super::CaptureEngine;
+
+        let dir = std::env::temp_dir().join("moonclip-e2e-x264");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = cfg(dir, 6, 30);
+        c.codec = "x264".into();
+        c.nvenc_opts = None;
+        let mut eng = super::WindowsCaptureEngine::new();
+        eng.start_buffer(c).await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let path = eng.save_clip().await.expect("save");
+        let probe = tokio::process::Command::new(super::super::video::capture_ffmpeg())
+            .args(["-hide_banner", "-i", &path.to_string_lossy()])
+            .output()
+            .await
+            .expect("probe");
+        let err = String::from_utf8_lossy(&probe.stderr);
+        assert!(err.contains("Video: h264"), "no h264 video:\n{err}");
+        assert_eq!(err.matches("Audio: aac").count(), 3, "want 3xAAC:\n{err}");
+        eng.stop_buffer().await.expect("stop");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Gold save test (SPEC §14): a full 120 s buffer must save copy-only in
+    /// under 3 s. Keep the screen changing (mouse-mover rig in PROGRESS).
+    #[tokio::test]
+    #[ignore]
+    async fn live_save_120s_timing() {
+        use super::super::super::CaptureEngine;
+
+        let dir = std::env::temp_dir().join("moonclip-e2e-120");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut eng = super::WindowsCaptureEngine::new();
+        eng.start_buffer(cfg(dir, 120, 60)).await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_secs(125)).await;
+        let t0 = std::time::Instant::now();
+        let path = eng.save_clip().await.expect("save");
+        let elapsed = t0.elapsed();
+        let size = std::fs::metadata(&path).unwrap().len();
+        let dur_ms = crate::editor::ffmpeg::probe_duration_ms(
+            &super::super::video::capture_ffmpeg(),
+            &path,
+        )
+        .await
+        .unwrap_or(0);
+        eprintln!(
+            "[moonclip-test] 120s save: {:?} size={}MB duration={}ms",
+            elapsed,
+            size / 1024 / 1024,
+            dur_ms
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "save took {elapsed:?} (spec ceiling: 5 s on SATA/HDD; <3 s is the NVMe target)"
+        );
+        if elapsed >= std::time::Duration::from_secs(3) {
+            eprintln!(
+                "[moonclip-test] note: {:?} > 3 s NVMe target, within the SATA/HDD ceiling",
+                elapsed
+            );
+        }
+        assert!((110_000..=125_000).contains(&dur_ms), "duration {dur_ms} ms");
+        eng.stop_buffer().await.expect("stop");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Long-buffer drift rig: saves at ~1 min and at the configured end
+    /// (`MOONCLIP_DRIFT_SECS`, default 1800 = 30 min) into
+    /// `%TEMP%\moonclip-e2e-drift`, so `analyze_av.py` /
+    /// `analyze_interaudio.py` can measure both ends of a long session.
+    #[tokio::test]
+    #[ignore]
+    async fn live_drift_capture() {
+        use super::super::super::CaptureEngine;
+
+        let total: u64 = std::env::var("MOONCLIP_DRIFT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800);
+        let dir = std::env::temp_dir().join("moonclip-e2e-drift");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut eng = super::WindowsCaptureEngine::new();
+        eng.start_buffer(cfg(dir, 5, 60)).await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        let p1 = eng.save_clip().await.expect("save min1");
+        eprintln!("[moonclip-test] drift min1: {}", p1.display());
+        if total > 60 {
+            tokio::time::sleep(std::time::Duration::from_secs(total - 60)).await;
+            let p2 = eng.save_clip().await.expect("save end");
+            eprintln!("[moonclip-test] drift end: {}", p2.display());
+        }
+        eng.stop_buffer().await.expect("stop");
+    }
+
     /// Stop/drop + fresh start in the same process (settings-change path).
     #[tokio::test]
     #[ignore]
@@ -2131,18 +1733,10 @@ mod tests {
     #[ignore]
     async fn live_tone_coverage() {
         use super::super::super::CaptureEngine;
-        use cpal::traits::DeviceTrait as _;
         use rodio::Source as _;
 
-        let dev = super::super::devices::find_output_device("default_output")
-            .expect("no output device");
-        eprintln!(
-            "[moonclip-test] tone device: '{}'",
-            dev.name().unwrap_or_default()
-        );
-        let stream = rodio::OutputStreamBuilder::from_device(dev)
-            .and_then(|b| b.open_stream())
-            .expect("open tone stream");
+        let stream = rodio::OutputStreamBuilder::open_default_stream()
+            .expect("open default tone stream");
         let sink = rodio::Sink::connect_new(stream.mixer());
         let dir = std::env::temp_dir().join("moonclip-e2e-tone");
         std::fs::create_dir_all(&dir).unwrap();

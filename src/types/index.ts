@@ -45,3 +45,88 @@ export interface RegisterAppInput {
   clip_duration_seconds?: number | null;
   is_wine_proton?: boolean | null;
 }
+
+/** Mirrors Rust EngineStatus (payload keys stay snake_case on the wire). */
+export interface EngineStatus {
+  running: boolean;
+  backend: string;
+  tracks_linked: number;
+  audio_error: string | null;
+  engine_error: string | null;
+}
+
+/** Mirrors Rust CodecOpt. */
+export interface CodecOpt {
+  id: string;
+}
+
+/** Mirrors Rust HeightOpt. */
+export interface HeightOpt {
+  height: number;
+  label: string;
+  /** CBR kbps per codec, in codec order. */
+  bitrates: number[];
+  /** Exact 60 s ring megabytes per codec, in codec order. */
+  ring_mb_60s: number[];
+}
+
+/** Mirrors Rust MonitorOpt. */
+export interface MonitorOpt {
+  name: string;
+  label: string;
+}
+
+/** Mirrors Rust VideoOptions. */
+export interface VideoOptions {
+  codecs: CodecOpt[];
+  heights: HeightOpt[];
+  monitors: MonitorOpt[];
+  current_codec: string;
+  current_height: number;
+  current_fps: number;
+  current_monitor: string;
+  buffer_height: number;
+  transcoding: boolean;
+  max_source_height: number;
+  vendor: string;
+}
+
+/** Mirrors Rust GsrInfo (Linux-only fields; harmless on Windows). */
+export interface GsrInfo {
+  path: string;
+  source: string;
+  caps_ok: boolean;
+  present: boolean;
+}
+
+/** Mirrors Rust AudioDevice. */
+export interface AudioDevice {
+  id: string;
+  description: string;
+  kind: string;
+}
+
+/** Mirrors Rust AudioPeaks. */
+export interface AudioPeaks {
+  game: number;
+  mic: number;
+}
+
+/** Mirrors Rust TrackGains. */
+export interface TrackGains {
+  game: number;
+  mic: number;
+  mute_game: boolean;
+  mute_mic: boolean;
+}
+
+/** Mirrors Rust SystemMemory. */
+export interface SystemMemory {
+  free_mb: number | null;
+}
+
+/** Mirrors Rust SettingPair for the bulk `set_settings` command. */
+export interface SettingPair {
+  key: string;
+  value: string;
+}

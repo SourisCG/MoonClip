@@ -61,12 +61,12 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   `src-tauri/binaries/x86_64-unknown-linux-gnu/ffmpeg-x86_64-unknown-linux-gnu`.
   johnvansickle (previously planned) was dropped: its static build has no
   NVENC, which `save-scale` needs for lanczos downscales.
-- **Ship model:** `tauri.conf.json > bundle.resources` includes the staged
-  exe on Windows builds (per-OS CI config overlay — the base conf stays
-  platform-neutral so Linux bundles never carry the `.exe`). Resolved at
-  runtime via `sidecar::search_bundled` (`editor::ffmpeg::resolve_ffmpeg`);
-  PATH is a dev-only fallback with a loud log. No shell-plugin sidecar:
-  the engine needs raw binary pipes, not line events.
+- **Ship model:** `tauri.windows.conf.json` (per-OS overlay) bundles the
+  staged exe on Windows builds; the base conf stays platform-neutral so Linux
+  bundles never carry the `.exe`. Resolved at runtime via
+  `sidecar::search_bundled` (`editor::ffmpeg::resolve_ffmpeg`); PATH is a
+  dev-only fallback with a loud log. No shell-plugin sidecar: the engine
+  needs raw binary pipes, not line events.
 - **Dev fallback:** system `ffmpeg` from `PATH` when no sidecar is present,
   with a log warning. Production always ships the pinned sidecar.
 - **License:** the static builds we ship (BtbN `win64-gpl` and `linux64-gpl`)

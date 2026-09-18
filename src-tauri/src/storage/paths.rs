@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 /// Resolve the physical path of a clip from the configured base dir.
-pub fn resolve_clip_path(base_dir: &PathBuf, file_name: &str) -> PathBuf {
+pub fn resolve_clip_path(base_dir: &Path, file_name: &str) -> PathBuf {
     base_dir.join(file_name)
 }
 

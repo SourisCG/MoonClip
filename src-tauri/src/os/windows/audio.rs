@@ -2,43 +2,40 @@
 //! i16 rings with QPC timestamps.
 //!
 //! Design rules (why this file exists):
-//! - **Real-time callbacks never allocate or lock.** Samples are converted in
-//!   a preallocated scratch, gains are atomic, and the data crosses to the
-//!   assembler through a lock-free SPSC ring. The old design locked a Mutex
-//!   per callback, so a save-time snapshot could stall the capture thread.
-//! - **One clock for everything: QPC.** Each captured chunk carries the QPC
-//!   instant of its first sample (cpal's WASAPI capture timestamp). At save
-//!   the engine maps the video keyframe PTS to QPC and rebuilds each stem
-//!   over exactly that window. `build_window` resamples by block timestamps,
-//!   so device-clock drift (a few hundred ppm) cannot shift A/V over long
-//!   buffers, and only real gaps (> FUSE) become silence — sub-ms timestamp
-//!   jitter is absorbed, never materialized (that caused the old static).
-//! - **MMCSS "Pro Audio"** on the capture threads (cpal already runs them
-//!   TIME_CRITICAL; MMCSS tells the scheduler to protect them).
+//! - **One clock for everything: QPC.** Each captured packet carries WASAPI's
+//!   `QPCPosition` (`BufferInfo::timestamp`, raw counter ticks) and the engine
+//!   maps the video keyframe PTS to QPC to rebuild each stem over exactly that
+//!   window. `dsp::build_window` resamples by block timestamps, so
+//!   device-clock drift (a few hundred ppm) cannot shift A/V over long
+//!   buffers.
+//! - **Capture threads never block on heavy locks.** The WASAPI read thread
+//!   only converts + gains + pushes into a lock-free SPSC ring; the assembler
+//!   thread builds 10 ms blocks into the stems.
+//! - **Endpoint loopback** = render endpoint + `Direction::Capture` in shared
+//!   mode (the crate sets `AUDCLNT_STREAMFLAGS_LOOPBACK`); a silent keep-alive
+//!   render stream keeps WASAPI delivering packets while the game is quiet.
+//! - **MMCSS "Pro Audio"** on the capture and keep-alive threads.
 
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::Sample;
-use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+use wasapi::{
+    AudioCaptureClient, AudioClient, Direction, Handle, SampleType, StreamMode, WaveFormat,
+};
 use windows::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
 
 use super::devices;
+use super::dsp::{self, build_window, Block, STEM_CHANNELS, STEM_RATE};
+use super::pts;
 
-pub const STEM_RATE: u32 = 48_000;
-pub const STEM_CHANNELS: usize = 2;
-/// Sub-50 ms gaps inside a stem are timestamp jitter (WASAPI block grid vs
-/// sample count), not lost audio: the resampler bridges them. Larger gaps
-/// are real and become silence.
-pub const FUSE_NS: i128 = 50_000_000;
-/// Ring block size handed to the assembler (10 ms stereo).
-const BLOCK_FRAMES: usize = 480;
+/// Ring block size handed to the assembler (10 ms stereo) — from dsp.
+const BLOCK_FRAMES: usize = dsp::BLOCK_FRAMES;
 /// Raw callback queue per stream (~2 s at 48 kHz stereo).
-const QUEUE_SAMPLES: usize = 1 << 17; // 131072 frames... power of two
+const QUEUE_SAMPLES: usize = 1 << 17;
 /// How often the supervisor wakes up.
 const TICK: Duration = Duration::from_millis(500);
 /// No delivered chunk for this long with a live stream = stalled: reopen.
@@ -49,35 +46,13 @@ const STALL_RETRY: Duration = Duration::from_secs(30);
 const ERROR_RETRY: Duration = Duration::from_secs(3);
 /// Device-follow poll (only for the `default_*` magic ids).
 const DEFAULT_POLL_TICKS: u32 = 4; // 2 s
-
-fn qpc_freq() -> u64 {
-    static FREQ: OnceLock<u64> = OnceLock::new();
-    *FREQ.get_or_init(|| {
-        let mut f = 0i64;
-        unsafe {
-            let _ = QueryPerformanceFrequency(&mut f);
-        }
-        (f.max(1)) as u64
-    })
-}
-
-/// Local QPC in nanoseconds (same clock cpal/WASAPI timestamps use).
-pub fn qpc_ns() -> i128 {
-    let mut c = 0i64;
-    unsafe {
-        let _ = QueryPerformanceCounter(&mut c);
-    }
-    c as i128 * 1_000_000_000 / qpc_freq() as i128
-}
-
-/// cpal converts raw QPC ticks to ns assuming a 10 MHz counter; correct its
-/// deltas when the OS counter runs at another frequency.
-fn cpal_ns_scale() -> f64 {
-    10_000_000.0 / qpc_freq() as f64
-}
+/// Stream setup must hand back a started client within this budget.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Fallback device period (20 ms in 100 ns units) when the driver hides it.
+const FALLBACK_PERIOD_HNS: i64 = 200_000;
 
 // ---------------------------------------------------------------------------
-// Lock-free SPSC queues (single producer = audio callback, single consumer =
+// Lock-free SPSC queues (single producer = capture thread, single consumer =
 // assembler thread). One slot is reserved to tell full from empty.
 // ---------------------------------------------------------------------------
 
@@ -197,26 +172,8 @@ impl MetaQueue {
 }
 
 // ---------------------------------------------------------------------------
-// Stems: timestamped 10 ms blocks + QPC-grid window builder
+// Stems: timestamped 10 ms blocks
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct Block {
-    /// QPC of the block's first sample.
-    pub qpc_ns: i128,
-    /// Interleaved stereo i16.
-    pub samples: Vec<i16>,
-}
-
-impl Block {
-    fn frames(&self) -> usize {
-        self.samples.len() / STEM_CHANNELS
-    }
-
-    fn end_ns(&self) -> i128 {
-        self.qpc_ns + self.frames() as i128 * 1_000_000_000 / STEM_RATE as i128
-    }
-}
 
 struct StemRing {
     blocks: VecDeque<Block>,
@@ -246,75 +203,6 @@ impl StemRing {
     }
 }
 
-/// Rebuild `frames` stereo frames of a stem on the QPC grid starting at
-/// `start_ns`, using each block's timestamp to resample (drift correction)
-/// and inserting silence only for real gaps. Pure and unit-tested.
-pub fn build_window(blocks: &VecDeque<Block>, start_ns: i128, frames: usize) -> Vec<i16> {
-    let mut out = vec![0i16; frames * STEM_CHANNELS];
-    if frames == 0 || blocks.is_empty() {
-        return out;
-    }
-    // Flatten content for fractional lookups + per-block geometry.
-    let mut content: Vec<i16> = Vec::with_capacity(blocks.iter().map(|b| b.samples.len()).sum());
-    let mut geo: Vec<(i128, i128, usize)> = Vec::with_capacity(blocks.len());
-    for b in blocks {
-        let c_start = content.len() / STEM_CHANNELS;
-        let q_start = b.qpc_ns;
-        content.extend_from_slice(&b.samples);
-        geo.push((q_start, b.end_ns(), c_start));
-    }
-    let content_frames = content.len() / STEM_CHANNELS;
-    if content_frames == 0 {
-        return out;
-    }
-    let step_num = 1_000_000_000i128;
-    let step_den = STEM_RATE as i128;
-    let mut cursor = 0usize;
-    for f in 0..frames {
-        let t = start_ns + f as i128 * step_num / step_den;
-        // Cursor = last block that already started at `t`.
-        while cursor + 1 < geo.len() && t >= geo[cursor + 1].0 {
-            cursor += 1;
-        }
-        let (q_start, q_end, c_start) = geo[cursor];
-        let n_frames = (geo
-            .get(cursor + 1)
-            .map(|(_, _, next_c)| (*next_c).min(content_frames) - c_start)
-            .unwrap_or(content_frames - c_start))
-        .max(1);
-        // Big gap: more than FUSE before the current block, or more than FUSE
-        // after its end without a following block.
-        if t + FUSE_NS < q_start {
-            continue; // silence
-        }
-        if t > q_end + FUSE_NS && cursor + 1 == geo.len() {
-            continue; // silence
-        }
-        if t > q_end + FUSE_NS && t < geo[cursor + 1].0 {
-            continue; // silence between two distant blocks
-        }
-        // Map within the current block (drift-corrected); hold the last
-        // sample while waiting for the next block (tiny jitter, no clicks).
-        let frame_f = c_start as i128 + (t - q_start) * step_den / step_num;
-        let lo = c_start as i128;
-        let hi = (c_start + n_frames - 1) as i128;
-        let clamped = frame_f.clamp(lo, hi);
-        let fi = clamped as usize;
-        let ff = (clamped - fi as i128) as f64;
-        let base = fi * STEM_CHANNELS;
-        for ch in 0..STEM_CHANNELS {
-            let a = content[base + ch] as f64;
-            let b = if fi + 1 <= (c_start + n_frames - 1) {
-                content[base + STEM_CHANNELS + ch] as f64
-            } else {
-                a
-            };
-            out[f * STEM_CHANNELS + ch] = (a + (b - a) * ff).round() as i16;
-        }
-    }
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Per-stream live state
 // ---------------------------------------------------------------------------
@@ -334,13 +222,28 @@ impl Role {
     }
 }
 
+/// Owns a capture/keep-alive thread: dropping it stops the thread and joins.
+struct StreamHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for StreamHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 struct StreamState {
     role: Role,
     /// Configured device id (magic `default_*` follows the OS default).
     device_id: Mutex<String>,
     /// Friendly name of the resolved device (for default-follow comparisons).
     resolved_name: Mutex<String>,
-    stream: Mutex<Option<cpal::Stream>>,
+    stream: Mutex<Option<StreamHandle>>,
     live: AtomicBool,
     dead: Mutex<Option<String>>,
     ring: Mutex<StemRing>,
@@ -390,12 +293,20 @@ impl StreamState {
     fn peek_peak(&self) -> f32 {
         f32::from_bits(self.peak.load(Ordering::Relaxed))
     }
+
+    fn gain(&self) -> f32 {
+        if self.muted.load(Ordering::Relaxed) {
+            0.0
+        } else {
+            self.gain_pct.load(Ordering::Relaxed) as f32 / 100.0
+        }
+    }
 }
 
 struct Shared {
     game: Arc<StreamState>,
     mic: Arc<StreamState>,
-    keepalive: Mutex<Option<cpal::Stream>>,
+    keepalive: Mutex<Option<StreamHandle>>,
     stop: AtomicBool,
 }
 
@@ -462,7 +373,8 @@ impl AudioCapture {
                 *mic.dead.lock().unwrap() = Some(e);
             }
         }
-        let live = game.live.load(Ordering::Relaxed) as usize + mic.live.load(Ordering::Relaxed) as usize;
+        let live = game.live.load(Ordering::Relaxed) as usize
+            + mic.live.load(Ordering::Relaxed) as usize;
         if live == 0 {
             return Err("no audio streams could be opened".into());
         }
@@ -470,9 +382,10 @@ impl AudioCapture {
         // while the audio engine is idle, which used to look like a dead
         // stream and churned the watchdog. Keeping a render client alive
         // makes loopback deliver continuous silence.
-        if let Some(dev) = resolve_output(&game) {
-            match start_keepalive(&dev) {
-                Ok(s) => *shared.keepalive.lock().unwrap() = Some(s),
+        {
+            let id = game.device_id.lock().map(|d| d.clone()).unwrap_or_default();
+            match start_keepalive(&id) {
+                Ok(h) => *shared.keepalive.lock().unwrap() = Some(h),
                 Err(e) => eprintln!("[moonclip] keepalive failed (audio may gap while idle): {e}"),
             }
         }
@@ -554,7 +467,7 @@ impl Drop for AudioCapture {
                 *reg = None;
             }
         }
-        // Streams stop when their handles drop (stream slots + keep-alive).
+        // Dropping each handle stops + joins its thread.
         if let Ok(mut kl) = self.shared.keepalive.lock() {
             kl.take();
         }
@@ -574,20 +487,177 @@ impl Drop for AudioCapture {
 }
 
 // ---------------------------------------------------------------------------
-// Stream opening + conversion
+// Stream opening + capture threads
 // ---------------------------------------------------------------------------
 
-fn resolve_output(state: &StreamState) -> Option<cpal::Device> {
-    let id = state.device_id.lock().ok()?.clone();
-    devices::find_output_device(&id)
+fn mark_dead(state: &StreamState, msg: String) {
+    eprintln!("[moonclip] {} stream error: {msg}", state.role.label());
+    if let Ok(mut d) = state.dead.lock() {
+        *d = Some(msg);
+    }
+    state.live.store(false, Ordering::Relaxed);
 }
 
-fn resolve_input(state: &StreamState) -> Option<cpal::Device> {
-    let id = state.device_id.lock().ok()?.clone();
-    devices::find_input_device(&id)
+/// Open a capture stream: spawn its thread, wait for the client to start, and
+/// keep the handle. A setup failure is returned synchronously.
+fn open_stream(state: &Arc<StreamState>) -> Result<(), String> {
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_state = state.clone();
+    let thread_stop = stop.clone();
+    let handle = std::thread::Builder::new()
+        .name(format!("moonclip-wasapi-{}", state.role.label()))
+        .spawn(move || capture_thread(thread_state, thread_stop, ready_tx))
+        .map_err(|e| format!("cannot spawn capture thread: {e}"))?;
+    match ready_rx.recv_timeout(OPEN_TIMEOUT) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("audio stream did not start in 5 s".into()),
+    }
+    if let Ok(mut slot) = state.stream.lock() {
+        *slot = Some(StreamHandle {
+            stop,
+            thread: Some(handle),
+        });
+    }
+    state.live.store(true, Ordering::Relaxed);
+    // Do NOT touch the stall episode here: opening a stream only proves it
+    // linked, not that audio flows. The episode stays `handled` until a block
+    // is actually delivered (`drain_meta`), or the watchdog reopens in a loop.
+    *state.retry_at.lock().unwrap() = None;
+    Ok(())
 }
 
-/// Install MMCSS "Pro Audio" on the calling (capture) thread, once.
+/// Wait for the next packet and drain it into the SPSC ring. Tight loop only
+/// while packets are pending; otherwise parks on the WASAPI event.
+fn capture_thread(
+    state: Arc<StreamState>,
+    stop: Arc<AtomicBool>,
+    ready: SyncSender<Result<(), String>>,
+) {
+    let setup = setup_capture(&state);
+    let (client, capture, event, channels) = match setup {
+        Ok(v) => {
+            ready.send(Ok(())).ok();
+            v
+        }
+        Err(e) => {
+            ready.send(Err(e)).ok();
+            return;
+        }
+    };
+    register_mmcss();
+    let mut f32_buf: Vec<f32> = Vec::new();
+    let mut scratch: Vec<i16> = Vec::with_capacity(8192);
+    while !stop.load(Ordering::Relaxed) {
+        // 50 ms timeout keeps the stop flag responsive without busy-waiting.
+        if event.wait_for_event(50).is_err() {
+            continue;
+        }
+        loop {
+            match capture.get_next_packet_size() {
+                Ok(Some(frames)) if frames > 0 => {
+                    let need = frames as usize * channels;
+                    if f32_buf.len() < need {
+                        f32_buf.resize(need, 0.0);
+                    }
+                    // SAFETY: `f32_buf` is a `Vec<f32>`, so its backing store
+                    // is 4-byte aligned and at least `need * 4` bytes long;
+                    // the byte view is only used as the WASAPI destination.
+                    let raw = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            f32_buf.as_mut_ptr() as *mut u8,
+                            need * std::mem::size_of::<f32>(),
+                        )
+                    };
+                    match capture.read_from_device(raw) {
+                        Ok((frames_read, info)) => {
+                            let n = frames_read as usize * channels;
+                            dsp::convert_f32(&f32_buf[..n], state.gain(), &mut scratch);
+                            state.note_peak(dsp::peak_i16(&scratch));
+                            let qpc = pts::qpc_ticks_to_ns(info.timestamp);
+                            let frames_u32 = (scratch.len() / STEM_CHANNELS) as u32;
+                            if frames_u32 > 0 {
+                                if state.queue.push(&scratch) {
+                                    if !state.metas.push(ChunkMeta {
+                                        qpc_ns: qpc.clamp(i64::MIN as i128, i64::MAX as i128) as i64,
+                                        frames: frames_u32,
+                                    }) {
+                                        state.dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                } else {
+                                    state.dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            mark_dead(&state, e.to_string());
+                            break;
+                        }
+                    }
+                }
+                Ok(_) => break,
+                Err(e) => {
+                    mark_dead(&state, e.to_string());
+                    break;
+                }
+            }
+        }
+    }
+    let _ = client.stop_stream();
+}
+
+/// Resolve the configured endpoint and start a shared-mode capture client at
+/// 48 kHz stereo float (the engine converts formats for us).
+fn setup_capture(
+    state: &Arc<StreamState>,
+) -> Result<(AudioClient, AudioCaptureClient, Handle, usize), String> {
+    let id = state
+        .device_id
+        .lock()
+        .map_err(|_| "device id lock poisoned".to_string())?
+        .clone();
+    let render = matches!(state.role, Role::Game);
+    let device = devices::resolve_endpoint(&id, render)?;
+    if let Ok(name) = device.get_friendlyname() {
+        if let Ok(mut n) = state.resolved_name.lock() {
+            *n = name;
+        }
+    }
+    let mut client = device
+        .get_iaudioclient()
+        .map_err(|e| format!("{} client: {e}", state.role.label()))?;
+    let min_time = client
+        .get_device_period()
+        .map(|(_, m)| m)
+        .unwrap_or(FALLBACK_PERIOD_HNS);
+    let format = WaveFormat::new(
+        32,
+        32,
+        &SampleType::Float,
+        STEM_RATE as usize,
+        STEM_CHANNELS,
+        None,
+    );
+    let mode = StreamMode::EventsShared {
+        autoconvert: true,
+        buffer_duration_hns: min_time,
+    };
+    client
+        .initialize_client(&format, &Direction::Capture, &mode)
+        .map_err(|e| format!("{} init: {e}", state.role.label()))?;
+    let event = client
+        .set_get_eventhandle()
+        .map_err(|e| format!("{} event: {e}", state.role.label()))?;
+    let capture = client
+        .get_audiocaptureclient()
+        .map_err(|e| format!("{} capture client: {e}", state.role.label()))?;
+    client
+        .start_stream()
+        .map_err(|e| format!("{} start: {e}", state.role.label()))?;
+    Ok((client, capture, event, STEM_CHANNELS))
+}
+
 fn register_mmcss() {
     use std::cell::Cell;
     thread_local! {
@@ -599,227 +669,126 @@ fn register_mmcss() {
             let task: Vec<u16> = "Pro Audio\0".encode_utf16().collect();
             let mut idx = 0u32;
             unsafe {
-                let _ = AvSetMmThreadCharacteristicsW(
-                    windows::core::PCWSTR(task.as_ptr()),
-                    &mut idx,
-                );
+                let _ = AvSetMmThreadCharacteristicsW(windows::core::PCWSTR(task.as_ptr()), &mut idx);
             }
         }
     });
 }
 
-/// Stereo 48 kHz i16 conversion with optional linear resample for devices not
-/// running at 48 kHz. `scratch` is reused (no allocation in the callback).
-fn fill_scratch<T>(data: &[T], channels: usize, rate: u32, gain: f32, out: &mut Vec<i16>)
-where
-    T: cpal::Sample + cpal::SizedSample,
-    f32: cpal::FromSample<T>,
-{
-    out.clear();
-    if channels == 0 || data.is_empty() {
-        return;
-    }
-    let frames = data.len() / channels;
-    if frames == 0 {
-        return;
-    }
-    let stereo_at = |frame: usize| -> (f32, f32) {
-        let base = frame * channels;
-        let a = f32::from_sample(data[base]);
-        let b = if channels > 1 {
-            f32::from_sample(data[base + 1])
-        } else {
-            a
-        };
-        (a, b)
-    };
-    if rate == STEM_RATE {
-        out.reserve(frames * STEM_CHANNELS);
-        for f in 0..frames {
-            let (a, b) = stereo_at(f);
-            out.push((a * gain).clamp(-1.0, 1.0).mul_add(32767.0, 0.0) as i16);
-            out.push((b * gain).clamp(-1.0, 1.0).mul_add(32767.0, 0.0) as i16);
-        }
-        return;
-    }
-    // Linear resample to 48 kHz (only used when the endpoint runs at another
-    // rate; shared-mode WASAPI normally gives us 48 kHz already).
-    let ratio = rate as f64 / STEM_RATE as f64;
-    let out_frames = (frames as f64 / ratio).floor() as usize;
-    out.reserve(out_frames * STEM_CHANNELS);
-    for j in 0..out_frames {
-        let pos = j as f64 * ratio;
-        let i0 = pos.floor() as usize;
-        let i1 = (i0 + 1).min(frames - 1);
-        let frac = (pos - i0 as f64) as f32;
-        let (a0, b0) = stereo_at(i0.min(frames - 1));
-        let (a1, b1) = stereo_at(i1);
-        let a = a0 + (a1 - a0) * frac;
-        let b = b0 + (b1 - b0) * frac;
-        out.push((a * gain).clamp(-1.0, 1.0).mul_add(32767.0, 0.0) as i16);
-        out.push((b * gain).clamp(-1.0, 1.0).mul_add(32767.0, 0.0) as i16);
+// ---------------------------------------------------------------------------
+// Keep-alive render stream (loopback goes silent when nothing renders)
+// ---------------------------------------------------------------------------
+
+fn start_keepalive(device_id: &str) -> Result<StreamHandle, String> {
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+    let stop = Arc::new(AtomicBool::new(false));
+    let id = device_id.to_string();
+    let thread_stop = stop.clone();
+    let handle = std::thread::Builder::new()
+        .name("moonclip-wasapi-keepalive".into())
+        .spawn(move || keepalive_thread(id, thread_stop, ready_tx))
+        .map_err(|e| format!("cannot spawn keepalive thread: {e}"))?;
+    match ready_rx.recv_timeout(OPEN_TIMEOUT) {
+        Ok(Ok(())) => Ok(StreamHandle {
+            stop,
+            thread: Some(handle),
+        }),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("keepalive stream did not start in 5 s".into()),
     }
 }
 
-fn open_stream(state: &Arc<StreamState>) -> Result<(), String> {
-    let device = match state.role {
-        Role::Game => resolve_output(state),
-        Role::Mic => resolve_input(state),
-    }
-    .ok_or_else(|| format!("{} device not found", state.role.label()))?;
-    let name = device.name().unwrap_or_default();
-    if let Ok(mut n) = state.resolved_name.lock() {
-        *n = name.clone();
-    }
-    let config = match state.role {
-        Role::Game => device
-            .default_output_config()
-            .map_err(|e| format!("game config: {e}"))?,
-        Role::Mic => device
-            .default_input_config()
-            .map_err(|e| format!("mic config: {e}"))?,
-    };
-    let fmt = config.sample_format();
-    let cfg: cpal::StreamConfig = config.into();
-    let channels = cfg.channels as usize;
-    let rate = cfg.sample_rate.0;
-    let queue = state.queue.clone();
-    let metas = state.metas.clone();
-    let state2 = state.clone();
-    let mut scratch: Vec<i16> = Vec::with_capacity(8192);
-    let err_state = state.clone();
-    let err_fn = move |e: cpal::StreamError| {
-        eprintln!("[moonclip] {} stream error: {e}", err_state.role.label());
-        if let Ok(mut d) = err_state.dead.lock() {
-            *d = Some(e.to_string());
-        }
-        err_state.live.store(false, Ordering::Relaxed);
-    };
-    let stream = match fmt {
-        cpal::SampleFormat::F32 => build_input::<f32>(&device, &cfg, move |data, info| {
-            realtime_chunk(data, info, channels, rate, &state2, &queue, &metas, &mut scratch)
-        }, err_fn),
-        cpal::SampleFormat::I16 => build_input::<i16>(&device, &cfg, move |data, info| {
-            realtime_chunk(data, info, channels, rate, &state2, &queue, &metas, &mut scratch)
-        }, err_fn),
-        cpal::SampleFormat::U16 => build_input::<u16>(&device, &cfg, move |data, info| {
-            realtime_chunk(data, info, channels, rate, &state2, &queue, &metas, &mut scratch)
-        }, err_fn),
-        cpal::SampleFormat::I32 => build_input::<i32>(&device, &cfg, move |data, info| {
-            realtime_chunk(data, info, channels, rate, &state2, &queue, &metas, &mut scratch)
-        }, err_fn),
-        cpal::SampleFormat::U32 => build_input::<u32>(&device, &cfg, move |data, info| {
-            realtime_chunk(data, info, channels, rate, &state2, &queue, &metas, &mut scratch)
-        }, err_fn),
-        other => return Err(format!("unsupported sample format {other:?}")),
-    }?;
-    stream.play().map_err(|e| format!("play: {e}"))?;
-    if let Ok(mut slot) = state.stream.lock() {
-        *slot = Some(stream);
-    }
-    state.live.store(true, Ordering::Relaxed);
-    // Do NOT touch the stall episode here: opening a stream only proves it
-    // linked, not that audio flows. The episode stays `handled` until a block
-    // is actually delivered (`drain_meta`), or the watchdog reopens in a loop.
-    *state.retry_at.lock().unwrap() = None;
-    Ok(())
-}
-
-fn build_input<T>(
-    device: &cpal::Device,
-    cfg: &cpal::StreamConfig,
-    mut cb: impl FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static,
-    mut err: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<cpal::Stream, String>
-where
-    T: cpal::SizedSample,
-{
-    device
-        .build_input_stream(
-            cfg,
-            move |data: &[T], info: &cpal::InputCallbackInfo| cb(data, info),
-            move |e| err(e),
+fn keepalive_thread(id: String, stop: Arc<AtomicBool>, ready: SyncSender<Result<(), String>>) {
+    let setup = (|| -> Result<(AudioClient, wasapi::AudioRenderClient, Handle, usize), String> {
+        let device = devices::resolve_endpoint(&id, true)?;
+        let mut client = device
+            .get_iaudioclient()
+            .map_err(|e| format!("keepalive client: {e}"))?;
+        let min_time = client
+            .get_device_period()
+            .map(|(_, m)| m)
+            .unwrap_or(FALLBACK_PERIOD_HNS);
+        let format = WaveFormat::new(
+            32,
+            32,
+            &SampleType::Float,
+            STEM_RATE as usize,
+            STEM_CHANNELS,
             None,
-        )
-        .map_err(|e| format!("open stream: {e}"))
-}
-
-/// The real-time callback body: register with MMCSS, convert + gain into a
-/// reused scratch, hand the chunk over lock-free. Never blocks.
-fn realtime_chunk<T>(
-    data: &[T],
-    info: &cpal::InputCallbackInfo,
-    channels: usize,
-    rate: u32,
-    state: &Arc<StreamState>,
-    queue: &SampleQueue,
-    metas: &MetaQueue,
-    scratch: &mut Vec<i16>,
-) where
-    T: cpal::Sample + cpal::SizedSample,
-    f32: cpal::FromSample<T>,
-{
-    register_mmcss();
-    let now = qpc_ns();
-    let ts = info.timestamp();
-    let lat_ns = ts
-        .callback
-        .duration_since(&ts.capture)
-        .map(|d| d.as_nanos() as f64 * cpal_ns_scale())
-        .unwrap_or(0.0);
-    let capture_qpc = now - lat_ns as i128;
-    let gain = if state.muted.load(Ordering::Relaxed) {
-        0.0
-    } else {
-        state.gain_pct.load(Ordering::Relaxed) as f32 / 100.0
+        );
+        let mode = StreamMode::EventsShared {
+            autoconvert: true,
+            buffer_duration_hns: min_time,
+        };
+        client
+            .initialize_client(&format, &Direction::Render, &mode)
+            .map_err(|e| format!("keepalive init: {e}"))?;
+        let event = client
+            .set_get_eventhandle()
+            .map_err(|e| format!("keepalive event: {e}"))?;
+        let render = client
+            .get_audiorenderclient()
+            .map_err(|e| format!("keepalive render client: {e}"))?;
+        client
+            .start_stream()
+            .map_err(|e| format!("keepalive start: {e}"))?;
+        let blockalign = format.get_blockalign() as usize;
+        Ok((client, render, event, blockalign))
+    })();
+    let (client, render, event, blockalign) = match setup {
+        Ok(v) => {
+            ready.send(Ok(())).ok();
+            v
+        }
+        Err(e) => {
+            ready.send(Err(e)).ok();
+            return;
+        }
     };
-    fill_scratch(data, channels, rate, gain, scratch);
-    if scratch.is_empty() {
-        return;
-    }
-    let mut peak = 0f32;
-    for &s in scratch.iter() {
-        let v = (s as f32 / 32768.0).abs();
-        if v > peak {
-            peak = v;
+    register_mmcss();
+    let buffer_frames = client.get_buffer_size().unwrap_or(0);
+    let silence = vec![0u8; (buffer_frames as usize).max(1) * blockalign];
+    while !stop.load(Ordering::Relaxed) {
+        if event.wait_for_event(100).is_err() {
+            continue;
+        }
+        loop {
+            match client.get_available_space_in_frames() {
+                Ok(frames) if frames > 0 => {
+                    let n = (frames as usize).min(buffer_frames as usize);
+                    let bytes = &silence[..n * blockalign];
+                    if render.write_to_device(n, bytes, None).is_err() {
+                        break;
+                    }
+                }
+                Ok(_) => break,
+                Err(_) => break,
+            }
         }
     }
-    state.note_peak(peak);
-    let frames = (scratch.len() / STEM_CHANNELS) as u32;
-    if !queue.push(scratch) {
-        state.dropped_chunks.fetch_add(1, Ordering::Relaxed);
-        return;
-    }
-    if !metas.push(ChunkMeta {
-        qpc_ns: capture_qpc.clamp(i64::MIN as i128, i64::MAX as i128) as i64,
-        frames,
-    }) {
-        // Extremely unlikely (meta ring is tiny); drop the samples too by
-        // marking a full-chunk underrun: consumer will see missing meta.
-        state.dropped_chunks.fetch_add(1, Ordering::Relaxed);
-    }
+    let _ = client.stop_stream();
 }
 
-fn start_keepalive(device: &cpal::Device) -> Result<cpal::Stream, String> {
-    let config = device
-        .default_output_config()
-        .map_err(|e| format!("keepalive config: {e}"))?;
-    let fmt = config.sample_format();
-    let cfg: cpal::StreamConfig = config.into();
-    let stream = match fmt {
-        cpal::SampleFormat::F32 => device
-            .build_output_stream(&cfg, |d: &mut [f32], _| d.fill(0.0), |_| {}, None)
-            .map_err(|e| e.to_string())?,
-        cpal::SampleFormat::I16 => device
-            .build_output_stream(&cfg, |d: &mut [i16], _| d.fill(0), |_| {}, None)
-            .map_err(|e| e.to_string())?,
-        cpal::SampleFormat::U16 => device
-            .build_output_stream(&cfg, |d: &mut [u16], _| d.fill(u16::MAX / 2), |_| {}, None)
-            .map_err(|e| e.to_string())?,
-        other => return Err(format!("unsupported keepalive format {other:?}")),
-    };
-    stream.play().map_err(|e| e.to_string())?;
-    Ok(stream)
+/// Restart the keep-alive on the game endpoint's current device (called when
+/// the default output device changes).
+fn restart_keepalive(shared: &Arc<Shared>) {
+    if let Ok(mut kl) = shared.keepalive.lock() {
+        kl.take();
+    }
+    let id = shared
+        .game
+        .device_id
+        .lock()
+        .map(|d| d.clone())
+        .unwrap_or_default();
+    match start_keepalive(&id) {
+        Ok(h) => {
+            if let Ok(mut kl) = shared.keepalive.lock() {
+                *kl = Some(h);
+            }
+        }
+        Err(e) => eprintln!("[moonclip] keepalive restart failed: {e}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -839,12 +808,7 @@ fn assembler_loop(shared: Arc<Shared>) {
             return;
         }
         let mut did_work = false;
-        did_work |= drain_meta(
-            &shared.game,
-            &mut game_pending,
-            &mut game_qpc,
-            &mut buf,
-        );
+        did_work |= drain_meta(&shared.game, &mut game_pending, &mut game_qpc, &mut buf);
         did_work |= drain_meta(&shared.mic, &mut mic_pending, &mut mic_qpc, &mut buf);
         if !did_work {
             std::thread::sleep(Duration::from_millis(2));
@@ -911,9 +875,9 @@ fn supervisor_loop(shared: Arc<Shared>) {
     while !shared.stop.load(Ordering::Relaxed) {
         std::thread::sleep(TICK);
         ticks = ticks.wrapping_add(1);
-        if ticks % DEFAULT_POLL_TICKS == 0 {
-            follow_default(&shared.game, true);
-            follow_default(&shared.mic, false);
+        if ticks.is_multiple_of(DEFAULT_POLL_TICKS) {
+            follow_default(&shared, true);
+            follow_default(&shared, false);
         }
         for state in [&shared.game, &shared.mic] {
             let dead = state.dead.lock().ok().and_then(|d| d.clone());
@@ -942,7 +906,7 @@ fn supervisor_loop(shared: Arc<Shared>) {
             if last == 0 {
                 continue; // never delivered yet: handled on open
             }
-            let age_ns = qpc_ns() - last as i128;
+            let age_ns = pts::qpc_ns() - last as i128;
             let handled = state.stall_handled.load(Ordering::Relaxed);
             let retry_due = state
                 .stall_retry_at
@@ -989,7 +953,7 @@ fn stall_action(age_ns: i128, handled: bool, retry_due: bool) -> StallAction {
 /// Close + reopen a stream on its resolved device, keeping ring history.
 fn reopen(state: &Arc<StreamState>) -> bool {
     if let Ok(mut slot) = state.stream.lock() {
-        slot.take(); // dropping stops the stream
+        slot.take(); // dropping stops + joins the capture thread
     }
     state.live.store(false, Ordering::Relaxed);
     match open_stream(state) {
@@ -1012,7 +976,8 @@ fn reopen(state: &Arc<StreamState>) -> bool {
 /// For `default_output`/`default_input`: if Windows changed the default
 /// device, move the stream there (and re-link the keep-alive for the game
 /// endpoint). Concrete device selections are left alone.
-fn follow_default(state: &Arc<StreamState>, render: bool) {
+fn follow_default(shared: &Arc<Shared>, render: bool) {
+    let state = if render { &shared.game } else { &shared.mic };
     let id = match state.device_id.lock() {
         Ok(i) => i.clone(),
         Err(_) => return,
@@ -1026,13 +991,13 @@ fn follow_default(state: &Arc<StreamState>, render: bool) {
         return;
     }
     let Some(dev) = (if render {
-        cpal::default_host().default_output_device()
+        devices::resolve_endpoint("default_output", true).ok()
     } else {
-        cpal::default_host().default_input_device()
+        devices::resolve_endpoint("default_input", false).ok()
     }) else {
         return;
     };
-    let new_name = dev.name().unwrap_or_default();
+    let new_name = dev.get_friendlyname().unwrap_or_default();
     let old_name = state
         .resolved_name
         .lock()
@@ -1044,6 +1009,9 @@ fn follow_default(state: &Arc<StreamState>, render: bool) {
             state.role.label()
         );
         let _ = reopen(state);
+        if render {
+            restart_keepalive(shared);
+        }
     }
 }
 
@@ -1092,25 +1060,9 @@ pub fn recent_peaks() -> Option<(f32, f32)> {
     ))
 }
 
-/// Assemble the stems for the engine (kept as a helper for tests/logging).
-pub fn window_frames(window_ns: i128) -> usize {
-    (window_ns.max(0) * STEM_RATE as i128 / 1_000_000_000) as usize
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn ring_from(spec: &[(i128, i16)]) -> VecDeque<Block> {
-        let mut r = VecDeque::new();
-        let mut qpc = spec.first().map(|(q, _)| *q).unwrap_or(0);
-        for &(dt, v) in spec {
-            qpc += dt;
-            let samples: Vec<i16> = std::iter::repeat(v).take(BLOCK_FRAMES * 2).collect();
-            r.push_back(Block { qpc_ns: qpc, samples });
-        }
-        r
-    }
 
     #[test]
     fn spsc_all_or_nothing_and_order() {
@@ -1133,95 +1085,15 @@ mod tests {
     fn meta_queue_fifo() {
         let q = MetaQueue::new(4);
         for i in 0..3 {
-            assert!(q.push(ChunkMeta { qpc_ns: i, frames: 1 }));
+            assert!(q.push(ChunkMeta {
+                qpc_ns: i,
+                frames: 1
+            }));
         }
         assert_eq!(q.pop().unwrap().qpc_ns, 0);
         assert_eq!(q.pop().unwrap().qpc_ns, 1);
         assert_eq!(q.pop().unwrap().qpc_ns, 2);
         assert!(q.pop().is_none());
-    }
-
-    #[test]
-    fn window_perfect_timestamps_are_verbatim() {
-        let blocks = ring_from(&[(0, 100), (BLOCK_FRAMES as i128 * 1_000_000_000 / STEM_RATE as i128, 200)]);
-        let start = blocks.front().unwrap().qpc_ns;
-        let frames = BLOCK_FRAMES * 2;
-        let out = build_window(&blocks, start, frames);
-        assert_eq!(out.len(), frames * 2);
-        assert!(out[..BLOCK_FRAMES * 2].iter().all(|&s| s == 100));
-        assert!(out[BLOCK_FRAMES * 2..].iter().all(|&s| s == 200));
-    }
-
-    #[test]
-    fn window_corrects_drift_without_clicks() {
-        // Second block starts 1% later than its content duration: the builder
-        // must stretch (interpolate), never insert silence.
-        let step = BLOCK_FRAMES as i128 * 1_000_000_000 / STEM_RATE as i128;
-        let blocks = ring_from(&[(0, 0), (step + step / 100, 10000)]);
-        let start = blocks.front().unwrap().qpc_ns;
-        let frames = BLOCK_FRAMES * 2;
-        let out = build_window(&blocks, start, frames);
-        // Jitter is absorbed by holding the previous block's last sample for
-        // the sub-ms gap; the next block maps normally right after.
-        let mid = BLOCK_FRAMES + 10;
-        assert!(
-            out[mid * 2] > 0,
-            "expected the second block after the jittered boundary"
-        );
-    }
-
-    #[test]
-    fn window_real_gap_becomes_silence() {
-        let step = BLOCK_FRAMES as i128 * 1_000_000_000 / STEM_RATE as i128;
-        // 5 s gap between two blocks (> FUSE).
-        let blocks = ring_from(&[(0, 500), (step + 5_000_000_000, 900)]);
-        let start = blocks.front().unwrap().qpc_ns;
-        let frames = BLOCK_FRAMES + 4800; // 110 ms: past q_end + FUSE
-        let out = build_window(&blocks, start, frames);
-        let late = frames - 1;
-        assert_eq!(out[late * 2], 0, "gap must be silent");
-        // The first block itself is verbatim.
-        assert_eq!(out[10], 500);
-    }
-
-    #[test]
-    fn window_pads_when_ring_is_short() {
-        let blocks = ring_from(&[(0, 7)]);
-        let start = blocks.front().unwrap().qpc_ns;
-        let frames = BLOCK_FRAMES;
-        let out = build_window(&blocks, start, frames);
-        assert_eq!(out.len(), frames * 2);
-        assert!(out.iter().all(|&s| s == 7));
-    }
-
-    #[test]
-    fn conversion_handles_silence_and_gain() {
-        let mut out = Vec::new();
-        fill_scratch(&[0.5f32, -0.5, 0.25, -0.25], 2, 48_000, 2.0, &mut out);
-        assert_eq!(out.len(), 4);
-        assert_eq!(out[0], 32767); // 1.0 clamped
-        assert_eq!(out[1], -32767);
-        assert_eq!(out[2], 16383);
-        fill_scratch::<f32>(&[], 2, 48_000, 1.0, &mut out);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn conversion_resamples_when_rate_differs() {
-        let data: Vec<f32> = (0..960).map(|_| 0.5).collect();
-        let mut out = Vec::new();
-        fill_scratch(&data, 1, 44_100, 1.0, &mut out);
-        // ~960 * 48000/44100 frames, stereo.
-        let frames = out.len() / 2;
-        assert!((1030..=1050).contains(&frames), "{frames}");
-        assert!(out.iter().all(|&s| (s as i32 - 16383).abs() <= 1));
-    }
-
-    #[test]
-    fn window_frames_is_seconds_times_rate() {
-        assert_eq!(window_frames(1_000_000_000), 48_000);
-        assert_eq!(window_frames(500_000_000), 24_000);
-        assert_eq!(window_frames(-5), 0);
     }
 
     /// Regression for the reopen churn seen in the user console (840

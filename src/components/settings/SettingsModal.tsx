@@ -14,9 +14,11 @@ const SECRET_TEST_ALIAS = "phase2_selftest";
 export function SettingsModal({
   engineStatus,
   onHotkeyChange,
+  onOpenWizard,
 }: {
   engineStatus: EngineStatus;
   onHotkeyChange?: (hotkey: string) => void;
+  onOpenWizard?: () => void;
 }) {
   const { t } = useTranslation();
   const { locale, setLocale } = useLocale();
@@ -146,19 +148,6 @@ export function SettingsModal({
       </div>
 
       <div className={row}>
-        <span className={label}>{t("settings.buffer")}</span>
-        <input
-          type="number"
-          min={5}
-          max={300}
-          className={input}
-          defaultValue={settings.buffer_seconds}
-          key={`buf-${settings.buffer_seconds}`}
-          onBlur={(e) => void save("buffer_seconds", e.target.value)}
-        />
-      </div>
-
-      <div className={row}>
         <span className={label}>{t("settings.max_gb")}</span>
         <input
           type="number"
@@ -234,7 +223,17 @@ export function SettingsModal({
       <h3 className="pt-2 text-sm font-semibold text-slate-200">{t("audio.title")}</h3>
       <AudioSection status={engineStatus} />
 
-      <h3 className="pt-2 text-sm font-semibold text-slate-200">{t("video.title")}</h3>
+      <div className="flex items-center justify-between gap-2 pt-2">
+        <h3 className="text-sm font-semibold text-slate-200">{t("video.title")}</h3>
+        {onOpenWizard && (
+          <button
+            onClick={onOpenWizard}
+            className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/40 hover:text-cyan-200"
+          >
+            {t("wizard.reopen")}
+          </button>
+        )}
+      </div>
       <VideoSection />
 
       <p className="pt-2 font-mono text-[11px] text-slate-600">

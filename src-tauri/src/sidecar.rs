@@ -18,7 +18,7 @@ pub fn host_triple() -> &'static str {
 
 fn find_in(dir: &std::path::Path, triple: &str, name: &str) -> Option<PathBuf> {
     let p = dir.join("binaries").join(triple).join(name);
-    p.exists().then(|| p)
+    p.exists().then_some(p)
 }
 
 /// Search resource dir, exe dir (+ ancestors for dev layout: target/debug/<bin>).

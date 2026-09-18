@@ -62,7 +62,7 @@ pub fn get_settings(db: State<'_, DbState>) -> Result<HashMap<String, String>, S
     db.get_settings()
 }
 
-async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
+async fn start_engine(app: &AppHandle, source_override: Option<String>) -> Result<EngineStatus, String> {
     let db = app.state::<DbState>();
     let dir = db.clips_dir()?;
     let secs = buffer_seconds(&db) as u32;
@@ -83,7 +83,7 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     }
     let out_height: u32 = setting_str(&db, "out_height", "0").parse().unwrap_or(0);
     // Capture framerate: 30 or 60 only (MVP). Anything else falls back to 60.
-    let fps: u32 = match setting_str(&db, "fps", "60").parse().unwrap_or(60) {
+    let ladder_fps: u32 = match setting_str(&db, "fps", "60").parse().unwrap_or(60) {
         30 => 30,
         _ => 60,
     };
@@ -105,7 +105,19 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     } else {
         out_height
     };
-    let bitrate = video_quality::bitrate_kbps(ladder_height, &codec);
+    let ladder_bitrate = video_quality::bitrate_kbps(ladder_height, &codec);
+    // Custom mode (§17): V1 clamps the FPS slider to 30/60 and the bitrate to
+    // the 3–100 Mbps range; invalid values fall back to the ladder.
+    let (fps, bitrate, fps_clamped) = custom_capture_params(
+        &setting_str(&db, "video_mode", "ladder"),
+        &setting_str(&db, "custom_fps", ""),
+        &setting_str(&db, "custom_bitrate_kbps", ""),
+        ladder_fps,
+        ladder_bitrate,
+    );
+    if fps_clamped {
+        eprintln!("[moonclip] custom fps clamped to {fps} (V1 supports 30/60)");
+    }
     // Capture plan. Backends that scale on the GPU live (Windows gfxcapture)
     // buffer directly at the delivered height, so saves are copy-only. The
     // GSR backend keeps the source-resolution buffer + lanczos save transcode
@@ -163,6 +175,15 @@ async fn start_engine(app: &AppHandle) -> Result<EngineStatus, String> {
             nvenc_opts,
             ffmpeg_bin,
             audio_single_track: single_track,
+            source_override,
+            capture_max_fps: setting_str(&db, "capture_max_fps", "0")
+                .parse()
+                .unwrap_or(0),
+            faststart: matches!(
+                setting_str(&db, "faststart", "0").as_str(),
+                "1" | "true"
+            ),
+            container: setting_str(&db, "container", "mp4"),
         })
         .await?;
     let tracks = audio::linked_count(&engine.audio_args()).await;
@@ -203,6 +224,37 @@ fn setting_str(db: &DbState, key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// Custom mode (§17) capture parameters. `ladder` keeps the Medal row; in
+/// `custom` the FPS slider is clamped to the V1 engine limit (30/60) and the
+/// bitrate to the slider range (3–100 Mbps); invalid values fall back to the
+/// ladder. Returns `(fps, bitrate_kbps, fps_was_clamped)`.
+pub(crate) fn custom_capture_params(
+    mode: &str,
+    custom_fps: &str,
+    custom_kbps: &str,
+    ladder_fps: u32,
+    ladder_kbps: u32,
+) -> (u32, u32, bool) {
+    if mode.trim() != "custom" {
+        return (ladder_fps, ladder_kbps, false);
+    }
+    let wanted_fps = custom_fps.trim().parse::<u32>().ok();
+    let (fps, clamped) = match wanted_fps {
+        Some(30) => (30, false),
+        Some(60) => (60, false),
+        Some(24) => (30, true),
+        Some(120) | Some(144) => (60, true),
+        _ => (ladder_fps, false),
+    };
+    let bitrate = custom_kbps
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|v| (3_000..=100_000).contains(v))
+        .unwrap_or(ladder_kbps);
+    (fps, bitrate, clamped)
+}
+
 async fn stop_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     let st = app.state::<AppState>();
     let mut guard = st.recorder.lock().await;
@@ -221,6 +273,25 @@ async fn stop_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     })
 }
 
+/// Settings whose change restarts a running buffer so length, devices and
+/// stored durations always match the recorder.
+const RESTART_KEYS: &[&str] = &[
+    "buffer_seconds",
+    "mic_device",
+    "desktop_device",
+    "video_codec",
+    "out_height",
+    "fps",
+    "monitor",
+    "audio_single_track",
+    "container",
+    "video_mode",
+    "custom_bitrate_kbps",
+    "custom_fps",
+    "capture_max_fps",
+    "faststart",
+];
+
 #[tauri::command]
 pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
     // Keep the previous value: a restart with an unusable new value (device
@@ -235,16 +306,6 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
     }
     // Changing the buffer length or capture devices with the engine running
     // restarts it so length, devices and stored durations match the recorder.
-    const RESTART_KEYS: &[&str] = &[
-        "buffer_seconds",
-        "mic_device",
-        "desktop_device",
-        "video_codec",
-        "out_height",
-        "fps",
-        "monitor",
-        "audio_single_track",
-    ];
     if RESTART_KEYS.contains(&key.as_str()) {
         let running = {
             let st = app.state::<AppState>();
@@ -255,13 +316,13 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
         };
         if running {
             stop_engine(&app).await?;
-            if let Err(e) = start_engine(&app).await {
+            if let Err(e) = start_engine(&app, None).await {
                 // Revert + retry with the previous value; the UI still gets
                 // the original error so the user knows what failed.
                 if let Some(prev) = previous.as_deref() {
                     let db = app.state::<DbState>();
                     let _ = db.set_setting(&key, prev);
-                    if start_engine(&app).await.is_ok() {
+                    if start_engine(&app, None).await.is_ok() {
                         notify(
                             &app,
                             "Cambio no aplicado; se restauró la configuración anterior",
@@ -273,6 +334,168 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
             }
             notify(&app, "Búfer reiniciado con la nueva configuración", "Buffer restarted with new configuration");
         }
+    }
+    Ok(())
+}
+
+/// Atomic video-quality change (QualityTable row/cell): writes codec, height
+/// and fps together so a running buffer restarts ONCE, with the same
+/// revert-on-failure semantics as `set_setting`.
+#[tauri::command]
+pub async fn set_video_quality(
+    app: AppHandle,
+    codec: String,
+    height: u32,
+    fps: u32,
+) -> Result<(), String> {
+    if !["h264", "hevc", "av1", "x264"].contains(&codec.as_str()) {
+        return Err("unknown codec".into());
+    }
+    if fps != 30 && fps != 60 {
+        return Err("fps must be 30 or 60".into());
+    }
+    if height != 0 && !crate::video_quality::HEIGHTS.contains(&height) {
+        return Err("unknown height".into());
+    }
+    let pairs: [(&str, String); 4] = [
+        ("video_codec", codec),
+        ("out_height", height.to_string()),
+        ("fps", fps.to_string()),
+        // Picking a ladder cell exits custom mode; otherwise the custom
+        // bitrate/fps would silently override the user's choice.
+        ("video_mode", "ladder".to_string()),
+    ];
+    let previous: Vec<(&str, Option<String>)> = {
+        let db = app.state::<DbState>();
+        let settings = db.get_settings().unwrap_or_default();
+        pairs
+            .iter()
+            .map(|(k, _)| (*k, settings.get(*k).cloned()))
+            .collect()
+    };
+    {
+        let db = app.state::<DbState>();
+        for (key, value) in &pairs {
+            db.set_setting(key, value)?;
+        }
+    }
+    let running = {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        let r = guard.is_some();
+        drop(guard);
+        r
+    };
+    if running {
+        stop_engine(&app).await?;
+        if let Err(e) = start_engine(&app, None).await {
+            {
+                let db = app.state::<DbState>();
+                for (key, prev) in &previous {
+                    if let Some(p) = prev {
+                        let _ = db.set_setting(key, p);
+                    }
+                }
+            }
+            if start_engine(&app, None).await.is_ok() {
+                notify(
+                    &app,
+                    "Cambio no aplicado; se restauró la configuración anterior",
+                    "Change not applied; previous configuration restored",
+                );
+            }
+            return Err(e);
+        }
+        notify(
+            &app,
+            "Búfer reiniciado con la nueva calidad",
+            "Buffer restarted with the new quality",
+        );
+    }
+    Ok(())
+}
+
+/// Free physical memory for the settings warning (`free_mb: null` when the
+/// platform cannot report it).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SystemMemory {
+    pub free_mb: Option<u64>,
+}
+
+#[tauri::command]
+pub fn system_memory() -> SystemMemory {
+    SystemMemory {
+        free_mb: crate::os::memory_free_mb(),
+    }
+}
+
+/// One `key=value` setting for the bulk command.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SettingPair {
+    pub key: String,
+    pub value: String,
+}
+
+/// Atomic multi-setting write (QualityTable custom mode / container): all keys
+/// land together and a running buffer restarts ONCE, with the same
+/// revert-on-failure semantics as `set_setting`.
+#[tauri::command]
+pub async fn set_settings(app: AppHandle, values: Vec<SettingPair>) -> Result<(), String> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let previous: Vec<(String, Option<String>)> = {
+        let db = app.state::<DbState>();
+        let settings = db.get_settings().unwrap_or_default();
+        values
+            .iter()
+            .map(|p| (p.key.clone(), settings.get(&p.key).cloned()))
+            .collect()
+    };
+    {
+        let db = app.state::<DbState>();
+        for pair in &values {
+            db.set_setting(&pair.key, &pair.value)?;
+        }
+    }
+    let restart = values
+        .iter()
+        .any(|p| RESTART_KEYS.contains(&p.key.as_str()));
+    if !restart {
+        return Ok(());
+    }
+    let running = {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        let r = guard.is_some();
+        drop(guard);
+        r
+    };
+    if running {
+        stop_engine(&app).await?;
+        if let Err(e) = start_engine(&app, None).await {
+            {
+                let db = app.state::<DbState>();
+                for (key, prev) in &previous {
+                    if let Some(p) = prev {
+                        let _ = db.set_setting(key, p);
+                    }
+                }
+            }
+            if start_engine(&app, None).await.is_ok() {
+                notify(
+                    &app,
+                    "Cambio no aplicado; se restauró la configuración anterior",
+                    "Change not applied; previous configuration restored",
+                );
+            }
+            return Err(e);
+        }
+        notify(
+            &app,
+            "Búfer reiniciado con la nueva configuración",
+            "Buffer restarted with new configuration",
+        );
     }
     Ok(())
 }
@@ -367,7 +590,7 @@ fn buffer_seconds(db: &DbState) -> i64 {
         .ok()
         .and_then(|s| s.get("buffer_seconds").and_then(|v| v.parse().ok()))
         .unwrap_or(30)
-        .clamp(5, 300)
+        .max(5)
 }
 
 fn is_spanish(app: &AppHandle) -> bool {
@@ -392,7 +615,7 @@ pub async fn start_buffer(app: AppHandle) -> Result<EngineStatus, String> {
             return Err("buffer already running".into());
         }
     }
-    start_engine(&app).await
+    start_engine(&app, None).await
 }
 
 #[tauri::command]
@@ -408,15 +631,15 @@ pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
     let st = app.state::<AppState>();
     let mut guard = st.recorder.lock().await;
     let had_engine = guard.is_some();
-    let (alive, tail) = match guard.as_mut() {
+    let (mut alive, tail, fallback) = match guard.as_mut() {
         Some(engine) => {
             if engine.check_alive() {
-                (true, Vec::new())
+                (true, Vec::new(), engine.source_fallback_request())
             } else {
-                (false, engine.log_tail())
+                (false, engine.log_tail(), None)
             }
         }
-        None => (false, Vec::new()),
+        None => (false, Vec::new(), None),
     };
     if had_engine && !alive {
         guard.take();
@@ -435,6 +658,26 @@ pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
             "El motor de captura se detuvo inesperadamente",
             "Capture engine stopped unexpectedly",
         );
+    } else if let Some(next) = fallback {
+        // Mid-session degradation (WGC lost the display, e.g. windowed ->
+        // legacy exclusive fullscreen): respawn on DXGI Duplication once.
+        eprintln!("[moonclip] source stalled: switching capture source to {next}");
+        if stop_engine(app).await.is_ok() {
+            match start_engine(app, Some(next)).await {
+                Ok(_) => notify(
+                    app,
+                    "Fuente de captura cambiada a DXGI Duplication",
+                    "Capture source switched to DXGI Duplication",
+                ),
+                Err(e) => {
+                    eprintln!("[moonclip] source switch failed: {e}");
+                    set_engine_error(app, Some(e)).await;
+                    alive = false;
+                }
+            }
+        } else {
+            alive = false;
+        }
     }
     alive
 }
@@ -815,7 +1058,7 @@ pub async fn fix_gsr_caps(app: AppHandle) -> Result<(), String> {
     caps::fix_caps(&path).await
 }
 
-/// Capture devices (Linux: bundled GSR query; Windows: cpal enumeration).
+/// Capture devices (Linux: bundled GSR query; Windows: WASAPI enumeration).
 #[tauri::command]
 pub async fn list_audio_devices(app: AppHandle) -> Result<Vec<AudioDevice>, String> {
     devices::list_audio_devices(&app).await
@@ -952,6 +1195,63 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         vendor,
     })
 }
+#[cfg(test)]
+mod custom_mode_tests {
+    use super::custom_capture_params;
+
+    #[test]
+    fn ladder_mode_ignores_custom_values() {
+        assert_eq!(
+            custom_capture_params("ladder", "120", "50000", 60, 20000),
+            (60, 20000, false)
+        );
+    }
+
+    #[test]
+    fn custom_clamps_fps_to_v1_limits() {
+        assert_eq!(
+            custom_capture_params("custom", "24", "50000", 60, 20000),
+            (30, 50000, true)
+        );
+        assert_eq!(
+            custom_capture_params("custom", "30", "50000", 60, 20000),
+            (30, 50000, false)
+        );
+        assert_eq!(
+            custom_capture_params("custom", "120", "50000", 60, 20000),
+            (60, 50000, true)
+        );
+        assert_eq!(
+            custom_capture_params("custom", "144", "50000", 60, 20000),
+            (60, 50000, true)
+        );
+        assert_eq!(
+            custom_capture_params("custom", "junk", "50000", 30, 10000),
+            (30, 50000, false)
+        );
+    }
+
+    #[test]
+    fn custom_bitrate_range_guards() {
+        assert_eq!(
+            custom_capture_params("custom", "60", "2000", 60, 20000),
+            (60, 20000, false)
+        );
+        assert_eq!(
+            custom_capture_params("custom", "60", "100000", 60, 20000),
+            (60, 100000, false)
+        );
+        assert_eq!(
+            custom_capture_params("custom", "60", "100001", 60, 20000),
+            (60, 20000, false)
+        );
+        assert_eq!(
+            custom_capture_params("custom", "60", "", 60, 20000),
+            (60, 20000, false)
+        );
+    }
+}
+
 /// Open a clip with the system default player, entirely from the backend.
 ///
 /// Rationale: frontend `openPath` goes through IPC capability checks
@@ -996,7 +1296,8 @@ pub async fn open_clip_external(app: AppHandle, clip_id: String) -> Result<(), S
 /// NOTE: Tauri camelCases Rust params on the wire: frontend sends `clipId`,
 /// never `clip_id` (see docs/01_ARCHITECTURE.md IPC rule).
 #[tauri::command]
-pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Result<String, String> {    if track < 1 || track > 3 {
+pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Result<String, String> {
+    if !(1..=3).contains(&track) {
         return Err("track must be 1 (mix), 2 (game) or 3 (mic)".into());
     }
     let db = app.state::<DbState>();

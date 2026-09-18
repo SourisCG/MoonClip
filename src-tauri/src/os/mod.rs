@@ -28,3 +28,22 @@ pub use windows::{
 pub use linux::{
     audio, backend_name, binary, caps, devices, open, paths, prepare_environment, video, Engine,
 };
+
+/// Free physical memory in MB when the platform can report it (used by the
+/// settings UI to color the buffer-size warning; `None` hides the check).
+/// Linux intentionally returns `None` until the Linux owner wires it.
+#[cfg(target_os = "windows")]
+pub fn memory_free_mb() -> Option<u64> {
+    use ::windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    ok.is_ok().then_some(status.ullAvailPhys / (1024 * 1024))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn memory_free_mb() -> Option<u64> {
+    None
+}

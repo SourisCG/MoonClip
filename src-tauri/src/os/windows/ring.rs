@@ -17,6 +17,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use super::pts::default_sync_bias_ns;
+
 /// MPEG-TS packet size.
 pub const TS_PACKET_LEN: usize = 188;
 /// Ring chunk size: fixed blocks keep trimming O(1) (see `TsRing`).
@@ -35,20 +37,8 @@ const CAPTURE_WINDOW_NS: i128 = 10_000_000_000;
 /// PAT/PMT + SPS/PPS). `-ss` then starts the output exactly at the keyframe.
 pub const CUT_PREROLL_NS: i64 = 2_000_000_000;
 
-/// Default video-anchor bias in ms: the WGC/DDA frame reaches ffmpeg's filter
-/// ~70 ms after its presentation timestamp (compositor + frame pool), measured
-/// on this rig with the flash+beep reference (`live_av_offset_capture` +
-/// `analyze_av.py`, both `gfxcapture` and `ddagrab` agree). Re-measure with
-/// `MOONCLIP_SYNC_BIAS_MS=<ms>` when the compositor/driver stack changes.
-pub const DEFAULT_SYNC_BIAS_MS: i64 = 70;
-
-fn default_sync_bias_ns() -> i128 {
-    let ms = std::env::var("MOONCLIP_SYNC_BIAS_MS")
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .unwrap_or(DEFAULT_SYNC_BIAS_MS);
-    ms as i128 * 1_000_000
-}
+/// Cheap chunk-handle snapshot: chunks, offset into the first one, total bytes.
+type ChunkSnapshot = (VecDeque<Arc<Vec<u8>>>, usize, usize);
 
 /// One indexed video frame (PES packet).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -473,7 +463,7 @@ impl TsRing {
                         let head = self.peek(self.parse_abs) == Some(0x47);
                         let pair = self
                             .peek(self.parse_abs + TS_PACKET_LEN as u64)
-                            .map_or(true, |b| b == 0x47);
+                            .is_none_or(|b| b == 0x47);
                         if head && pair {
                             ok = true;
                             break;
@@ -824,7 +814,7 @@ impl TsRing {
 
     /// Cheap snapshot (Arc handles) of the stored chunks covering
     /// `[abs, base + len)`: chunks, offset into the first one and total bytes.
-    fn chunk_snapshot_from(&self, abs: u64) -> Option<(VecDeque<Arc<Vec<u8>>>, usize, usize)> {
+    fn chunk_snapshot_from(&self, abs: u64) -> Option<ChunkSnapshot> {
         let mut skip = abs.checked_sub(self.base)? as usize;
         if skip >= self.len {
             return None;

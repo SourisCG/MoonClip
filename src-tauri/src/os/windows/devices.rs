@@ -1,25 +1,30 @@
-//! Capture device enumeration (Windows): `cpal` hosts, no sidecar.
-//! Output (render) devices are game/desktop sources (WASAPI loopback reads
-//! them); input (capture) devices are microphones. Same item shape as
-//! `os/linux/devices`; the AppHandle is unused here (cpal needs no sidecar)
+//! Capture device enumeration (Windows): WASAPI endpoints, no sidecar.
+//! Output (render) devices are game/desktop sources (loopback reads them);
+//! input (capture) devices are microphones. Same item shape as
+//! `os/linux/devices`; the AppHandle is unused here (WASAPI needs no sidecar)
 //! but keeps one shared signature across backends.
+//!
+//! `id` is the WASAPI endpoint id (stable across renames); legacy
+//! friendly-name settings still resolve by case-insensitive name.
 
 use super::super::AudioDevice;
-use cpal::traits::{DeviceTrait, HostTrait};
 use tauri::AppHandle;
+use wasapi::{Device, DeviceEnumerator, Direction};
 
-/// Friendly device name, or `None` when the OS will not name it.
-fn dev_name(d: &cpal::Device) -> Option<String> {
-    d.name()
-        .ok()
-        .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty())
+fn enumerator() -> Result<DeviceEnumerator, String> {
+    let _ = wasapi::initialize_mta();
+    DeviceEnumerator::new().map_err(|e| format!("audio enumerator: {e}"))
+}
+
+fn kind_of(direction: &Direction) -> &'static str {
+    match direction {
+        Direction::Render => "desktop",
+        Direction::Capture => "mic",
+    }
 }
 
 pub async fn list_audio_devices(_app: &AppHandle) -> Result<Vec<AudioDevice>, String> {
-    // Device enumeration is quick; keep it sync-shaped inside async for
-    // signature parity with the Linux backend.
-    let host = cpal::default_host();
+    let en = enumerator()?;
     let mut devices = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut push = |id: String, description: String, kind: &str| {
@@ -35,35 +40,32 @@ pub async fn list_audio_devices(_app: &AppHandle) -> Result<Vec<AudioDevice>, St
     // buffer start, so a Windows output switch is tracked automatically).
     // Linux lists the same ids from GSR; Windows must offer them too or the
     // user can never go back to automatic after picking a concrete device.
-    let default_out = host
-        .default_output_device()
-        .and_then(|d| dev_name(&d))
+    let default_out = en
+        .get_default_device(&Direction::Render)
+        .ok()
+        .and_then(|d| d.get_friendlyname().ok())
         .unwrap_or_default();
     push("default_output".into(), default_out, "desktop");
-    let default_in = host
-        .default_input_device()
-        .and_then(|d| dev_name(&d))
+    let default_in = en
+        .get_default_device(&Direction::Capture)
+        .ok()
+        .and_then(|d| d.get_friendlyname().ok())
         .unwrap_or_default();
     push("default_input".into(), default_in, "mic");
-    match host.output_devices() {
-        Ok(list) => {
-            for d in list {
-                if let Some(n) = dev_name(&d) {
-                    push(n.clone(), n, "desktop");
-                }
-            }
+    for direction in [Direction::Render, Direction::Capture] {
+        let Ok(coll) = en.get_device_collection(&direction) else {
+            continue;
+        };
+        let n = coll.get_nbr_devices().unwrap_or(0);
+        for i in 0..n {
+            let Ok(d) = coll.get_device_at_index(i) else {
+                continue;
+            };
+            let (Ok(id), Ok(name)) = (d.get_id(), d.get_friendlyname()) else {
+                continue;
+            };
+            push(id, name, kind_of(&direction));
         }
-        Err(e) => return Err(format!("cannot list output devices: {e}")),
-    }
-    match host.input_devices() {
-        Ok(list) => {
-            for d in list {
-                if let Some(n) = dev_name(&d) {
-                    push(n.clone(), n, "mic");
-                }
-            }
-        }
-        Err(e) => return Err(format!("cannot list input devices: {e}")),
     }
     if devices.is_empty() {
         return Err("no audio devices found".into());
@@ -71,51 +73,60 @@ pub async fn list_audio_devices(_app: &AppHandle) -> Result<Vec<AudioDevice>, St
     Ok(devices)
 }
 
-/// Resolve a `cpal` device by the id `list_audio_devices` returned
-/// (the OS friendly name). `render=true` searches outputs (loopback game
-/// capture), `render=false` searches inputs (mic). Matching is
-/// case-insensitive because Windows may change capitalization after a
-/// driver reinstall.
-pub fn find_device(id: &str, render: bool) -> Option<cpal::Device> {
-    let host = cpal::default_host();
-    let list = if render {
-        host.output_devices().ok()?
+/// Resolve a settings id to a WASAPI device: magic ids (and empty) = OS
+/// default, endpoint ids by exact match, else legacy friendly name
+/// (case-insensitive).
+pub fn resolve_endpoint(id: &str, render: bool) -> Result<Device, String> {
+    let en = enumerator()?;
+    let direction = if render {
+        Direction::Render
     } else {
-        host.input_devices().ok()?
+        Direction::Capture
     };
-    let want = id.trim().to_lowercase();
-    list.into_iter()
-        .find(|d| dev_name(d).map(|n| n.to_lowercase()).as_deref() == Some(want.as_str()))
+    let wanted = id.trim();
+    let magic = if render {
+        is_default_output_id(wanted)
+    } else {
+        is_default_input_id(wanted)
+    };
+    if magic {
+        return en.get_default_device(&direction).map_err(|e| {
+            format!(
+                "{} default device: {e}",
+                if render { "output" } else { "input" }
+            )
+        });
+    }
+    if let Ok(d) = en.get_device(wanted) {
+        return Ok(d);
+    }
+    if let Ok(coll) = en.get_device_collection(&direction) {
+        let n = coll.get_nbr_devices().unwrap_or(0);
+        for i in 0..n {
+            if let Ok(d) = coll.get_device_at_index(i) {
+                if d.get_friendlyname()
+                    .map(|n| n.eq_ignore_ascii_case(wanted))
+                    .unwrap_or(false)
+                {
+                    return Ok(d);
+                }
+            }
+        }
+    }
+    Err(format!(
+        "{} device not found: {wanted}",
+        if render { "output" } else { "input" }
+    ))
 }
 
 /// GSR magic ids (Linux defaults, also seeded into `settings` by migration
-/// `003_devices.sql`). On Windows they mean "the OS default device" — cpal
-/// friendly names never equal them, so they must be intercepted before the
-/// by-name search or stock installs can never link audio.
+/// `003_devices.sql`). On Windows they mean "the OS default device".
 pub fn is_default_output_id(id: &str) -> bool {
     matches!(id.trim(), "" | "default_output")
 }
 
 pub fn is_default_input_id(id: &str) -> bool {
     matches!(id.trim(), "" | "default_input")
-}
-
-/// Output (render) device for a game id: default endpoint for empty/GSR
-/// magic ids, by-name lookup otherwise.
-pub fn find_output_device(id: &str) -> Option<cpal::Device> {
-    if is_default_output_id(id) {
-        return cpal::default_host().default_output_device();
-    }
-    find_device(id.trim(), true)
-}
-
-/// Input (capture) device for a mic id: default endpoint for empty/GSR
-/// magic ids, by-name lookup otherwise.
-pub fn find_input_device(id: &str) -> Option<cpal::Device> {
-    if is_default_input_id(id) {
-        return cpal::default_host().default_input_device();
-    }
-    find_device(id.trim(), false)
 }
 
 #[cfg(test)]

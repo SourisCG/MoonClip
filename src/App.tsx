@@ -6,6 +6,7 @@ import { MoonClipStarfield } from "./components/starfield/MoonClipStarfield";
 import { MoonClipLogo } from "./components/logo/MoonClipLogo";
 import { Topbar } from "./components/topbar/Topbar";
 import { SettingsModal } from "./components/settings/SettingsModal";
+import { SetupWizard } from "./components/settings/SetupWizard";
 import { AppManager } from "./components/settings/AppManager";
 import { GalleryView } from "./components/gallery/GalleryView";
 import { useClips } from "./hooks/useClips";
@@ -26,6 +27,21 @@ export default function App() {
   }, [refreshClips]);
   const { status, busy, error: engineError, start, stop, saveNow } = useEngine(onClipSaved);
   const [hotkey, setHotkey] = useState("F9");
+  const [showWizard, setShowWizard] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<Record<string, string>>("get_settings")
+      .then((s) => {
+        if (!cancelled && s.setup_done !== "1") setShowWizard(true);
+      })
+      .catch(() => {
+        // first-run check is best effort
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,7 +174,11 @@ export default function App() {
               <>
                 <h2 className="text-xl font-bold text-slate-100">{t("nav.settings")}</h2>
                 <div className="mt-4">
-                  <SettingsModal engineStatus={status} onHotkeyChange={setHotkey} />
+                  <SettingsModal
+                    engineStatus={status}
+                    onHotkeyChange={setHotkey}
+                    onOpenWizard={() => setShowWizard(true)}
+                  />
                 </div>
               </>
             )}
@@ -195,6 +215,7 @@ export default function App() {
           </main>
         </div>
       </div>
+      {showWizard && <SetupWizard onClose={() => setShowWizard(false)} />}
     </div>
   );
 }

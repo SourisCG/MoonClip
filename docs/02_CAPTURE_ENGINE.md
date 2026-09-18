@@ -81,6 +81,13 @@ each frame gets ~2x the bits (same RAM per second, half the encoder load,
 more judder from high-refresh sources). `-s` omitted at source resolution.
 Same-second double saves never collide: the saver renames to `stem_2.mp4`,
 `stem_3.mp4`… instead of overwriting + UNIQUE failure.
+V2 adds the 480p and 2160p rows to the shared ladder (H264 5M / 60M,
+HEVC 5M / 35M, AV1 5M / 25M) and `video_quality::cqp_export`
+(24/23/22/20/19/18) for offline re-encodes; the buffer itself is always CBR.
+Custom mode (`video_mode=custom`) uses the `custom_bitrate_kbps` slider
+(3 000–100 000) and `custom_fps`, clamped to 30/60 in V1 with a notice.
+The saved container follows the `container` setting (`mp4` default with
+`+faststart`, or `mkv`).
 
 ### 2.3 Delivery strategy: source buffer + lanczos on save
 
@@ -147,7 +154,7 @@ pavucontrol's Recording tab, which upstream itself recommends.
   near 0 dB at unity; mic ≈120–150 depending on the source; 200% is a boost
   tool for quiet sources, not a recommended level).
 - Windows: gains persist identically; software multiplication lands on the
-  Windows trip (we own the cpal path there).
+  WASAPI capture path (we own it there).
 
 ### 2.6 Deps (Linux)
 
@@ -172,9 +179,13 @@ rodio = "0.21" # confirmation ding (synthesized, no assets)
   SOURCE=ddagrab` switches the monitor source to Desktop Duplication as a
   fallback; window/app capture will use `gfxcapture`'s `window_title`/
   `window_exe`/`hwnd` selectors later.)
-- Files: `os/windows/engine.rs` (process + ring + save), `os/windows/ts.rs`
-  (MPEG-TS/PES index: PTS, keyframes, QPC calibration), `os/windows/audio.rs`
-  (WASAPI loopback + mic), `os/windows/video.rs` (DXGI vendor/monitors).
+- Files (V2 rewrite, 2026-09-17): `os/windows/detector.rs` (DXGI vendor,
+  monitors, probed codecs), `video.rs` (source cascade + filter graph),
+  `encode.rs` (§9 args + presets), `engine.rs` (child + ring + save),
+  `ring.rs` (MPEG-TS/PES index: PTS, keyframes, QPC calibration), `pts.rs`
+  (single QPC clock + 70 ms anchor bias), `audio.rs` (WASAPI loopback + mic),
+  `dsp.rs` (gain/mix/peaks/window builder), `mux.rs` (§10 container output),
+  `devices.rs` (WASAPI endpoints). `cpal` and the old `ts.rs` are gone.
 - Live chain (spawned at `start_buffer`):
   ```
   ffmpeg -loglevel info \
@@ -207,20 +218,34 @@ rodio = "0.21" # confirmation ding (synthesized, no assets)
   `MOONCLIP_SYNC_BIAS_MS`) absorbs the compositor/frame-pool delivery lag
   that `showinfo` cannot see; it is not per-codec. Residual on the
   flash+beep rig: **median −3 ms, max ±13 ms**.
-- **Audio (`audio.rs`)** is a rewrite: per-stream lock-free SPSC from the
-  cpal callback (no allocations, no mutexes on the audio thread) into
-  timestamped 10 ms i16 blocks; MMCSS "Pro Audio" on the callbacks; a
-  supervisor follows the OS default device, reopens errors, and reopens a
-  silent stall once per episode (with a keep-alive render stream so WASAPI
-  loopback delivers silence while the game is quiet). At save, each stem is
-  rebuilt on the QPC grid (`build_window`): block timestamps resample the
-  stream (device-clock drift correction) and only gaps > 50 ms become
-  silence, so there are no boundary clicks and no cumulative drift.
+- **Audio (`audio.rs` + `dsp.rs`)** runs on the `wasapi` crate (0.24):
+  endpoint loopback = render endpoint + `Direction::Capture` in shared mode
+  (the crate sets `AUDCLNT_STREAMFLAGS_LOOPBACK`), mic = `eCapture`; the
+  client is f32 48 kHz stereo with `autoconvert`. Each packet carries
+  `BufferInfo::timestamp` (raw QPC ticks → `pts::qpc_ticks_to_ns`), so audio
+  and video share one clock; `dsp::build_window` rebuilds each stem on the
+  QPC grid (only gaps > 50 ms become silence). Capture threads push into
+  lock-free SPSC rings; a silent keep-alive render stream keeps loopback
+  delivering while the game is quiet; the supervisor follows the OS default
+  device and reopens errors/stalls (3 s stall → one reopen per episode + 30 s
+  slow retry). MMCSS "Pro Audio" on the capture threads.
+- **Source cascade:** WGC (`gfxcapture`) is primary; a startup `signalstats`
+  probe switches to `ddagrab` when WGC yields no frames or an all-black
+  picture (legacy exclusive fullscreen). A mid-session stall requests the
+  same switch through the liveness sweep (restart + notification).
+- **Encoder load defaults:** the live recipe is the measured-light one
+  (NVENC p5 + spatial AQ + BF2, single-pass, no look-ahead; AMF without
+  `preencode`; QSV without `look_ahead`; x264 `veryfast+zerolatency`). The
+  SPEC §9 heavy knobs are opt-in via `MOONCLIP_ENCODER_HQ_FULL=1`. The
+  `capture_max_fps` setting (0 = auto 2× clamped to refresh) lets high-refresh
+  panels trade motion sampling for GPU headroom. `+faststart` is a setting,
+  default OFF (it rewrites the whole mdat on save).
 - **Save is copy-only** (target <1 s): the ring index selects the latest
   keyframe at/before `end − duration`, the staged TS starts exactly at that
-  PES with the latest PAT/PMT prepended (no `-ss` seek: the output starts at
-  0), WAVs for Mix/Game/Mic are written in parallel and muxed with
-  `-c:v copy -c:a aac -b:a 160k` + `patch_audio_alternate_group`.
+  PES with the latest PAT/PMT prepended (no `-ss` seek), WAVs for the solo
+  stems are written in parallel and muxed with `-c:v copy` + the §10 layout
+  (AAC 320/320/192, titles `Master Mix [Game+Voice]` / `Game/Desktop` /
+  `Microphone`, `+faststart`, `patch_audio_alternate_group`).
 - Robustness: the encoder child runs CPU class **HIGH by default**
   (`cpu_priority_class`; `MOONCLIP_CAPTURE_CPU_PRIO=0` restores ABOVE_NORMAL)
   with power throttling disabled and **GPU scheduling priority HIGH by default**
