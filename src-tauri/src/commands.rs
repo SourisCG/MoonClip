@@ -1,15 +1,14 @@
 //! Tauri IPC handlers (Phase 2: persistence; Phase 3: capture).
+//! V3 capture engine: embedded, isolated OBS Studio driven through obs-cmd.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::os::{
-    audio, backend_name, binary, caps, devices, open, video, AudioDevice, CaptureConfig,
-    CaptureEngine,
+    self, backend_name, devices, new_engine, obs, resolve_obs, resolve_obscmd, video, AudioDevice,
+    CaptureConfig, CaptureEngine,
 };
-use crate::video_quality;
-use crate::state::{AppState, Engine};
+use crate::state::AppState;
 use crate::storage::models::{ClipRecord, CustomApp, RegisterAppInput};
 use crate::storage::{secrets, DbState};
 
@@ -35,9 +34,7 @@ pub fn purge_missing_clips(db: State<'_, DbState>) -> Result<u32, String> {
     let missing: Vec<String> = db
         .list_clips()?
         .into_iter()
-        .filter(|c| {
-            !crate::storage::paths::resolve_clip_path(&base, &c.file_name).exists()
-        })
+        .filter(|c| !crate::storage::paths::resolve_clip_path(&base, &c.file_name).exists())
         .map(|c| c.id)
         .collect();
     let n = missing.len() as u32;
@@ -62,159 +59,9 @@ pub fn get_settings(db: State<'_, DbState>) -> Result<HashMap<String, String>, S
     db.get_settings()
 }
 
-async fn start_engine(app: &AppHandle, source_override: Option<String>) -> Result<EngineStatus, String> {
-    let db = app.state::<DbState>();
-    let dir = db.clips_dir()?;
-    let secs = buffer_seconds(&db) as u32;
-    let mic_device = setting_str(&db, "mic_device", "default_input");
-    let desktop_device = setting_str(&db, "desktop_device", "default_output");
-    let (gsr_bin, source) = match binary::backend_binary(app) {
-        Ok(v) => v,
-        // Native backend (Windows WGC): no sidecar binary. Per-OS probes
-        // ignore this path, so shared code stays free of OS branches.
-        Err(_) => (PathBuf::new(), "native"),
-    };
-    eprintln!("[moonclip] capture backend: {} ({})", gsr_bin.display(), source);
-
-    // Video quality: Medal ladder + old-MoonLit NVENC HQ recipe.
-    let mut codec = setting_str(&db, "video_codec", "h264");
-    if !["h264", "hevc", "av1", "x264"].contains(&codec.as_str()) {
-        codec = "h264".to_string();
-    }
-    let out_height: u32 = setting_str(&db, "out_height", "0").parse().unwrap_or(0);
-    // Capture framerate: 30 or 60 only (MVP). Anything else falls back to 60.
-    let ladder_fps: u32 = match setting_str(&db, "fps", "60").parse().unwrap_or(60) {
-        30 => 30,
-        _ => 60,
-    };
-    let vendor = video::vendor(&gsr_bin).await;
-    let monitors = video::list_monitors(&gsr_bin).await;
-    let monitor = setting_str(&db, "monitor", "");
-    // Source height: selected monitor, else tallest known monitor.
-    let source_height = if monitor.trim().is_empty() {
-        monitors.iter().map(|m| m.height).max().unwrap_or(0)
-    } else {
-        monitors
-            .iter()
-            .find(|m| m.name == monitor.trim())
-            .map(|m| m.height)
-            .unwrap_or(0)
-    };
-    let ladder_height = if out_height == 0 {
-        if source_height > 0 { source_height } else { 1080 }
-    } else {
-        out_height
-    };
-    let ladder_bitrate = video_quality::bitrate_kbps(ladder_height, &codec);
-    // Custom mode (§17): V1 clamps the FPS slider to 30/60 and the bitrate to
-    // the 3–100 Mbps range; invalid values fall back to the ladder.
-    let (fps, bitrate, fps_clamped) = custom_capture_params(
-        &setting_str(&db, "video_mode", "ladder"),
-        &setting_str(&db, "custom_fps", ""),
-        &setting_str(&db, "custom_bitrate_kbps", ""),
-        ladder_fps,
-        ladder_bitrate,
-    );
-    if fps_clamped {
-        eprintln!("[moonclip] custom fps clamped to {fps} (V1 supports 30/60)");
-    }
-    // Capture plan. Backends that scale on the GPU live (Windows gfxcapture)
-    // buffer directly at the delivered height, so saves are copy-only. The
-    // GSR backend keeps the source-resolution buffer + lanczos save transcode
-    // (its live scaler proved soft on text at non-integer ratios).
-    let (capture_height, buffer_bitrate, save_height, save_bitrate) =
-        if video::scales_live() {
-            (out_height, bitrate, 0, bitrate)
-        } else if out_height != 0 && source_height > 0 && out_height < source_height {
-            (0, video_quality::bitrate_kbps(source_height, &codec), out_height, bitrate)
-        } else {
-            (out_height, bitrate, 0, bitrate)
-        };
-    // NVENC HQ opts only where valid (NVIDIA + h264/hevc); elsewhere backend defaults.
-    let nvenc_opts = if vendor == "nvidia" && (codec == "h264" || codec == "hevc") {
-        Some(video_quality::nvenc_hq_opts(&codec))
-    } else {
-        None
-    };
-    // Save-time encoder per GPU vendor (None = keep source file on save).
-    let save_encoder = video::transcode_encoder(&vendor, &codec);
-    // Compatibility mode: 1 audio track (Mix) instead of 3, for players that
-    // ignore the MP4 default-track flags. Applies at save time, no restart.
-    let single_track = matches!(
-        setting_str(&db, "audio_single_track", "0").as_str(),
-        "1" | "true"
-    );
-    eprintln!("[moonclip] video: codec={codec} height={} fps={fps} vendor={vendor} cbr={bitrate}kbps nvenc_hq={} monitor={} capture={} save={} save_enc={:?}",
-        if out_height == 0 { "source".to_string() } else { out_height.to_string() },
-        nvenc_opts.is_some(),
-        if monitor.trim().is_empty() { "auto".to_string() } else { monitor.clone() },
-        if capture_height == 0 { "source".to_string() } else { capture_height.to_string() },
-        if save_height == 0 { "-".to_string() } else { format!("lanczos->{save_height}p") },
-        save_encoder);
-
-    let mut engine = Engine::new();
-    // ffmpeg for encode/mux/probe: bundled sidecar first (embedded, ships
-    // with the installer), dev PATH fallback. Never optional in practice —
-    // resolve_ffmpeg always returns at least the PATH fallback.
-    let ffmpeg_bin = crate::editor::ffmpeg::resolve_ffmpeg(app).ok();
-    engine
-        .start_buffer(CaptureConfig {
-            duration_seconds: secs,
-            fps,
-            output_dir: dir,
-            gsr_bin: Some(gsr_bin),
-            source: monitor,
-            desktop_device,
-            mic_device,
-            codec,
-            out_height: capture_height,
-            bitrate_kbps: buffer_bitrate,
-            save_height,
-            save_bitrate_kbps: save_bitrate,
-            save_encoder,
-            nvenc_opts,
-            ffmpeg_bin,
-            audio_single_track: single_track,
-            source_override,
-            capture_max_fps: setting_str(&db, "capture_max_fps", "0")
-                .parse()
-                .unwrap_or(0),
-            faststart: matches!(
-                setting_str(&db, "faststart", "0").as_str(),
-                "1" | "true"
-            ),
-            container: setting_str(&db, "container", "mp4"),
-        })
-        .await?;
-    let tracks = audio::linked_count(&engine.audio_args()).await;
-    set_engine_error(app, None).await;
-    let status = EngineStatus {
-        running: true,
-        backend: engine.backend_name().to_string(),
-        tracks_linked: tracks,
-        audio_error: read_audio_error(app).await,
-        engine_error: None,
-    };
-    {
-        let st = app.state::<AppState>();
-        *st.recorder.lock().await = Some(engine);
-    }
-    // Apply persisted per-track gains to the fresh GSR streams (best effort).
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        match apply_saved_gains(&app2).await {
-            Ok(n) => {
-                eprintln!("[moonclip] gains applied to {n} tracks");
-                set_audio_error(&app2, None).await;
-            }
-            Err(e) => {
-                eprintln!("[moonclip] gain apply failed: {e}");
-                set_audio_error(&app2, Some(e)).await;
-            }
-        }
-    });
-    Ok(status)
-}
+// ---------------------------------------------------------------------------
+// Capture configuration
+// ---------------------------------------------------------------------------
 
 fn setting_str(db: &DbState, key: &str, default: &str) -> String {
     db.get_settings()
@@ -224,10 +71,18 @@ fn setting_str(db: &DbState, key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-/// Custom mode (§17) capture parameters. `ladder` keeps the Medal row; in
-/// `custom` the FPS slider is clamped to the V1 engine limit (30/60) and the
-/// bitrate to the slider range (3–100 Mbps); invalid values fall back to the
-/// ladder. Returns `(fps, bitrate_kbps, fps_was_clamped)`.
+fn buffer_seconds(db: &DbState) -> i64 {
+    db.get_settings()
+        .ok()
+        .and_then(|s| s.get("buffer_seconds").and_then(|v| v.parse().ok()))
+        .unwrap_or(30)
+        .max(5)
+}
+
+/// Custom mode capture parameters. `ladder` keeps the Medal row; in `custom`
+/// the FPS is one of the Medal values (24/30/60/120/144) and the bitrate sits
+/// in the slider range (3–100 Mbps); invalid values fall back to the ladder.
+/// Returns `(fps, bitrate_kbps, was_clamped)`.
 pub(crate) fn custom_capture_params(
     mode: &str,
     custom_fps: &str,
@@ -240,11 +95,9 @@ pub(crate) fn custom_capture_params(
     }
     let wanted_fps = custom_fps.trim().parse::<u32>().ok();
     let (fps, clamped) = match wanted_fps {
-        Some(30) => (30, false),
-        Some(60) => (60, false),
-        Some(24) => (30, true),
-        Some(120) | Some(144) => (60, true),
-        _ => (ladder_fps, false),
+        Some(v) if [24, 30, 60, 120, 144].contains(&v) => (v, false),
+        Some(_) => (ladder_fps, true),
+        None => (ladder_fps, false),
     };
     let bitrate = custom_kbps
         .trim()
@@ -253,6 +106,213 @@ pub(crate) fn custom_capture_params(
         .filter(|v| (3_000..=100_000).contains(v))
         .unwrap_or(ladder_kbps);
     (fps, bitrate, clamped)
+}
+
+/// Overrides for the hardware test (never persisted by the test itself).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StartOverrides {
+    pub height: Option<u32>,
+    pub fps: Option<u32>,
+    pub codec: Option<String>,
+    pub encoder: Option<String>,
+    pub bitrate_kbps: Option<u32>,
+    pub duration_seconds: Option<u32>,
+}
+
+/// Build one validated capture config from persisted settings (+ overrides).
+pub(crate) async fn build_capture_config(
+    app: &AppHandle,
+    overrides: &StartOverrides,
+) -> Result<CaptureConfig, String> {
+    let db = app.state::<DbState>();
+    let output_dir = db.clips_dir()?;
+    let duration_seconds = overrides
+        .duration_seconds
+        .unwrap_or_else(|| buffer_seconds(&db) as u32);
+
+    // Legacy `video_codec=x264` (old CPU option) maps to h264 + cpu encoder.
+    let stored_codec = setting_str(&db, "video_codec", "h264");
+    let (mut codec, mut encoder) = match stored_codec.as_str() {
+        "x264" => ("h264".to_string(), "cpu".to_string()),
+        other => (other.to_string(), setting_str(&db, "video_encoder", "gpu")),
+    };
+    if !["h264", "hevc", "av1"].contains(&codec.as_str()) {
+        codec = "h264".to_string();
+    }
+    if !["gpu", "cpu"].contains(&encoder.as_str()) {
+        encoder = "gpu".to_string();
+    }
+    if let Some(c) = &overrides.codec {
+        if ["h264", "hevc", "av1"].contains(&c.as_str()) {
+            codec = c.clone();
+        }
+    }
+    if let Some(e) = &overrides.encoder {
+        if ["gpu", "cpu"].contains(&e.as_str()) {
+            encoder = e.clone();
+        }
+    }
+
+    // Monitors: the OBS `monitor_id` device id is the stored value (stable
+    // across index changes); legacy indices/alt names still resolve.
+    let monitors = video::list_monitors().await;
+    let monitor_setting = setting_str(&db, "monitor", "");
+    let selected = video::resolve_monitor(&monitors, &monitor_setting);
+    let (base_width, base_height) = selected
+        .map(|m| (m.width, m.height))
+        .unwrap_or((1920, 1080));
+
+    let out_height = overrides
+        .height
+        .unwrap_or_else(|| setting_str(&db, "out_height", "0").parse().unwrap_or(0));
+    let out_height = if out_height == 0 || out_height >= base_height {
+        0
+    } else {
+        out_height
+    };
+
+    let ladder_fps: u32 = match setting_str(&db, "fps", "60").parse().unwrap_or(60) {
+        30 => 30,
+        120 => 120,
+        144 => 144,
+        24 => 24,
+        _ => 60,
+    };
+    let ladder_bitrate = crate::video_quality::bitrate_kbps(
+        if out_height == 0 {
+            base_height
+        } else {
+            out_height
+        },
+        &codec,
+    );
+    let (mut fps, mut bitrate, fps_clamped) = custom_capture_params(
+        &setting_str(&db, "video_mode", "ladder"),
+        &setting_str(&db, "custom_fps", ""),
+        &setting_str(&db, "custom_bitrate_kbps", ""),
+        ladder_fps,
+        ladder_bitrate,
+    );
+    if fps_clamped {
+        eprintln!("[moonclip] custom fps not in Medal values, using {fps}");
+    }
+    if let Some(f) = overrides.fps {
+        fps = f;
+    }
+    if let Some(b) = overrides.bitrate_kbps {
+        bitrate = b;
+    }
+
+    // Private obs-websocket: dedicated port + generated password (persisted).
+    let port: u16 = setting_str(&db, "obs_ws_port", "4456")
+        .parse()
+        .unwrap_or(4456)
+        .clamp(1024, 65535);
+    let mut password = setting_str(&db, "obs_ws_password", "");
+    if password.len() < 16 {
+        password =
+            uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
+        let _ = db.set_setting("obs_ws_password", &password);
+    }
+
+    let (obs_bin, _) = resolve_obs(app)?;
+    let (obscmd_bin, _) = resolve_obscmd(app)?;
+
+    Ok(CaptureConfig {
+        duration_seconds,
+        fps,
+        output_dir,
+        codec,
+        encoder,
+        gpu_index: setting_str(&db, "gpu_index", "0").parse().unwrap_or(0),
+        bitrate_kbps: bitrate,
+        out_height,
+        monitor: selected.map(|m| m.name.clone()).unwrap_or_default(),
+        window: setting_str(&db, "capture_window", ""),
+        desktop_device: devices::resolve_obs_device_id(
+            &setting_str(&db, "desktop_device", "default_output"),
+            true,
+        )
+        .await,
+        mic_device: devices::resolve_obs_device_id(
+            &setting_str(&db, "mic_device", "default_input"),
+            false,
+        )
+        .await,
+        gain_game: setting_str(&db, "gain_game", "100")
+            .parse()
+            .unwrap_or(100)
+            .clamp(0, 200),
+        gain_mic: setting_str(&db, "gain_mic", "100")
+            .parse()
+            .unwrap_or(100)
+            .clamp(0, 200),
+        mute_game: matches!(setting_str(&db, "mute_game", "0").as_str(), "1" | "true"),
+        mute_mic: matches!(setting_str(&db, "mute_mic", "0").as_str(), "1" | "true"),
+        audio_single_track: matches!(
+            setting_str(&db, "audio_single_track", "0").as_str(),
+            "1" | "true"
+        ),
+        container: if setting_str(&db, "container", "mp4") == "mkv" {
+            "mkv".into()
+        } else {
+            "mp4".into()
+        },
+        vendor: video::vendor().await,
+        base_width,
+        base_height,
+        obs_bin: Some(obs_bin),
+        obscmd_bin: Some(obscmd_bin),
+        websocket_port: port,
+        websocket_password: password,
+    })
+}
+
+async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<EngineStatus, String> {
+    let config = build_capture_config(app, overrides).await?;
+    eprintln!(
+        "[moonclip] obs engine: {}x{}@{} {} {}kbps replay={}s codec={} monitor={} audio={}",
+        config.base_width,
+        config.base_height,
+        config.fps,
+        if config.encoder == "cpu" {
+            "x264"
+        } else {
+            "gpu"
+        },
+        config.bitrate_kbps,
+        config.duration_seconds,
+        config.codec,
+        if config.monitor.is_empty() {
+            "primary".into()
+        } else {
+            config.monitor.clone()
+        },
+        if config.audio_single_track {
+            "Mix"
+        } else {
+            "Mix+Game+Mic"
+        }
+    );
+    let mut engine = new_engine();
+    if let Err(e) = engine.start_buffer(config).await {
+        eprintln!("[moonclip] obs start failed: {e}");
+        return Err(e);
+    }
+    let tracks = engine.tracks_linked();
+    {
+        let st = app.state::<AppState>();
+        *st.recorder.lock().await = Some(engine);
+    }
+    set_engine_error(app, None).await;
+    set_audio_error(app, None).await;
+    Ok(EngineStatus {
+        running: true,
+        backend: backend_name().to_string(),
+        tracks_linked: tracks,
+        audio_error: None,
+        engine_error: None,
+    })
 }
 
 async fn stop_engine(app: &AppHandle) -> Result<EngineStatus, String> {
@@ -280,22 +340,47 @@ const RESTART_KEYS: &[&str] = &[
     "mic_device",
     "desktop_device",
     "video_codec",
+    "video_encoder",
+    "gpu_index",
     "out_height",
     "fps",
     "monitor",
+    "capture_window",
     "audio_single_track",
     "container",
     "video_mode",
     "custom_bitrate_kbps",
     "custom_fps",
-    "capture_max_fps",
-    "faststart",
+    "gain_game",
+    "gain_mic",
 ];
+
+/// Restart the engine if it is running (used by every restart-key write path).
+async fn restart_if_running(app: &AppHandle) -> Result<bool, String> {
+    let running = {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        let r = guard.is_some();
+        drop(guard);
+        r
+    };
+    if !running {
+        return Ok(false);
+    }
+    stop_engine(app).await?;
+    start_engine(app, &StartOverrides::default()).await?;
+    notify(
+        app,
+        "Búfer reiniciado con la nueva configuración",
+        "Buffer restarted with the new configuration",
+    );
+    Ok(true)
+}
 
 #[tauri::command]
 pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
     // Keep the previous value: a restart with an unusable new value (device
-    // unplugged, codec missing) must not leave the buffer stopped.
+    // unplugged, encoder missing) must not leave the buffer stopped.
     let previous = {
         let db = app.state::<DbState>();
         db.get_settings().ok().and_then(|s| s.get(&key).cloned())
@@ -304,42 +389,27 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
         let db = app.state::<DbState>();
         db.set_setting(&key, &value)?;
     }
-    // Changing the buffer length or capture devices with the engine running
-    // restarts it so length, devices and stored durations match the recorder.
     if RESTART_KEYS.contains(&key.as_str()) {
-        let running = {
-            let st = app.state::<AppState>();
-            let guard = st.recorder.lock().await;
-            let r = guard.is_some();
-            drop(guard);
-            r
-        };
-        if running {
-            stop_engine(&app).await?;
-            if let Err(e) = start_engine(&app, None).await {
-                // Revert + retry with the previous value; the UI still gets
-                // the original error so the user knows what failed.
-                if let Some(prev) = previous.as_deref() {
-                    let db = app.state::<DbState>();
-                    let _ = db.set_setting(&key, prev);
-                    if start_engine(&app, None).await.is_ok() {
-                        notify(
-                            &app,
-                            "Cambio no aplicado; se restauró la configuración anterior",
-                            "Change not applied; previous configuration restored",
-                        );
-                    }
+        if let Err(e) = restart_if_running(&app).await {
+            if let Some(prev) = previous.as_deref() {
+                let db = app.state::<DbState>();
+                let _ = db.set_setting(&key, prev);
+                if start_engine(&app, &StartOverrides::default()).await.is_ok() {
+                    notify(
+                        &app,
+                        "Cambio no aplicado; se restauró la configuración anterior",
+                        "Change not applied; previous configuration restored",
+                    );
                 }
-                return Err(e);
             }
-            notify(&app, "Búfer reiniciado con la nueva configuración", "Buffer restarted with new configuration");
+            return Err(e);
         }
     }
     Ok(())
 }
 
-/// Atomic video-quality change (QualityTable row/cell): writes codec, height
-/// and fps together so a running buffer restarts ONCE, with the same
+/// Atomic video-quality change (preset card): writes codec, height and fps
+/// together so a running buffer restarts ONCE, with the same
 /// revert-on-failure semantics as `set_setting`.
 #[tauri::command]
 pub async fn set_video_quality(
@@ -348,11 +418,11 @@ pub async fn set_video_quality(
     height: u32,
     fps: u32,
 ) -> Result<(), String> {
-    if !["h264", "hevc", "av1", "x264"].contains(&codec.as_str()) {
+    if !["h264", "hevc", "av1"].contains(&codec.as_str()) {
         return Err("unknown codec".into());
     }
-    if fps != 30 && fps != 60 {
-        return Err("fps must be 30 or 60".into());
+    if ![24, 30, 60, 120, 144].contains(&fps) {
+        return Err("fps must be one of 24/30/60/120/144".into());
     }
     if height != 0 && !crate::video_quality::HEIGHTS.contains(&height) {
         return Err("unknown height".into());
@@ -379,38 +449,23 @@ pub async fn set_video_quality(
             db.set_setting(key, value)?;
         }
     }
-    let running = {
-        let st = app.state::<AppState>();
-        let guard = st.recorder.lock().await;
-        let r = guard.is_some();
-        drop(guard);
-        r
-    };
-    if running {
-        stop_engine(&app).await?;
-        if let Err(e) = start_engine(&app, None).await {
-            {
-                let db = app.state::<DbState>();
-                for (key, prev) in &previous {
-                    if let Some(p) = prev {
-                        let _ = db.set_setting(key, p);
-                    }
+    if let Err(e) = restart_if_running(&app).await {
+        {
+            let db = app.state::<DbState>();
+            for (key, prev) in &previous {
+                if let Some(p) = prev {
+                    let _ = db.set_setting(key, p);
                 }
             }
-            if start_engine(&app, None).await.is_ok() {
-                notify(
-                    &app,
-                    "Cambio no aplicado; se restauró la configuración anterior",
-                    "Change not applied; previous configuration restored",
-                );
-            }
-            return Err(e);
         }
-        notify(
-            &app,
-            "Búfer reiniciado con la nueva calidad",
-            "Buffer restarted with the new quality",
-        );
+        if start_engine(&app, &StartOverrides::default()).await.is_ok() {
+            notify(
+                &app,
+                "Cambio no aplicado; se restauró la configuración anterior",
+                "Change not applied; previous configuration restored",
+            );
+        }
+        return Err(e);
     }
     Ok(())
 }
@@ -436,8 +491,8 @@ pub struct SettingPair {
     pub value: String,
 }
 
-/// Atomic multi-setting write (QualityTable custom mode / container): all keys
-/// land together and a running buffer restarts ONCE, with the same
+/// Atomic multi-setting write (custom mode / container): all keys land
+/// together and a running buffer restarts ONCE, with the same
 /// revert-on-failure semantics as `set_setting`.
 #[tauri::command]
 pub async fn set_settings(app: AppHandle, values: Vec<SettingPair>) -> Result<(), String> {
@@ -458,44 +513,29 @@ pub async fn set_settings(app: AppHandle, values: Vec<SettingPair>) -> Result<()
             db.set_setting(&pair.key, &pair.value)?;
         }
     }
-    let restart = values
+    if !values
         .iter()
-        .any(|p| RESTART_KEYS.contains(&p.key.as_str()));
-    if !restart {
+        .any(|p| RESTART_KEYS.contains(&p.key.as_str()))
+    {
         return Ok(());
     }
-    let running = {
-        let st = app.state::<AppState>();
-        let guard = st.recorder.lock().await;
-        let r = guard.is_some();
-        drop(guard);
-        r
-    };
-    if running {
-        stop_engine(&app).await?;
-        if let Err(e) = start_engine(&app, None).await {
-            {
-                let db = app.state::<DbState>();
-                for (key, prev) in &previous {
-                    if let Some(p) = prev {
-                        let _ = db.set_setting(key, p);
-                    }
+    if let Err(e) = restart_if_running(&app).await {
+        {
+            let db = app.state::<DbState>();
+            for (key, prev) in &previous {
+                if let Some(p) = prev {
+                    let _ = db.set_setting(key, p);
                 }
             }
-            if start_engine(&app, None).await.is_ok() {
-                notify(
-                    &app,
-                    "Cambio no aplicado; se restauró la configuración anterior",
-                    "Change not applied; previous configuration restored",
-                );
-            }
-            return Err(e);
         }
-        notify(
-            &app,
-            "Búfer reiniciado con la nueva configuración",
-            "Buffer restarted with new configuration",
-        );
+        if start_engine(&app, &StartOverrides::default()).await.is_ok() {
+            notify(
+                &app,
+                "Cambio no aplicado; se restauró la configuración anterior",
+                "Change not applied; previous configuration restored",
+            );
+        }
+        return Err(e);
     }
     Ok(())
 }
@@ -506,10 +546,7 @@ pub fn list_custom_apps(db: State<'_, DbState>) -> Result<Vec<CustomApp>, String
 }
 
 #[tauri::command]
-pub fn register_app(
-    db: State<'_, DbState>,
-    input: RegisterAppInput,
-) -> Result<CustomApp, String> {
+pub fn register_app(db: State<'_, DbState>, input: RegisterAppInput) -> Result<CustomApp, String> {
     db.register_app(input)
 }
 
@@ -534,14 +571,14 @@ pub fn secret_delete(alias: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Capture (Phase 3)
+// Capture control
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EngineStatus {
     pub running: bool,
     pub backend: String,
-    /// GSR audio tracks currently linked (0, 1 or 2). UI-visible, no silent fails.
+    /// Audio tracks the running configuration records (0, 1 or 3).
     pub tracks_linked: usize,
     /// Last audio-gain apply error, if any.
     pub audio_error: Option<String>,
@@ -573,7 +610,7 @@ async fn set_engine_error(app: &AppHandle, err: Option<String>) {
     }
 }
 
-/// Human-readable cause from the last GSR log lines (best effort).
+/// Human-readable cause from the last OBS log lines (best effort).
 fn engine_death_reason(tail: &[String]) -> String {
     let last = tail.iter().rev().find(|line| {
         let l = line.to_lowercase();
@@ -583,14 +620,6 @@ fn engine_death_reason(tail: &[String]) -> String {
         Some(line) => format!("capture engine exited: {line}"),
         None => "capture engine exited unexpectedly".to_string(),
     }
-}
-
-fn buffer_seconds(db: &DbState) -> i64 {
-    db.get_settings()
-        .ok()
-        .and_then(|s| s.get("buffer_seconds").and_then(|v| v.parse().ok()))
-        .unwrap_or(30)
-        .max(5)
 }
 
 fn is_spanish(app: &AppHandle) -> bool {
@@ -604,7 +633,12 @@ fn is_spanish(app: &AppHandle) -> bool {
 pub fn notify(app: &AppHandle, body_es: &str, body_en: &str) {
     use tauri_plugin_notification::NotificationExt;
     let body = if is_spanish(app) { body_es } else { body_en };
-    let _ = app.notification().builder().title("MoonClip").body(body).show();
+    let _ = app
+        .notification()
+        .builder()
+        .title("MoonClip")
+        .body(body)
+        .show();
 }
 
 #[tauri::command]
@@ -615,7 +649,7 @@ pub async fn start_buffer(app: AppHandle) -> Result<EngineStatus, String> {
             return Err("buffer already running".into());
         }
     }
-    start_engine(&app, None).await
+    start_engine(&app, &StartOverrides::default()).await
 }
 
 #[tauri::command]
@@ -631,15 +665,15 @@ pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
     let st = app.state::<AppState>();
     let mut guard = st.recorder.lock().await;
     let had_engine = guard.is_some();
-    let (mut alive, tail, fallback) = match guard.as_mut() {
+    let (alive, tail) = match guard.as_mut() {
         Some(engine) => {
             if engine.check_alive() {
-                (true, Vec::new(), engine.source_fallback_request())
+                (true, Vec::new())
             } else {
-                (false, engine.log_tail(), None)
+                (false, engine.log_tail())
             }
         }
-        None => (false, Vec::new(), None),
+        None => (false, Vec::new()),
     };
     if had_engine && !alive {
         guard.take();
@@ -658,26 +692,6 @@ pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
             "El motor de captura se detuvo inesperadamente",
             "Capture engine stopped unexpectedly",
         );
-    } else if let Some(next) = fallback {
-        // Mid-session degradation (WGC lost the display, e.g. windowed ->
-        // legacy exclusive fullscreen): respawn on DXGI Duplication once.
-        eprintln!("[moonclip] source stalled: switching capture source to {next}");
-        if stop_engine(app).await.is_ok() {
-            match start_engine(app, Some(next)).await {
-                Ok(_) => notify(
-                    app,
-                    "Fuente de captura cambiada a DXGI Duplication",
-                    "Capture source switched to DXGI Duplication",
-                ),
-                Err(e) => {
-                    eprintln!("[moonclip] source switch failed: {e}");
-                    set_engine_error(app, Some(e)).await;
-                    alive = false;
-                }
-            }
-        } else {
-            alive = false;
-        }
     }
     alive
 }
@@ -685,13 +699,10 @@ pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
 #[tauri::command]
 pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
     let alive = sweep_engine_liveness(&app).await;
-    let args = if alive {
-        engine_audio_args(&app).await
-    } else {
-        Vec::new()
-    };
     let tracks = if alive {
-        audio::linked_count(&args).await
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        guard.as_ref().map(|e| e.tracks_linked()).unwrap_or(0)
     } else {
         0
     };
@@ -704,12 +715,11 @@ pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
     })
 }
 
-/// Full save pipeline: flush ring -> thumbnail -> DB index -> ding -> event.
-/// Stage timings go to the backend log (`[moonclip] save ...`) so slow saves
-/// can be attributed instead of guessed.
+/// Full save pipeline: OBS save -> dedupe -> thumbnail -> DB index -> ding ->
+/// event. Stage timings go to the backend log (`[moonclip] save ...`).
 pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> {
     // One save at a time: a second F9 while the first is mid-pipeline must
-    // queue, not interleave (per-second clip names + mux -y + DB insert).
+    // queue, not interleave (per-second clip names + DB insert).
     let state = app.state::<AppState>();
     let _save_guard = state.save_lock.lock().await;
     let t_total = std::time::Instant::now();
@@ -723,9 +733,10 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     };
     let t_engine = t_total.elapsed();
     let db = app.state::<DbState>();
-    // Same-second double saves collide: GSR names files by timestamp, so the
-    // second file overwrites the first on disk and the DB rejects the duplicate.
-    // Rename to stem_2.mp4, stem_3.mp4… instead of failing and losing the clip.
+    // Same-second double saves collide: OBS names replay files by timestamp,
+    // so the second file could overwrite the first on disk and the DB would
+    // reject the duplicate. Rename to stem_2.mp4, stem_3.mp4… instead of
+    // failing and losing the clip.
     let mut path = path;
     {
         let taken: std::collections::HashSet<String> = db
@@ -739,10 +750,7 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
                     .and_then(|s| s.to_str())
                     .ok_or("bad clip file name")?
                     .to_string();
-                let ext = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("mp4");
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
                 let mut n = 2u32;
                 loop {
                     let cand = path.with_file_name(format!("{stem}_{n}.{ext}"));
@@ -767,44 +775,6 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     }
     let base = db.clips_dir()?;
     let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(app)?;
-    // Deliver the requested height: the buffer ran at source resolution, so
-    // downscale now with lanczos (NVENC). On any failure keep the source
-    // file — a source-res clip beats no clip.
-    {
-        let st = app.state::<AppState>();
-        let guard = st.recorder.lock().await;
-        let plan = guard.as_ref().and_then(|e| e.save_plan());
-        drop(guard);
-        if let Some(p) = plan {
-            let t0 = std::time::Instant::now();
-            let tmp = path.with_extension("scaled.mp4");
-            let ok = match p.encoder {
-                Some(enc) => {
-                    crate::editor::ffmpeg::scale_to_height(
-                        &ffmpeg, &path, &tmp, p.height, p.bitrate_kbps, enc, &p.codec, p.fps,
-                    )
-                    .await
-                }
-                // No save-time encoder on this GPU (e.g. AMD/VAAPI without
-                // validated render-node plumbing): keep the source file.
-                None => {
-                    eprintln!("[moonclip] no save encoder for this GPU, keeping source resolution");
-                    false
-                }
-            };
-            if ok {
-                if let Err(e) = tokio::fs::rename(&tmp, &path).await {
-                    eprintln!("[moonclip] scaled replace failed: {e}");
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                } else {
-                    eprintln!("[moonclip] lanczos save-scale to {}p in {:?}", p.height, t0.elapsed());
-                }
-            } else {
-                eprintln!("[moonclip] save-scale failed, keeping source resolution");
-                let _ = tokio::fs::remove_file(&tmp).await;
-            }
-        }
-    }
     let size = tokio::fs::metadata(&path)
         .await
         .map_err(|e| format!("cannot stat clip: {e}"))?
@@ -841,8 +811,12 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     let t_tail_elapsed = t_tail.elapsed();
     let t_db = std::time::Instant::now();
     let clip = db.insert_clip(&file_name, &thumb_name, "Unknown", secs_ms, size)?;
-    eprintln!("[moonclip] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
-        t_total.elapsed(), t_db.elapsed(), size / 1024 / 1024);
+    eprintln!(
+        "[moonclip] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
+        t_total.elapsed(),
+        t_db.elapsed(),
+        size / 1024 / 1024
+    );
     crate::cue::play_ding();
     let _ = app.emit("moonclip://clip-saved", &clip);
     Ok(clip)
@@ -889,7 +863,11 @@ pub(crate) async fn handle_hotkey(app: AppHandle, shortcut: String, pressed_at: 
     let running = guard.is_some();
     drop(guard);
     if !running {
-        notify(&app, "Búfer detenido — pulsa Start para grabar", "Buffer stopped — press Start to record");
+        notify(
+            &app,
+            "Búfer detenido — pulsa Start para grabar",
+            "Buffer stopped — press Start to record",
+        );
         return;
     }
     match do_save_clip(&app).await {
@@ -898,12 +876,16 @@ pub(crate) async fn handle_hotkey(app: AppHandle, shortcut: String, pressed_at: 
             &format!("Clip guardado: {}", clip.file_name),
             &format!("Clip saved: {}", clip.file_name),
         ),
-        Err(e) => notify(&app, &format!("Error al guardar: {e}"), &format!("Save failed: {e}")),
+        Err(e) => notify(
+            &app,
+            &format!("Error al guardar: {e}"),
+            &format!("Save failed: {e}"),
+        ),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Live capture gain + backend info (Phase 3)
+// Live capture gain + backend info
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -934,27 +916,13 @@ fn read_gains(app: &AppHandle) -> TrackGains {
     }
 }
 
-async fn engine_audio_args(app: &AppHandle) -> Vec<String> {
-    let st = app.state::<AppState>();
-    let guard = st.recorder.lock().await;
-    let args = guard.as_ref().map(|e| e.audio_args()).unwrap_or_default();
-    drop(guard);
-    args
-}
-
-async fn apply_saved_gains(app: &AppHandle) -> Result<usize, String> {
-    let g = read_gains(app);
-    let args = engine_audio_args(app).await;
-    audio::apply_gains(&args, g.game, g.mic, g.mute_game, g.mute_mic).await
-}
-
 #[tauri::command]
 pub async fn audio_levels(app: AppHandle) -> Result<TrackGains, String> {
     Ok(read_gains(&app))
 }
 
 /// Live signal peaks (linear 0.0–1.0+) per captured stream, for the UI
-/// meters. `null` on backends that do not expose them (Linux/GSR).
+/// meters. `null` when the backend does not expose them (OBS engine).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioPeaks {
     pub game: f32,
@@ -963,7 +931,7 @@ pub struct AudioPeaks {
 
 #[tauri::command]
 pub async fn audio_peaks() -> Result<Option<AudioPeaks>, String> {
-    Ok(audio::recent_peaks().map(|(game, mic)| AudioPeaks { game, mic }))
+    Ok(None)
 }
 
 fn check_track(track: &str) -> Result<(), String> {
@@ -974,35 +942,52 @@ fn check_track(track: &str) -> Result<(), String> {
     }
 }
 
+/// Gain lives in the generated OBS scene, so a running buffer restarts once
+/// (with a visible notice) to apply it — same semantics as other settings.
 #[tauri::command]
-pub async fn set_track_gain(app: AppHandle, track: String, percent: u32) -> Result<TrackGains, String> {
+pub async fn set_track_gain(
+    app: AppHandle,
+    track: String,
+    percent: u32,
+) -> Result<TrackGains, String> {
     check_track(&track)?;
     let pct = percent.clamp(0, 200);
     {
         let db = app.state::<DbState>();
-        db.set_setting(if track == "game" { "gain_game" } else { "gain_mic" }, &pct.to_string())?;
+        db.set_setting(
+            if track == "game" {
+                "gain_game"
+            } else {
+                "gain_mic"
+            },
+            &pct.to_string(),
+        )?;
     }
-    // Live-apply if the buffer is running; persisting alone is fine otherwise.
-    let running = {
-        let st = app.state::<AppState>();
-        let guard = st.recorder.lock().await;
-        let r = guard.is_some();
-        drop(guard);
-        r
-    };
-    if running {
-        apply_saved_gains(&app).await?;
+    if let Err(e) = restart_if_running(&app).await {
+        set_audio_error(&app, Some(e.clone())).await;
+        return Err(e);
     }
+    set_audio_error(&app, None).await;
     Ok(read_gains(&app))
 }
 
+/// Mutes apply live through obs-cmd when the buffer runs, and persist for the
+/// next start either way.
 #[tauri::command]
-pub async fn set_track_mute(app: AppHandle, track: String, muted: bool) -> Result<TrackGains, String> {
+pub async fn set_track_mute(
+    app: AppHandle,
+    track: String,
+    muted: bool,
+) -> Result<TrackGains, String> {
     check_track(&track)?;
     {
         let db = app.state::<DbState>();
         db.set_setting(
-            if track == "game" { "mute_game" } else { "mute_mic" },
+            if track == "game" {
+                "mute_game"
+            } else {
+                "mute_mic"
+            },
             if muted { "1" } else { "0" },
         )?;
     }
@@ -1014,58 +999,102 @@ pub async fn set_track_mute(app: AppHandle, track: String, muted: bool) -> Resul
         r
     };
     if running {
-        apply_saved_gains(&app).await?;
+        let st = app.state::<AppState>();
+        let mut guard = st.recorder.lock().await;
+        if let Some(engine) = guard.as_mut() {
+            if let Err(e) = engine.set_mute(&track, muted).await {
+                drop(guard);
+                set_audio_error(&app, Some(e.clone())).await;
+                return Err(e);
+            }
+        }
     }
+    set_audio_error(&app, None).await;
     Ok(read_gains(&app))
 }
 
+/// Embedded OBS status for the Settings UI ("Motor OBS (aislado)").
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct GsrInfo {
-    pub path: String,
-    pub source: String,
-    pub caps_ok: bool,
+pub struct ObsInfo {
+    /// OBS binary resolved (bundled or env override).
     pub present: bool,
+    /// `obs --version` output (empty when it cannot be probed).
+    pub version: String,
+    /// obs-cmd binary resolved.
+    pub obscmd_present: bool,
+    /// MoonClip-owned config dir (never the user's OBS config).
+    pub config_dir: String,
+    pub profile: String,
+    pub collection: String,
+    pub websocket_port: u16,
+    /// bundled | env | missing
+    pub source: String,
+    /// Last lines of the newest OBS log inside our config dir.
+    pub log_tail: Vec<String>,
 }
 
 #[tauri::command]
-pub async fn gsr_info(app: AppHandle) -> Result<GsrInfo, String> {
-    match binary::backend_binary(&app) {
-        Ok((path, source)) => {
-            let caps_ok = caps::caps_ok(&path);
-            Ok(GsrInfo {
-                path: path.to_string_lossy().to_string(),
-                source: source.to_string(),
-                caps_ok,
-                present: true,
-            })
-        }
-        Err(_) => Ok(GsrInfo {
-            path: String::new(),
-            source: "missing".to_string(),
-            caps_ok: false,
-            present: false,
-        }),
-    }
+pub async fn obs_info(app: AppHandle) -> Result<ObsInfo, String> {
+    let db = app.state::<DbState>();
+    let port = setting_str(&db, "obs_ws_port", "4456")
+        .parse()
+        .unwrap_or(4456);
+    let config_root = os::obs_config_root().unwrap_or_default();
+    let (present, version, source) =
+        match resolve_obs(&app) {
+            Ok((bin, src)) => {
+                let mut cmd = tokio::process::Command::new(&bin);
+                cmd.arg("--version").kill_on_drop(true);
+                let version =
+                    match tokio::time::timeout(std::time::Duration::from_secs(15), cmd.output())
+                        .await
+                    {
+                        Ok(Ok(out)) => {
+                            let mut t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                            if t.is_empty() {
+                                t = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                            }
+                            t.lines().next().unwrap_or_default().to_string()
+                        }
+                        _ => String::new(),
+                    };
+                (true, version, src.to_string())
+            }
+            Err(_) => (false, String::new(), "missing".to_string()),
+        };
+    let obscmd_present = resolve_obscmd(&app).is_ok();
+    Ok(ObsInfo {
+        present,
+        version,
+        obscmd_present,
+        config_dir: config_root.to_string_lossy().to_string(),
+        profile: obs::OBS_PROFILE.to_string(),
+        collection: obs::OBS_COLLECTION.to_string(),
+        websocket_port: port,
+        source,
+        log_tail: obs::read_obs_log_tail(&config_root),
+    })
 }
 
-/// One-click KMS permission fix (polkit dialog) for OUR bundled binary.
+/// One-click repair: stop the buffer and remove ONLY the MoonClip-owned OBS
+/// config (the user's own OBS is never touched).
 #[tauri::command]
-pub async fn fix_gsr_caps(app: AppHandle) -> Result<(), String> {
-    let (path, source) = binary::backend_binary(&app)?;
-    if source != "bundled" {
-        return Err("one-click fix applies to the bundled binary only".into());
-    }
-    caps::fix_caps(&path).await
+pub async fn repair_obs_config(app: AppHandle) -> Result<(), String> {
+    stop_engine(&app).await?;
+    let root = os::obs_config_root()?;
+    obs::reset_obs_config(&root)?;
+    eprintln!("[moonclip] obs config reset: {}", root.display());
+    Ok(())
 }
 
-/// Capture devices (Linux: bundled GSR query; Windows: WASAPI enumeration).
+/// Capture devices (Windows: WASAPI enumeration; Linux: pactl/PipeWire).
 #[tauri::command]
 pub async fn list_audio_devices(app: AppHandle) -> Result<Vec<AudioDevice>, String> {
     devices::list_audio_devices(&app).await
 }
 
 /// Video options for the Settings UI: codec ids from the backend, ladder
-/// heights, Medal bitrates and exact RAM estimates (CBR => exact, not ranges).
+/// heights, Medal bitrates/ranges and exact RAM estimates (CBR => exact).
 /// NOTE: no human text crosses IPC — labels/notes live in frontend locales.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodecOpt {
@@ -1076,8 +1105,10 @@ pub struct CodecOpt {
 pub struct HeightOpt {
     pub height: u32,
     pub label: String,
-    /// CBR kbps per codec at this height, in codec order.
+    /// CBR kbps per codec, in codec order.
     pub bitrates: Vec<u32>,
+    /// Medal recommended (min,max) kbps per codec, in codec order.
+    pub recommended: Vec<(u32, u32)>,
     /// Exact 60 s ring megabytes per codec, in codec order.
     pub ring_mb_60s: Vec<u32>,
 }
@@ -1097,85 +1128,94 @@ pub struct VideoOptions {
     pub current_height: u32,
     pub current_fps: u32,
     pub current_monitor: String,
-    /// Height the ring buffer actually runs at (source when transcoding).
+    /// With the OBS engine the buffer delivers at the requested resolution
+    /// (GPU scaling inside OBS); kept for UI parity with the old backend.
     pub buffer_height: u32,
-    /// Whether saves downscale with lanczos (buffer at source).
     pub transcoding: bool,
     pub max_source_height: u32,
     pub vendor: String,
+    /// Encoder preference: gpu | cpu.
+    pub encoder: String,
+    /// Hardware monitors can be oversampled (24..144).
+    pub fps_options: Vec<u32>,
 }
 
 #[tauri::command]
 pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
     use crate::video_quality as q;
-    // Native backends (Windows WGC) have no sidecar binary; their probes
-    // ignore this path.
-    let gsr_bin: PathBuf = binary::backend_binary(&app)
-        .map(|(p, _)| p)
-        .unwrap_or_default();
-    let vendor = video::vendor(&gsr_bin).await;
+    let vendor = video::vendor().await;
 
-    // Codec ids the backend reports, filtered to known-good entries.
-    // Probes run against the SHIPPED ffmpeg (bundled sidecar first), never
-    // an incidental PATH binary — production machines may not have one.
+    // Codec ids the platform can offer, filtered to known-good entries.
     // Labels/notes are frontend-owned (locales) — never hardcode UI text here.
     let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)
-        .unwrap_or_else(|_| PathBuf::from("ffmpeg"));
+        .unwrap_or_else(|_| std::path::PathBuf::from("ffmpeg"));
     let mut codecs: Vec<CodecOpt> = Vec::new();
-    for id in video::offered_codecs(&gsr_bin, &ffmpeg).await {
+    for id in video::offered_codecs(&ffmpeg).await {
         if matches!(id.as_str(), "h264" | "hevc" | "av1" | "x264")
-            && !codecs.iter().any(|c: &CodecOpt| c.id == id)
+            && !codecs.iter().any(|c| c.id == id)
         {
             codecs.push(CodecOpt { id });
         }
     }
     if codecs.is_empty() {
-        // Fallback (Windows stub / unknown backend): H.264 always exists.
+        // H.264 always exists in an OBS install.
         codecs.push(CodecOpt { id: "h264".into() });
     }
 
     let db = app.state::<DbState>();
-    let current_codec = setting_str(&db, "video_codec", "h264");
+    let current_codec = match setting_str(&db, "video_codec", "h264").as_str() {
+        id @ ("h264" | "hevc" | "av1") => id.to_string(),
+        "x264" => "h264".to_string(),
+        _ => "h264".to_string(),
+    };
     let current_height: u32 = setting_str(&db, "out_height", "0").parse().unwrap_or(0);
     let current_fps: u32 = match setting_str(&db, "fps", "60").parse().unwrap_or(60) {
+        24 => 24,
         30 => 30,
+        120 => 120,
+        144 => 144,
         _ => 60,
     };
-    let listed = video::list_monitors(&gsr_bin).await;
+    let encoder = match setting_str(&db, "video_encoder", "gpu").as_str() {
+        "cpu" => "cpu".to_string(),
+        _ => {
+            if setting_str(&db, "video_codec", "") == "x264" {
+                "cpu".to_string()
+            } else {
+                "gpu".to_string()
+            }
+        }
+    };
+    let listed = video::list_monitors().await;
     let max_source_height = listed.iter().map(|m| m.height).max().unwrap_or(0);
     let current_monitor = setting_str(&db, "monitor", "");
     let monitors = listed
         .iter()
         .map(|m| MonitorOpt {
             name: m.name.clone(),
-            label: format!("{} ({}×{})", m.name, m.width, m.height),
+            label: m.label.clone(),
         })
         .collect::<Vec<_>>();
-    let source_height = if current_monitor.trim().is_empty() {
-        max_source_height
-    } else {
-        listed
-            .iter()
-            .find(|m| m.name == current_monitor.trim())
-            .map(|m| m.height)
-            .unwrap_or(max_source_height)
-    };
-    // Same capture plan as start_engine: live GPU scaling has no save
-    // transcode; the source-buffer plan flags it for the UI note.
-    let transcoding = !video::scales_live()
-        && current_height != 0
-        && source_height > 0
-        && current_height < source_height;
-    let buffer_height = if transcoding { source_height } else { current_height };
     let heights = q::HEIGHTS
         .iter()
         .map(|&h| {
-            let bitrates = codecs.iter().map(|c| q::bitrate_kbps(h, &c.id)).collect::<Vec<_>>();
-            let ring = bitrates.iter().map(|&b| q::ring_mb(b, 60)).collect::<Vec<_>>();
+            let bitrates = codecs
+                .iter()
+                .map(|c| q::bitrate_kbps(h, &c.id))
+                .collect::<Vec<_>>();
+            let recommended = codecs
+                .iter()
+                .map(|c| q::recommended_kbps(h, &c.id))
+                .collect::<Vec<_>>();
+            let ring = bitrates
+                .iter()
+                .map(|&b| q::ring_mb(b, 60))
+                .collect::<Vec<_>>();
             HeightOpt {
                 height: h,
                 label: format!("{h}p"),
                 bitrates,
+                recommended,
                 ring_mb_60s: ring,
             }
         })
@@ -1189,12 +1229,15 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         current_height,
         current_fps,
         current_monitor,
-        buffer_height,
-        transcoding,
+        buffer_height: current_height,
+        transcoding: false,
         max_source_height,
         vendor,
+        encoder,
+        fps_options: vec![24, 30, 60, 120, 144],
     })
 }
+
 #[cfg(test)]
 mod custom_mode_tests {
     use super::custom_capture_params;
@@ -1208,21 +1251,22 @@ mod custom_mode_tests {
     }
 
     #[test]
-    fn custom_clamps_fps_to_v1_limits() {
+    fn custom_accepts_medal_fps_values() {
         assert_eq!(
             custom_capture_params("custom", "24", "50000", 60, 20000),
-            (30, 50000, true)
-        );
-        assert_eq!(
-            custom_capture_params("custom", "30", "50000", 60, 20000),
-            (30, 50000, false)
+            (24, 50000, false)
         );
         assert_eq!(
             custom_capture_params("custom", "120", "50000", 60, 20000),
-            (60, 50000, true)
+            (120, 50000, false)
         );
         assert_eq!(
             custom_capture_params("custom", "144", "50000", 60, 20000),
+            (144, 50000, false)
+        );
+        // Invalid values clamp back to the ladder with a flag.
+        assert_eq!(
+            custom_capture_params("custom", "90", "50000", 60, 20000),
             (60, 50000, true)
         );
         assert_eq!(
@@ -1281,10 +1325,12 @@ pub async fn open_clip_external(app: AppHandle, clip_id: String) -> Result<(), S
             eprintln!("[moonclip] open_clip_external: opener ok");
             return Ok(());
         }
-        Err(e) => eprintln!("[moonclip] open_clip_external: opener failed ({e}), trying OS launcher"),
+        Err(e) => {
+            eprintln!("[moonclip] open_clip_external: opener failed ({e}), trying OS launcher")
+        }
     }
     // OS launcher lives in os::open — no cfg here (zero-cfg rule).
-    match open::open_external(&abs) {
+    match os::open::open_external(&abs) {
         Ok(()) => {
             eprintln!("[moonclip] open_clip_external: OS launcher ok");
             Ok(())
@@ -1312,10 +1358,16 @@ pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Resul
     let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
     let status = tokio::process::Command::new(&ffmpeg)
         .args([
-            "-y", "-hide_banner", "-loglevel", "error",
-            "-i", &input.to_string_lossy(),
-            "-map", &format!("0:{track}"),
-            "-c:a", "aac",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            &input.to_string_lossy(),
+            "-map",
+            &format!("0:{track}"),
+            "-c:a",
+            "aac",
         ])
         .arg(&preview)
         .status()
@@ -1325,4 +1377,167 @@ pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Resul
         return Err("preview extract failed".into());
     }
     Ok(preview.to_string_lossy().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Hardware test (first-run wizard, optional)
+// ---------------------------------------------------------------------------
+
+/// Result of the optional first-run hardware test.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HardwareTestResult {
+    pub ok: bool,
+    pub height: u32,
+    pub fps: u32,
+    pub codec: String,
+    pub encoder: String,
+    pub bitrate_kbps: u32,
+    pub requested_seconds: u32,
+    pub startup_ms: u64,
+    pub measured_duration_ms: u64,
+    pub size_bytes: u64,
+    /// Suggested step-down preset when the test failed (already applied to
+    /// the UI selection, never persisted without the user's click).
+    pub fallback_height: Option<u32>,
+    pub fallback_fps: Option<u32>,
+    pub error: Option<String>,
+}
+
+/// Validate a saved test clip: exists, has real bytes and roughly matches the
+/// requested duration (a replay that did not record enough seconds is a fail).
+pub(crate) fn validate_test_clip(
+    measured_duration_ms: i64,
+    size_bytes: u64,
+    requested_seconds: u32,
+) -> Result<(), String> {
+    if size_bytes < 64 * 1024 {
+        return Err(format!("clip is suspiciously small ({size_bytes} bytes)"));
+    }
+    let want = requested_seconds as i64 * 1000;
+    if measured_duration_ms <= 0 {
+        return Err("clip duration could not be measured".into());
+    }
+    if measured_duration_ms < want / 2 {
+        return Err(format!(
+            "recorded {measured_duration_ms} ms of the requested {want} ms"
+        ));
+    }
+    if measured_duration_ms > want * 3 / 2 + 2000 {
+        return Err(format!(
+            "recorded {measured_duration_ms} ms, far more than requested ({want} ms)"
+        ));
+    }
+    Ok(())
+}
+
+/// Suggested conservative step-down for a failed test.
+pub(crate) fn test_fallback(height: u32, fps: u32) -> (Option<u32>, Option<u32>) {
+    if height > 720 {
+        (Some(720), Some(60))
+    } else if fps > 30 {
+        (Some(height), Some(30))
+    } else {
+        (None, None)
+    }
+}
+
+/// Optional first-run test: start the buffer with candidate values (not
+/// persisted), record for `seconds`, save, validate the file and restore the
+/// previous buffer state. Returns the measured numbers for the wizard.
+#[tauri::command]
+pub async fn test_hardware(
+    app: AppHandle,
+    height: Option<u32>,
+    fps: Option<u32>,
+    seconds: Option<u32>,
+) -> Result<HardwareTestResult, String> {
+    let seconds = seconds.unwrap_or(10).clamp(5, 30);
+    let overrides = StartOverrides {
+        height,
+        fps,
+        duration_seconds: Some(seconds),
+        ..Default::default()
+    };
+    let config = build_capture_config(&app, &overrides).await?;
+    let was_running = {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        guard.is_some()
+    };
+    stop_engine(&app).await.ok();
+
+    let t0 = std::time::Instant::now();
+    let mut result = HardwareTestResult {
+        ok: false,
+        height: config.out_height,
+        fps: config.fps,
+        codec: config.codec.clone(),
+        encoder: config.encoder.clone(),
+        bitrate_kbps: config.bitrate_kbps,
+        requested_seconds: seconds,
+        startup_ms: 0,
+        measured_duration_ms: 0,
+        size_bytes: 0,
+        fallback_height: None,
+        fallback_fps: None,
+        error: None,
+    };
+
+    let run = async {
+        let mut engine = new_engine();
+        engine.start_buffer(config.clone()).await?;
+        result.startup_ms = t0.elapsed().as_millis() as u64;
+        tokio::time::sleep(std::time::Duration::from_secs(seconds as u64 + 1)).await;
+        let path = engine.save_clip().await?;
+        engine.stop_buffer().await.ok();
+        Ok::<std::path::PathBuf, String>(path)
+    }
+    .await;
+
+    match run {
+        Ok(path) => {
+            let size = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
+            let duration = crate::editor::ffmpeg::probe_duration_ms(&ffmpeg, &path)
+                .await
+                .unwrap_or(0);
+            result.size_bytes = size;
+            result.measured_duration_ms = duration.max(0) as u64;
+            match validate_test_clip(duration, size, seconds) {
+                Ok(()) => result.ok = true,
+                Err(e) => result.error = Some(e),
+            }
+            // The test clip is not a user clip: remove it.
+            let _ = tokio::fs::remove_file(&path).await;
+        }
+        Err(e) => result.error = Some(e),
+    }
+
+    if !result.ok && result.error.is_some() {
+        let (fh, ff) = test_fallback(result.height, result.fps);
+        result.fallback_height = fh;
+        result.fallback_fps = ff;
+    }
+
+    // Restore the previous state (persisted settings are untouched).
+    if was_running {
+        if let Err(e) = start_engine(&app, &StartOverrides::default()).await {
+            eprintln!("[moonclip] hardware test: could not restore buffer: {e}");
+        }
+    }
+    eprintln!(
+        "[moonclip] hardware test: ok={} {}x{}@{} {:?} startup={}ms duration={}ms size={}B",
+        result.ok,
+        result.height,
+        result.fps,
+        result.codec,
+        result.error,
+        result.startup_ms,
+        result.measured_duration_ms,
+        result.size_bytes
+    );
+    Ok(result)
 }

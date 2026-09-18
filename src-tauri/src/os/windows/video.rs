@@ -1,293 +1,370 @@
-//! Windows capture-source helpers: ffmpeg fallback resolution, live-scaling
-//! flag, foreground-window lookup, the WGC/DXGI filter graph and the startup
-//! fallback decision. Hardware discovery (vendor, monitors, codec offer)
-//! lives in `detector` and is re-exported here so shared code keeps one
-//! import surface (`os::video::*`).
+//! Windows discovery for the Settings UI: GPU vendor, monitors and the codec
+//! offer probed with a live micro-encode against the SHIPPED ffmpeg (never an
+//! incidental PATH copy). Capture itself is owned by the embedded OBS.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
-pub use super::detector::{
-    capture_encoder_name, list_monitors, offered_codecs, resolve_monitor, transcode_encoder,
-    vendor,
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
 };
 
-/// What to capture and at what maximum rate. Monitor selection is by native
-/// HMONITOR (cross-process safe, validated) so the Rust-side monitor list is
-/// authoritative — no index-order guessing. `max_fps` is the capture cap
-/// (`capture_max_fps`: 2x the output rate, clamped to the panel refresh —
-/// `MOONCLIP_CAPTURE_MAX_FPS` overrides). Window capture is opt-in
-/// (`MOONCLIP_CAPTURE_SOURCE=window` or `MOONCLIP_CAPTURE_WINDOW_EXE=regex`).
-#[derive(Debug, Clone)]
-pub struct CaptureSource<'a> {
-    /// `gfxcapture` (WGC: monitors and windows) or `ddagrab` (DDA, monitor).
-    pub kind: &'a str,
-    pub hmonitor: isize,
-    pub monitor_idx: u32,
-    /// WGC window selectors; `hwnd` wins over `window_exe`.
-    pub hwnd: Option<u64>,
-    pub window_exe: Option<&'a str>,
-    pub max_fps: u32,
-}
-
-impl CaptureSource<'_> {
-    fn is_window(&self) -> bool {
-        self.kind == "gfxcapture" && (self.hwnd.is_some() || self.window_exe.is_some())
-    }
-
-    pub fn describe(&self) -> String {
-        if let Some(h) = self.hwnd {
-            format!("window hwnd={h}")
-        } else if let Some(exe) = self.window_exe {
-            format!("window exe~'{exe}'")
-        } else if self.kind == "ddagrab" {
-            format!("ddagrab output {}", self.monitor_idx)
-        } else {
-            format!("monitor hmonitor={}", self.hmonitor)
-        }
+/// PCI vendor id → our vendor slug.
+fn vendor_from_pci_id(id: u32) -> &'static str {
+    match id {
+        0x10DE => "nvidia",
+        // 0x1002 = AMD GPUs, 0x1022 = AMD iGPUs (same driver stack).
+        0x1002 | 0x1022 => "amd",
+        0x8086 => "intel",
+        _ => "unknown",
     }
 }
 
-/// Startup source decision: WGC lives in DWM, so a real legacy exclusive
-/// fullscreen (OpenGL/Vulkan) bypasses it and delivers no frames or an
-/// all-black picture. Desktop Duplication owns the display in that case.
-/// Returns the source to relaunch with, or `None` to keep the current one.
-pub fn source_fallback(kind: &str, frames_seen: bool, black: Option<bool>) -> Option<&'static str> {
-    if kind != "gfxcapture" {
-        return None;
-    }
-    if !frames_seen || black == Some(true) {
-        Some("ddagrab")
-    } else {
-        None
-    }
-}
-
-/// True when the GPU chain can take D3D11 frames straight from `gfxcapture`
-/// (validated: NVENC). AMD/Intel run the hwdownload fallback until their
-/// zero-copy chain is validated on real hardware.
-fn gpu_zero_copy(vendor: &str, codec: &str) -> bool {
-    vendor == "nvidia" && codec != "x264"
-}
-
-/// Even output width for a target height, preserving the source aspect.
-pub fn scaled_width(mw: u32, mh: u32, out_height: u32) -> u32 {
-    if mh == 0 {
-        return mw;
-    }
-    let w = ((mw as f64 * out_height as f64 / mh as f64).round() as u32).max(2);
-    w & !1
-}
-
-/// Capture rate cap for WGC. Two candidates per CFR slot (2x the output rate,
-/// min 90; fallback 120 when the refresh is unknown) so a suppressed WGC
-/// present becomes a dropped excess frame instead of a duplicate. Never the
-/// full 164 Hz refresh: that triples the WGC copy/filter work under a game
-/// for frames the CFR filter then throws away. `MOONCLIP_CAPTURE_MAX_FPS`
-/// overrides it (clamped to >= fps).
-pub fn capture_max_fps(refresh_hz: u32, fps: u32) -> u32 {
-    let headroom = (fps * 2).max(90);
-    let cap = if refresh_hz >= 30 {
-        refresh_hz.min(headroom)
-    } else {
-        (fps * 2).max(120)
-    };
-    cap.max(fps)
-}
-
-/// The capture filtergraph. Scaling happens inside the filter on the GPU
-/// (bicubic) for the zero-copy chain; the download fallback uses lanczos.
-/// `showinfo` runs pre-encoder and feeds the PTS<->QPC clock anchor.
-pub fn capture_filter(
-    vendor: &str,
-    codec: &str,
-    src: &CaptureSource<'_>,
-    mw: u32,
-    mh: u32,
-    out_height: u32,
-    fps: u32,
-) -> String {
-    let scale = out_height > 0 && out_height < mh;
-    // ddagrab has no working GPU resizer here (`scale_d3d11` refuses its
-    // frames); window capture scales through the download path too (its
-    // canvas is the window, not the monitor).
-    let zero = gpu_zero_copy(vendor, codec) && !(src.kind == "ddagrab" && scale) && !(src.is_window() && scale);
-    let mut f = if src.kind == "ddagrab" {
-        // `dup_frames=0`: deliver on change only. Duplicates are ffmpeg's job
-        // (`-r fps -fps_mode cfr`); paying the OS to fabricate them here would
-        // multiply the capture cost for nothing.
-        format!(
-            "ddagrab=output_idx={}:framerate={}:dup_frames=0",
-            src.monitor_idx, src.max_fps
-        )
-    } else if let Some(h) = src.hwnd {
-        format!(
-            "gfxcapture=hwnd={h}:max_framerate={}:capture_cursor=1",
-            src.max_fps
-        )
-    } else if let Some(exe) = src.window_exe {
-        format!(
-            "gfxcapture=window_exe='{exe}':max_framerate={}:capture_cursor=1",
-            src.max_fps
-        )
-    } else {
-        format!(
-            "gfxcapture=hmonitor={}:max_framerate={}:capture_cursor=1",
-            src.hmonitor, src.max_fps
-        )
-    };
-    if zero {
-        if scale {
-            let tw = scaled_width(mw, mh, out_height);
-            f.push_str(&format!(
-                ":width={tw}:height={out_height}:resize_mode=scale_aspect:scale_mode=bicubic"
-            ));
-        }
-    } else {
-        f.push_str(",hwdownload,format=bgra");
-        if scale {
-            f.push_str(&format!(",scale=-2:{out_height}:flags=lanczos"));
-        }
-        f.push_str(",format=yuv420p");
-    }
-    // showinfo runs pre-encoder and logs each frame's PTS (100 ns) on stderr:
-    // the engine uses the log arrival QPC as the PTS<->QPC clock anchor, so
-    // encoder lookahead can never shift A/V (see `note_clock_sample`).
-    // `MOONCLIP_NO_SHOWINFO=1` drops it for load A/B tests (A/V falls back to
-    // the coarser PES-arrival calibration).
-    if std::env::var("MOONCLIP_NO_SHOWINFO").as_deref() != Ok("1") {
-        f.push_str(",showinfo");
-    }
-    f.push_str("[out]");
-    let _ = fps;
-    f
-}
-
-/// Last-resort ffmpeg for direct engine use: explicit override, the bundled
-/// sidecar checked into `src-tauri/binaries/` (dev/tests), else PATH.
-/// Normal startup passes the resolved bundled sidecar via `ffmpeg_bin`.
-pub fn capture_ffmpeg() -> PathBuf {
-    if let Ok(path) = std::env::var("MOONCLIP_FFMPEG") {
-        let p = PathBuf::from(&path);
-        if p.exists() {
-            return p;
-        }
-    }
-    let triple = crate::sidecar::host_triple();
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("binaries")
-        .join(triple)
-        .join(format!("ffmpeg-{triple}.exe"));
-    if dev.exists() {
-        return dev;
-    }
-    PathBuf::from("ffmpeg")
-}
-
-/// True when this backend scales the capture on the GPU live (ffmpeg's
-/// `gfxcapture` does), so saves are copy-only and the settings plan must
-/// capture at the delivered height instead of buffering the source.
-pub fn scales_live() -> bool {
-    true
-}
-
-/// Foreground window handle, unless it belongs to this process (clicking
-/// Start would otherwise capture our own UI). Used by the opt-in window
-/// capture mode (`MOONCLIP_CAPTURE_SOURCE=window`).
-pub fn foreground_window() -> Option<isize> {
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+/// Best hardware adapter: `(vendor, dedicated VRAM bytes)`. Prefers the
+/// adapter with the most VRAM so a dGPU wins over an iGPU. Skips the
+/// Microsoft Basic Render Driver (software).
+fn pick_adapter() -> Option<(String, usize)> {
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let mut best: Option<(String, usize)> = None;
+        let mut i = 0u32;
+        loop {
+            let adapter = match factory.EnumAdapters1(i) {
+                Ok(a) => a,
+                Err(_) => break,
+            };
+            i += 1;
+            let Ok(desc) = adapter.GetDesc1() else {
+                continue;
+            };
+            if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+                continue;
+            }
+            let vendor = vendor_from_pci_id(desc.VendorId).to_string();
+            let vram = desc.DedicatedVideoMemory;
+            let better = match &best {
+                None => true,
+                Some((_, m)) => vram > *m,
+            };
+            if better {
+                best = Some((vendor, vram));
+            }
         }
-        let mut pid = 0u32;
-        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid == GetCurrentProcessId() {
-            return None;
-        }
-        Some(hwnd.0 as isize)
+        best
     }
+}
+
+/// GPU vendor, lowercase (`nvidia`/`amd`/`intel`/`unknown`), from DXGI.
+pub async fn vendor() -> String {
+    tokio::task::spawn_blocking(pick_adapter)
+        .await
+        .ok()
+        .flatten()
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| "unknown".into())
+}
+
+/// One capture monitor. `name` is the OBS `monitor_id` (WinRT device
+/// interface id, e.g. `\\?\DISPLAY#...`), which is what the modern
+/// `monitor_capture` (duplicator) source takes; `alt_id` is the legacy GDI
+/// name (`\\.\DISPLAY1`). `label` is for the Settings UI only.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Monitor {
+    pub name: String,
+    pub alt_id: String,
+    pub label: String,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
+fn cstr(buf: &[u8]) -> String {
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end]).to_string()
+}
+
+/// Native monitor geometry straight from GDI (no OBS dependency): the device
+/// interface id (what OBS's duplicator source matches) and the legacy
+/// `\\.\DISPLAYn` name, primary flagged for the UI default.
+pub async fn list_monitors() -> Vec<Monitor> {
+    tokio::task::spawn_blocking(|| {
+        use windows::core::BOOL;
+        use windows::Win32::Foundation::{LPARAM, RECT};
+        use windows::Win32::Graphics::Gdi::{
+            EnumDisplayDevicesA, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEA, HDC,
+            HMONITOR, MONITORINFO, MONITORINFOEXW,
+        };
+        unsafe extern "system" fn cb(
+            hmonitor: HMONITOR,
+            _hdc: HDC,
+            _rect: *mut RECT,
+            data: LPARAM,
+        ) -> BOOL {
+            let list = &mut *(data.0 as *mut Vec<Monitor>);
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+            let ok =
+                unsafe { GetMonitorInfoW(hmonitor, &mut info.monitorInfo as *mut MONITORINFO) }
+                    .as_bool();
+            if ok {
+                let r = info.monitorInfo.rcMonitor;
+                let alt_id = String::from_utf16_lossy(
+                    &info.szDevice[..info
+                        .szDevice
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(info.szDevice.len())],
+                );
+                let mut dd = DISPLAY_DEVICEA {
+                    cb: std::mem::size_of::<DISPLAY_DEVICEA>() as u32,
+                    ..Default::default()
+                };
+                // EDD_GET_DEVICE_INTERFACE_NAME = 0x1
+                let mut id = String::new();
+                if unsafe {
+                    EnumDisplayDevicesA(windows::core::PCSTR(alt_id.as_ptr()), 0, &mut dd, 1)
+                }
+                .as_bool()
+                {
+                    let raw: Vec<u8> = dd.DeviceID.iter().map(|&c| c as u8).collect();
+                    id = cstr(&raw);
+                }
+                if id.is_empty() {
+                    id = alt_id.clone();
+                }
+                list.push(Monitor {
+                    name: id,
+                    alt_id,
+                    label: String::new(),
+                    width: (r.right - r.left).max(0) as u32,
+                    height: (r.bottom - r.top).max(0) as u32,
+                    primary: info.monitorInfo.dwFlags & 1 != 0,
+                });
+            }
+            BOOL(1)
+        }
+        let mut list: Vec<Monitor> = Vec::new();
+        unsafe {
+            let _ = EnumDisplayMonitors(
+                None,
+                None,
+                Some(cb),
+                LPARAM(&mut list as *mut Vec<Monitor> as isize),
+            );
+        }
+        // Stable order: primary first, then the rest.
+        list.sort_by_key(|m| !m.primary);
+        for (i, m) in list.iter_mut().enumerate() {
+            m.label = format!(
+                "Monitor {}: {}×{}{}",
+                i + 1,
+                m.width,
+                m.height,
+                if m.primary { " (primary)" } else { "" }
+            );
+        }
+        list
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Legacy stored value -> monitor from the current list: device id, GDI
+/// alt_id, or a plain index from the primary-first order.
+pub fn resolve_monitor<'a>(monitors: &'a [Monitor], stored: &str) -> Option<&'a Monitor> {
+    let want = stored.trim();
+    if want.is_empty() {
+        return monitors
+            .iter()
+            .find(|m| m.primary)
+            .or_else(|| monitors.first());
+    }
+    if let Some(m) = monitors.iter().find(|m| m.name == want || m.alt_id == want) {
+        return Some(m);
+    }
+    if let Ok(idx) = want.parse::<usize>() {
+        if let Some(m) = monitors.get(idx) {
+            return Some(m);
+        }
+    }
+    monitors
+        .iter()
+        .find(|m| m.primary)
+        .or_else(|| monitors.first())
+}
+
+/// Conservative static codec offer per vendor (used when no ffmpeg is
+/// available to probe with). AV1 is offered only on NVIDIA — encode blocks
+/// are missing on most AMD/Intel iGPUs and on pre-Ada GeForce cards, and a
+/// listed-but-broken codec is worse than a hidden one. CPU x264 is appended
+/// by `offered_codecs` because it needs no GPU.
+fn static_codecs_for_vendor(vendor: &str) -> Vec<String> {
+    let base: &[&str] = match vendor {
+        "nvidia" => &["h264", "hevc", "av1"],
+        "amd" | "intel" => &["h264", "hevc"],
+        _ => &["h264"],
+    };
+    base.iter().map(|s| s.to_string()).collect()
+}
+
+fn probe_encoder_name(vendor: &str, codec: &str) -> Option<&'static str> {
+    match (vendor, codec) {
+        ("nvidia", "h264") => Some("h264_nvenc"),
+        ("nvidia", "hevc") => Some("hevc_nvenc"),
+        ("nvidia", "av1") => Some("av1_nvenc"),
+        ("amd", "h264") => Some("h264_amf"),
+        ("amd", "hevc") => Some("hevc_amf"),
+        ("intel", "h264") => Some("h264_qsv"),
+        ("intel", "hevc") => Some("hevc_qsv"),
+        (_, "x264") => Some("libx264"),
+        _ => None,
+    }
+}
+
+/// True when `ffmpeg` can actually open the encoder (10 black frames through
+/// it). This catches missing HW blocks (e.g. AV1 on a Turing card), which a
+/// vendor string alone cannot.
+async fn probe_encoder(ffmpeg: &Path, encoder: &str) -> bool {
+    let out = tokio::time::timeout(
+        Duration::from_secs(8),
+        tokio::process::Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=320x240:d=0.4",
+                "-c:v",
+                encoder,
+                "-f",
+                "null",
+                "-",
+            ])
+            .output(),
+    )
+    .await;
+    matches!(out, Ok(Ok(o)) if o.status.success())
+}
+
+fn probe_cache() -> &'static Mutex<HashMap<String, Vec<String>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Codec ids this machine can really encode, in ladder order. Probes each
+/// candidate encoder with a live micro-encode (cached per process); falls
+/// back to the static vendor table when ffmpeg is missing. `ffmpeg` must be
+/// the SHIPPED binary (bundled sidecar first) — never an incidental PATH
+/// copy. `x264` is always included when its probe passes (or when probing
+/// is impossible but the vendor is known — a CPU encoder needs no GPU).
+pub async fn offered_codecs(ffmpeg: &Path) -> Vec<String> {
+    let v = vendor().await;
+    if let Some(hit) = probe_cache().lock().ok().and_then(|c| c.get(&v).cloned()) {
+        return hit;
+    }
+    let ffmpeg_ok = tokio::process::Command::new(ffmpeg)
+        .args(["-hide_banner", "-version"])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let mut ids: Vec<String> = if ffmpeg_ok {
+        let mut candidates = static_codecs_for_vendor(&v);
+        if !candidates.iter().any(|c| c == "x264") {
+            candidates.push("x264".to_string());
+        }
+        let mut ok_ids = Vec::new();
+        for codec in &candidates {
+            let keep = match probe_encoder_name(&v, codec) {
+                Some(enc) => probe_encoder(ffmpeg, enc).await,
+                None => false,
+            };
+            if keep {
+                ok_ids.push(codec.clone());
+            }
+        }
+        // Never strand the user with an empty list: h264 is the floor.
+        if ok_ids.is_empty() {
+            static_codecs_for_vendor(&v)
+        } else {
+            ok_ids
+        }
+    } else {
+        let mut ids = static_codecs_for_vendor(&v);
+        if !ids.iter().any(|c| c == "x264") {
+            ids.push("x264".to_string());
+        }
+        ids
+    };
+    // Ladder order: h264, hevc, av1, x264.
+    ids.sort_by_key(|c| match c.as_str() {
+        "h264" => 0,
+        "hevc" => 1,
+        "av1" => 2,
+        _ => 3,
+    });
+    if let Ok(mut c) = probe_cache().lock() {
+        c.insert(v, ids.clone());
+    }
+    ids
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_filter, capture_max_fps, source_fallback, CaptureSource};
+    use super::{resolve_monitor, static_codecs_for_vendor, vendor_from_pci_id, Monitor};
 
-    #[test]
-    fn scales_live_on_windows() {
-        assert!(super::scales_live());
+    fn m(name: &str, alt: &str, primary: bool) -> Monitor {
+        Monitor {
+            name: name.into(),
+            alt_id: alt.into(),
+            label: String::new(),
+            width: 1920,
+            height: 1080,
+            primary,
+        }
     }
 
     #[test]
-    fn capture_cap_keeps_two_candidates_per_slot() {
-        // 164 Hz monitor, 60 fps output -> 120, not the refresh and not 60:
-        // two source frames per CFR slot so a suppressed present drops instead
-        // of duplicating.
-        assert_eq!(capture_max_fps(164, 60), 120);
-        assert_eq!(capture_max_fps(144, 60), 120);
-        // A 60 Hz panel is already the cap (never above it).
-        assert_eq!(capture_max_fps(60, 60), 60);
-        // 30 fps output still gets the min-90 headroom.
-        assert_eq!(capture_max_fps(164, 30), 90);
-        // Unknown refresh falls back to >= 2x.
-        assert_eq!(capture_max_fps(0, 60), 120);
-        assert_eq!(capture_max_fps(24, 30), 120);
+    fn pci_ids_map() {
+        assert_eq!(vendor_from_pci_id(0x10DE), "nvidia");
+        assert_eq!(vendor_from_pci_id(0x1002), "amd");
+        assert_eq!(vendor_from_pci_id(0x1022), "amd");
+        assert_eq!(vendor_from_pci_id(0x8086), "intel");
+        assert_eq!(vendor_from_pci_id(0x1234), "unknown");
     }
 
     #[test]
-    fn fallback_only_from_wgc() {
-        assert_eq!(source_fallback("gfxcapture", false, None), Some("ddagrab"));
-        assert_eq!(source_fallback("gfxcapture", true, Some(true)), Some("ddagrab"));
-        assert_eq!(source_fallback("gfxcapture", true, Some(false)), None);
-        assert_eq!(source_fallback("gfxcapture", true, None), None);
-        assert_eq!(source_fallback("ddagrab", false, Some(true)), None);
+    fn static_offer_is_conservative() {
+        // AV1 only where encode blocks are near-guaranteed.
+        assert!(static_codecs_for_vendor("nvidia").contains(&"av1".to_string()));
+        assert!(!static_codecs_for_vendor("amd").contains(&"av1".to_string()));
+        assert!(!static_codecs_for_vendor("intel").contains(&"av1".to_string()));
+        assert!(!static_codecs_for_vendor("unknown").contains(&"hevc".to_string()));
     }
 
     #[test]
-    fn capture_filter_shapes() {
-        // NVENC zero-copy; max fps is the 2x-headroom cap (`capture_max_fps`).
-        let monitor = CaptureSource {
-            kind: "gfxcapture",
-            hmonitor: 65673,
-            monitor_idx: 0,
-            hwnd: None,
-            window_exe: None,
-            max_fps: 165,
-        };
-        let f = capture_filter("nvidia", "h264", &monitor, 1920, 1080, 720, 60);
-        assert!(f.starts_with("gfxcapture=hmonitor=65673:max_framerate=165"), "{f}");
-        assert!(f.contains("width=1280:height=720:resize_mode=scale_aspect:scale_mode=bicubic"), "{f}");
-        assert!(!f.contains("hwdownload"), "{f}");
-        assert!(f.ends_with("[out]"));
-        // Fallback path downloads + lanczos + yuv420p.
-        let amd = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: None, window_exe: None, max_fps: 120 };
-        let f = capture_filter("amd", "h264", &amd, 1920, 1080, 720, 30);
-        assert!(f.contains("hwdownload,format=bgra"), "{f}");
-        assert!(f.contains("scale=-2:720:flags=lanczos"), "{f}");
-        assert!(f.contains("format=yuv420p"), "{f}");
-        // x264 always downloads even on NVIDIA.
-        let big = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: None, window_exe: None, max_fps: 165 };
-        let f = capture_filter("nvidia", "x264", &big, 2560, 1440, 0, 60);
-        assert!(f.contains("hwdownload"), "{f}");
-        assert!(!f.contains("scale="), "{f}");
-        // Desktop Duplication fallback by output index, duplicates off.
-        let dda = CaptureSource { kind: "ddagrab", hmonitor: 1, monitor_idx: 2, hwnd: None, window_exe: None, max_fps: 165 };
-        let f = capture_filter("nvidia", "h264", &dda, 1920, 1080, 0, 60);
-        assert!(f.starts_with("ddagrab=output_idx=2:framerate=165:dup_frames=0"), "{f}");
-        assert!(!f.contains("hmonitor"), "{f}");
-        // ddagrab has no GPU resizer: scaling goes through the download path.
-        let f = capture_filter("nvidia", "h264", &dda, 1920, 1080, 720, 60);
-        assert!(f.contains("hwdownload,format=bgra"), "{f}");
-        assert!(f.contains("scale=-2:720:flags=lanczos"), "{f}");
-        // Window capture: hwnd wins; scaling falls to the download path.
-        let win = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: Some(4242), window_exe: None, max_fps: 144 };
-        let f = capture_filter("nvidia", "h264", &win, 1920, 1080, 720, 60);
-        assert!(f.starts_with("gfxcapture=hwnd=4242:max_framerate=144"), "{f}");
-        assert!(f.contains("hwdownload"), "{f}");
-        let win_exe = CaptureSource { kind: "gfxcapture", hmonitor: 1, monitor_idx: 0, hwnd: None, window_exe: Some("^cod.exe$"), max_fps: 144 };
-        let f = capture_filter("nvidia", "h264", &win_exe, 1920, 1080, 0, 60);
-        assert!(f.starts_with("gfxcapture=window_exe='^cod.exe$':max_framerate=144"), "{f}");
-        assert!(!f.contains("hwdownload"), "{f}");
+    fn monitor_resolution_prefers_device_id_then_alt_then_index() {
+        let monitors = vec![
+            m("dev-a", r"\\.\DISPLAY1", true),
+            m("dev-b", r"\\.\DISPLAY2", false),
+        ];
+        assert_eq!(
+            resolve_monitor(&monitors, "dev-a").unwrap().alt_id,
+            r"\\.\DISPLAY1"
+        );
+        assert_eq!(
+            resolve_monitor(&monitors, r"\\.\DISPLAY2").unwrap().name,
+            "dev-b"
+        );
+        assert_eq!(resolve_monitor(&monitors, "0").unwrap().name, "dev-a");
+        assert_eq!(resolve_monitor(&monitors, "1").unwrap().name, "dev-b");
+        // Unknown/legacy values fall back to primary, never to nothing.
+        assert_eq!(resolve_monitor(&monitors, "DP-1").unwrap().name, "dev-a");
+        assert_eq!(resolve_monitor(&monitors, "").unwrap().name, "dev-a");
+        assert!(resolve_monitor(&[], "x").is_none());
     }
 }

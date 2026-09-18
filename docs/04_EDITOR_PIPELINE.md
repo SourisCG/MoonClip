@@ -6,7 +6,7 @@ Goal: Medal-style trim (In/Out) with waveform. No NLE. Preview in web, processin
 
 - **Cap (CapSoftware/Cap, AGPL-3.0):** Tauri+React+FFmpeg architecture, player↔Rust IPC layout.
 - **LosslessCut (mifi/lossless-cut, GPL-3.0):** exact FFmpeg cut args, keyframe handling.
-- MoonClip is GPL-3.0-compatible (due to `gpu-screen-recorder` GPL-3.0), so studying both is license-safe. Prefer MIT/Apache libs at runtime (`wavesurfer.js` BSD-3).
+- MoonClip is GPL-3.0-compatible (bundled OBS Studio is GPL-2.0-or-later, shipped as a separate process), so studying both is license-safe. Prefer MIT/Apache libs at runtime (`wavesurfer.js` BSD-3).
 
 ## 2. Frontend: `ClipEditor.tsx` (must be lazy)
 

@@ -5,29 +5,83 @@
 //! Shared code (commands, state, editor, storage, cue) talks to `crate::os`
 //! and never knows which OS it runs on.
 
+use std::path::PathBuf;
+use tauri::AppHandle;
+
 mod api;
 #[cfg(target_os = "linux")]
 pub mod linux;
+pub mod obs;
 #[cfg(target_os = "windows")]
 pub mod windows;
 // Non-desktop dev fallback (docs builds, IDE checks): Linux backend.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub mod linux;
 
-pub use api::{AudioDevice, CaptureConfig, CaptureEngine, SavePlan, TranscodeEncoder};
+pub use api::{AudioDevice, CaptureConfig, CaptureEngine};
 
 #[cfg(target_os = "linux")]
-pub use linux::{
-    audio, backend_name, binary, caps, devices, open, paths, prepare_environment, video, Engine,
-};
-#[cfg(target_os = "windows")]
-pub use windows::{
-    audio, backend_name, binary, caps, devices, open, paths, prepare_environment, video, Engine,
-};
+pub use linux::{backend_name, devices, open, paths, prepare_environment, video, Engine};
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub use linux::{
-    audio, backend_name, binary, caps, devices, open, paths, prepare_environment, video, Engine,
-};
+pub use linux::{backend_name, devices, open, paths, prepare_environment, video, Engine};
+#[cfg(target_os = "windows")]
+pub use windows::{backend_name, devices, open, paths, prepare_environment, video, Engine};
+
+/// New embedded-OBS engine for this OS.
+#[cfg(target_os = "linux")]
+pub fn new_engine() -> Engine {
+    linux::new_engine()
+}
+#[cfg(target_os = "windows")]
+pub fn new_engine() -> Engine {
+    windows::new_engine()
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn new_engine() -> Engine {
+    linux::new_engine()
+}
+
+/// Resolved embedded OBS binary + provenance (bundled/env).
+#[cfg(target_os = "linux")]
+pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+    linux::binary::resolve_obs(app)
+}
+#[cfg(target_os = "windows")]
+pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+    windows::binary::resolve_obs(app)
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+    linux::binary::resolve_obs(app)
+}
+
+/// Resolved embedded obs-cmd binary + provenance (bundled/env).
+#[cfg(target_os = "linux")]
+pub fn resolve_obscmd(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+    linux::binary::resolve_obscmd(app)
+}
+#[cfg(target_os = "windows")]
+pub fn resolve_obscmd(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+    windows::binary::resolve_obscmd(app)
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn resolve_obscmd(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+    linux::binary::resolve_obscmd(app)
+}
+
+/// MoonClip-owned OBS config root (never the user's OBS config).
+#[cfg(target_os = "linux")]
+pub fn obs_config_root() -> Result<PathBuf, String> {
+    linux::obs::config_root()
+}
+#[cfg(target_os = "windows")]
+pub fn obs_config_root() -> Result<PathBuf, String> {
+    windows::obs::config_root()
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn obs_config_root() -> Result<PathBuf, String> {
+    linux::obs::config_root()
+}
 
 /// Free physical memory in MB when the platform can report it (used by the
 /// settings UI to color the buffer-size warning; `None` hides the check).

@@ -1,6 +1,10 @@
 //! Shared capture contract (OS-independent).
 //! Every backend under os/linux and os/windows implements this trait.
 //! Mirrors the OBS model: uniform interface, per-OS files behind it.
+//!
+//! MoonClip V3 engine: both platforms drive the embedded, fully isolated OBS
+//! Studio (portable config dir + obs-websocket + obs-cmd). The trait below is
+//! the only surface shared code (commands.rs) sees.
 
 use std::path::PathBuf;
 
@@ -9,64 +13,48 @@ pub struct CaptureConfig {
     pub duration_seconds: u32,
     pub fps: u32,
     pub output_dir: PathBuf,
-    /// Resolved GSR binary (bundled sidecar). None = resolve from env/PATH.
-    pub gsr_bin: Option<PathBuf>,
-    /// Audio sources for `-a` (game first, mic second).
-    pub desktop_device: String,
-    pub mic_device: String,
-    /// Capture source for `-w` ("screen", monitor name, …). Empty = backend default.
-    pub source: String,
-    /// Video codec id for `-k` (h264/hevc/av1, as listed by the backend).
+    /// App codec id: h264 | hevc | av1.
     pub codec: String,
-    /// Spawn `-s` height (0 = omit, capture at source). This is the BUFFER
-    /// resolution; the file the user asked for may differ (see save_height).
+    /// Encoder preference: `gpu` (hardware) or `cpu` (software x264).
+    pub encoder: String,
+    /// GPU index for hardware encoders (0 = default/auto in OBS).
+    pub gpu_index: u32,
+    /// CBR bitrate in kbps for the replay buffer.
+    pub bitrate_kbps: u32,
+    /// Delivered height (0 = source). OBS scales on the GPU.
     pub out_height: u32,
-    /// CBR bitrate in kbps for `-q` (matches the BUFFER resolution).
-    pub bitrate_kbps: u32,
-    /// Height to deliver at save time (0 = keep captured). When lower than
-    /// the buffer resolution, the saver downscales with lanczos instead of
-    /// trusting the backend's live scaler (proven soft on text, 1.5x ratios).
-    pub save_height: u32,
-    /// CBR bitrate for the delivered file (ladder row of save_height).
-    pub save_bitrate_kbps: u32,
-    /// Save-time encoder (None = no valid encoder on this GPU, keep source).
-    pub save_encoder: Option<TranscodeEncoder>,
-    /// Extra `-ffmpeg-video-opts` (NVENC HQ recipe, NVIDIA only). None = backend defaults.
-    pub nvenc_opts: Option<String>,
-    /// Resolved ffmpeg binary for encode/mux/probe duties (bundled sidecar
-    /// first, dev PATH fallback). None = resolve via env/PATH legacy path.
-    /// The Linux GSR backend ignores this (it shells its own sidecar setup).
-    pub ffmpeg_bin: Option<PathBuf>,
-    /// Compatibility mode: save with a single audio track (the Mix) so any
-    /// player plays it. False = 3 tracks (Mix, Game, Mic; Linux parity).
+    /// Monitor selector (platform id/name). Empty = primary/portal.
+    pub monitor: String,
+    /// Optional window capture target (empty = monitor capture).
+    #[allow(dead_code)] // wired by the window-capture UI in a later phase
+    pub window: String,
+    /// Game/desktop audio device id ("default_output" = OS default).
+    pub desktop_device: String,
+    /// Microphone device id ("default_input" = OS default).
+    pub mic_device: String,
+    /// Per-track capture gain (0-200 %). Applied to the OBS source volume.
+    pub gain_game: u32,
+    pub gain_mic: u32,
+    pub mute_game: bool,
+    pub mute_mic: bool,
+    /// Compatibility mode: record only the Mix track (1 instead of 3).
     pub audio_single_track: bool,
-    /// Force a capture source for this start (`gfxcapture`/`ddagrab`); `None`
-    /// = backend default/env. Used by the mid-session source fallback.
-    #[allow(dead_code)] // Linux GSR picks its own source
-    pub source_override: Option<String>,
-    /// Capture-rate cap override (0 = backend auto: 2x output, clamped to the
-    /// panel refresh). Lowering it trades motion sampling for GPU headroom.
-    #[allow(dead_code)]
-    pub capture_max_fps: u32,
-    /// MP4 `+faststart` (moov relocation). Off by default: it rewrites the
-    /// whole file and doubles save I/O on SATA/HDD.
-    #[allow(dead_code)]
-    pub faststart: bool,
-    /// Output container: `mp4` (default, faststart) or `mkv`. The Linux GSR
-    /// backend keeps its own container handling and ignores this.
-    #[allow(dead_code)]
+    /// Output container: `mp4` (default) or `mkv`.
     pub container: String,
-}
-
-/// Background downscale applied at save time (lanczos, per-vendor encoder).
-#[derive(Debug, Clone, Default)]
-pub struct SavePlan {
-    pub height: u32,
-    pub bitrate_kbps: u32,
-    pub codec: String,
-    pub fps: u32,
-    /// None = no valid save-time encoder on this GPU (keep source file).
-    pub encoder: Option<TranscodeEncoder>,
+    /// GPU vendor slug (nvidia/amd/intel/unknown), resolved by the caller.
+    pub vendor: String,
+    /// Base (canvas) resolution of the capture source. When `out_height == 0`
+    /// the output resolution equals the base.
+    pub base_width: u32,
+    pub base_height: u32,
+    /// Resolved embedded OBS binary (None = resolve via bundle/PATH).
+    pub obs_bin: Option<PathBuf>,
+    /// Resolved embedded obs-cmd binary.
+    pub obscmd_bin: Option<PathBuf>,
+    /// obs-websocket port for MoonClip's private OBS instance.
+    pub websocket_port: u16,
+    /// obs-websocket password (hex, generated once and persisted).
+    pub websocket_password: String,
 }
 
 /// Unified engine interface. Methods are async to allow signal waits / IPC.
@@ -75,17 +63,11 @@ pub trait CaptureEngine: Send + Sync {
     async fn start_buffer(&mut self, config: CaptureConfig) -> Result<(), String>;
     async fn save_clip(&mut self) -> Result<PathBuf, String>;
     async fn stop_buffer(&mut self) -> Result<(), String>;
-    fn backend_name(&self) -> &'static str;
-    /// The exact `-a` audio args the running engine spawned with (for stream matching).
-    fn audio_args(&self) -> Vec<String> {
-        vec![]
+    /// Audio tracks the running configuration records (1 or 3).
+    fn tracks_linked(&self) -> usize {
+        0
     }
-    /// Downscale to apply at save time (None = deliver as captured).
-    fn save_plan(&self) -> Option<SavePlan> {
-        None
-    }
-    /// Engine liveness. Native backends own their threads and default to true;
-    /// subprocess backends report whether the child is still running.
+    /// Engine liveness (child process still running).
     fn check_alive(&mut self) -> bool {
         true
     }
@@ -93,48 +75,18 @@ pub trait CaptureEngine: Send + Sync {
     fn log_tail(&self) -> Vec<String> {
         vec![]
     }
-    /// A native backend may request a capture-source switch mid-session
-    /// (e.g. WGC stalled/black -> DXGI Duplication). Taken once; `None` when
-    /// there is nothing to do. Subprocess backends never request one.
-    #[allow(dead_code)] // consumed by the liveness sweep in commands.rs
-    fn source_fallback_request(&mut self) -> Option<String> {
-        None
+    /// Live mute toggle for one capture track ("game" | "mic"). Backends that
+    /// cannot apply it live return an error (the setting still persists).
+    async fn set_mute(&mut self, _track: &str, _muted: bool) -> Result<(), String> {
+        Err("live mute not supported by this backend".into())
     }
 }
 
-/// One capture device from `--list-audio-devices` (or OS enumeration).
+/// One capture device from OS enumeration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioDevice {
     pub id: String,
     pub description: String,
     /// "mic" or "desktop"
     pub kind: String,
-}
-
-/// Video encoder id for save-time transcoding, chosen per GPU vendor.
-/// Unknown vendors fall back to `None` (caller keeps the source file).
-/// `X264` is the software CPU encoder — vendor-independent, always offered
-/// on Windows as a fallback when no GPU block fits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum TranscodeEncoder {    Nvenc,
-    Amf,
-    Qsv,
-    X264,
-}
-
-impl TranscodeEncoder {
-    /// FFmpeg encoder name for `codec` (`h264`/`hevc`/`av1`/`x264`).
-    pub fn ffmpeg_name(self, codec: &str) -> Option<&'static str> {
-        match (self, codec) {
-            (Self::Nvenc, "hevc") => Some("hevc_nvenc"),
-            (Self::Nvenc, "av1") => Some("av1_nvenc"),
-            (Self::Nvenc, _) => Some("h264_nvenc"),
-            (Self::Amf, "hevc") => Some("hevc_amf"),
-            (Self::Amf, _) => Some("h264_amf"),
-            (Self::Qsv, "hevc") => Some("hevc_qsv"),
-            (Self::Qsv, _) => Some("h264_qsv"),
-            (Self::X264, "x264") => Some("libx264"),
-            (Self::X264, _) => None,
-        }
-    }
 }

@@ -14,10 +14,11 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 - IPC: `list_clips`, `toggle_favorite`, `register_app`, `get_settings/set_settings`, `resolve_clip_src`.
 - **Accept:** CRUD works; `base_dir + file_name` resolves; no absolute path in DB; token round-trips in OS vault.
 
-## Phase 3 — Capture engine (replay + dual audio)
+## Phase 3 — Capture engine (embedded OBS replay + 3-track audio) — V3
 
-- `CaptureEngine` trait; Linux GSR sidecar (`-r 30 -a "default_output|default_input"`, `SIGUSR1` via `nix`); Windows: bundled FFmpeg `gfxcapture` (WGC, D3D11 zero-copy) + WASAPI (`wasapi` crate); `rodio` ding; tray status.
-- **Accept:** F9 → `.mp4` <1s with 2 audio tracks; indexed in DB with thumbnail.
+- `CaptureEngine` trait + shared `os/obs.rs` engine: writable portable OBS copy, generated `MoonClip` profile/scene (display sources only, never `game_capture`), private obs-websocket, bundled `obs-cmd` for replay start/stop/save/status; `rodio` ding; tray status.
+- Windows: `monitor_capture` (DXGI Desktop Duplication) + WASAPI; Linux: PipeWire portal + PulseAudio.
+- **Accept:** F9 → `.mp4` with 3 audio tracks (Mix first); indexed in DB with thumbnail; the user's own OBS config is never touched.
 
 ## Phase 4 — Game detection + launchers
 
@@ -40,18 +41,14 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 - Narrow `tauri.conf.json` targets, `release.yml` matrix, SmartScreen README note, versioned Release assets.
 - **Accept:** `v*` tag produces `.exe/.msi/.AppImage/.rpm/.deb` downloadables.
 
-## Post-7 milestone — native GSR scaler patch (BEFORE Windows signing)
+## Post-7 milestone — capture quality on Linux portal (BEFORE Windows signing)
 
-- After the Flatpak + MS Store versions ship, before signing `.exe`/`.msi`:
-  patch the downscale filter in our pinned GSR build (Bicubic default,
-  Lanczos under test) in `build-aux/patches/`, applied by `build-gsr.sh`,
-  registered in `docs/THIRD_PARTY.md` (GPL: patch published in-repo).
-- Rationale: GSR samples with hardcoded `GL_LINEAR` (bilinear, no mipmaps);
-  1080p→720p (1.5x) softens text. Industry fix (OBS): Bicubic default,
-  Lanczos 36-sample for detail. Same RAM/bitrate/latency/save behavior.
-- **Accept:** same VSCode text, 720p stock vs patched on a 1:1 720p monitor,
-  200% crops + SSIM/blur clearly better, no encoder overload. If not
-  clearly better, the patch is NOT merged.
+- Superseded by V3: scaling is GPU-side inside OBS and the portal source is
+  compositor-level. If text sharpness needs more control on Linux, revisit
+  OBS's `ScaleType`/scaling filter (bicubic default, lanczos option) instead of
+  patching a downstream recorder. No GSR patch pipeline anymore.
+- **Accept:** same VSCode text, 720p stock vs tuned on a 1:1 720p monitor,
+  200% crops + SSIM/blur clearly better, no encoder overload.
 
 ---
 

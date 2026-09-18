@@ -65,76 +65,15 @@ pub async fn probe_duration_ms(ffmpeg: &Path, input: &Path) -> Option<i64> {
         .ok()?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     // Line looks like: Duration: 00:01:20.65, start: 0.000000, bitrate: ...
-    let line = stderr.lines().find(|l| l.trim_start().starts_with("Duration:"))?;
+    let line = stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with("Duration:"))?;
     let time = line.split(',').next()?.split("Duration:").nth(1)?.trim();
     let mut parts = time.split(':');
     let h: i64 = parts.next()?.parse().ok()?;
     let m: i64 = parts.next()?.parse().ok()?;
     let s: f64 = parts.next()?.parse().ok()?;
     Some(((h * 3600 + m * 60) as f64 * 1000.0 + s * 1000.0) as i64)
-}
-
-/// Downscale to `height` (aspect kept, width auto-even) with lanczos.
-///
-/// Encoder comes from `os::video::transcode_encoder(vendor, codec)` — NVENC /
-/// QSV / AMF per GPU. Used at save time instead of the backend's live scaler,
-/// which proved soft on text at non-integer ratios (1080p→720p). Same CBR
-/// ladder bitrate as a direct capture would use. Returns false on any failure
-/// (caller keeps source).
-#[allow(clippy::too_many_arguments)]
-pub async fn scale_to_height(
-    ffmpeg: &Path,
-    input: &Path,
-    output: &Path,
-    height: u32,
-    bitrate_kbps: u32,
-    encoder: crate::os::TranscodeEncoder,
-    codec: &str,
-    fps: u32,
-) -> bool {
-    let Some(enc_name) = encoder.ffmpeg_name(codec) else {
-        return false;
-    };
-    let mut cmd = tokio::process::Command::new(ffmpeg);
-    cmd.args([
-        "-y", "-hide_banner", "-loglevel", "error",
-        "-i", &input.to_string_lossy(),
-        "-vf", &format!("scale=-2:{height}:flags=lanczos"),
-        "-c:v", enc_name,
-    ]);
-    // Preset/tune knobs only exist on NVENC; QSV/AMF use their own quality
-    // flags so the command stays valid on every vendor. x264 (CPU) runs
-    // veryfast + zerolatency: tuned for live capture, not file size.
-    if matches!(encoder, crate::os::TranscodeEncoder::Nvenc) {
-        cmd.args(["-preset", "p7", "-tune", "hq"]);
-    } else if matches!(encoder, crate::os::TranscodeEncoder::Amf) {
-        cmd.args(["-quality", "quality"]);
-    } else if matches!(encoder, crate::os::TranscodeEncoder::X264) {
-        cmd.args(["-preset", "veryfast", "-tune", "zerolatency"]);
-    } else {
-        cmd.args(["-preset", "veryslow"]);
-    }
-    // `high` is an H.264 profile; HEVC uses `main`. AV1 skips profile flags.
-    // `x264` is H.264 too, so it takes `high` like `h264`.
-    if codec == "hevc" {
-        cmd.args(["-profile:v", "main"]);
-    } else if codec == "h264" || codec == "x264" {
-        cmd.args(["-profile:v", "high"]);
-    }
-    let gop = (fps.max(1) * 2).to_string();
-    let out = cmd
-        .args([
-            "-bf", "2",
-            "-b:v", &format!("{bitrate_kbps}k"),
-            "-maxrate", &format!("{bitrate_kbps}k"),
-            "-bufsize", &format!("{bitrate_kbps}k"),
-            "-g", &gop,
-            "-c:a", "copy",
-        ])
-        .arg(output)
-        .output()
-        .await;
-    matches!(out, Ok(o) if o.status.success())
 }
 
 /// Extract one JPEG thumbnail at `seek_secs`. Fast (no re-encode of the clip).
@@ -150,12 +89,20 @@ pub async fn make_thumbnail(
     let seek = format!("{:.2}", seek_secs.clamp(0.05, 3600.0));
     let status = tokio::process::Command::new(ffmpeg)
         .args([
-            "-y", "-hide_banner", "-loglevel", "error",
-            "-ss", &seek,
-            "-i", &input.to_string_lossy(),
-            "-vframes", "1",
-            "-q:v", "2",
-            "-strict", "unofficial",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            &seek,
+            "-i",
+            &input.to_string_lossy(),
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
+            "-strict",
+            "unofficial",
         ])
         .arg(output)
         .status()
@@ -181,7 +128,7 @@ mod tests {
             .args(["-hide_banner", "-version"])
             .output()
             .await;
-        if probe.map(|o| o.status.success()).unwrap_or(false) == false {
+        if !probe.map(|o| o.status.success()).unwrap_or(false) {
             eprintln!("[moonclip-test] ffmpeg missing from PATH, skipping thumbnail test");
             return;
         }
@@ -192,11 +139,22 @@ mod tests {
         // 3 s of limited-range yuv420p h264 (swscale default range, like NVENC).
         let st = tokio::process::Command::new(&ffmpeg)
             .args([
-                "-y", "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", "color=c=red:s=320x240:d=3",
-                "-vf", "format=yuv420p",
-                "-c:v", "libx264", "-preset", "ultrafast",
-                "-color_range", "tv",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=320x240:d=3",
+                "-vf",
+                "format=yuv420p",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-color_range",
+                "tv",
             ])
             .arg(&clip)
             .status()

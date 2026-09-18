@@ -1,18 +1,23 @@
-//! Linux backend assembly. Everything Linux-only is reachable via this module.
+//! Linux backend assembly: shared embedded-OBS engine bound to the Linux
+//! platform (PipeWire portal capture, PulseAudio devices, XDG-isolated OBS
+//! config).
 
-pub mod audio;
 pub mod binary;
-pub mod caps;
 pub mod devices;
+pub mod obs;
 pub mod open;
 pub mod paths;
 pub mod video;
-mod gsr;
 
-pub use gsr::LinuxGsrEngine as Engine;
+pub use super::obs::ObsEngine as Engine;
+
+/// New engine wired to the Linux platform.
+pub fn new_engine() -> Engine {
+    obs::new_engine()
+}
 
 pub fn backend_name() -> &'static str {
-    "gpu-screen-recorder"
+    "obs"
 }
 
 /// WebKitGTK crashes at first paint on Wayland (Gdk `Error 71`) unless the

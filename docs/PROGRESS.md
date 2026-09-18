@@ -783,3 +783,59 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 | `4f30c08` | `1981222` | fix(phase3): camelCase revert, scroll, title, resize grips |
 | `328e911` | `eae081d` | fix(phase3): clip filename as row title, probe cleanup |
 | `f290be2` | `a098988` | feat(phase3): Medal bitrate ladder + NVENC HQ recipe + video settings |
+
+## V3 — embedded isolated OBS engine (2026-09-18)
+
+- **Capture engine replaced end-to-end on BOTH OSes** by one shared engine
+  (src-tauri/src/os/obs.rs): MoonClip now ships an embedded, isolated OBS
+  Studio and drives it with the bundled obs-cmd over a private
+  obs-websocket. GSR (os/linux/gsr.rs + uild-aux/build-gsr.sh) and the
+  ffmpeg gfxcapture engine (os/windows/{engine,ring,pts,dsp,mux,encode,
+  detector,audio,caps}.rs) are deleted.
+- **Isolation ("que no se vean ni en pintura")**: OBS is launched with
+  --config-dir <MoonClip dir> (Windows `%LOCALAPPDATA%\MoonClip\obs`,
+  Linux `~/.config/MoonClip/obs`), `--multi`, generated profile/collection
+  `MoonClip`; the user's OBS config is never read/written. Hard guards:
+  `--config-dir` support probe + config-directory guard, private websocket
+  port + generated password, Repair button that only deletes OUR config root.
+- **Anti-cheat (~0 hook risk)**: generated scenes use ONLY compositor sources
+  (monitor_capture DXGI / window_capture WGC on Windows, PipeWire portal on
+  Linux). `game_capture` (process hooking) is forbidden and test-enforced.
+- **Audio**: 3-track layout preserved (Mix 320k / Game 320k / Mic 192k, Mix
+  first) via profile `RecTracks=7` + source mixers; live mutes through
+  `obs-cmd audio`; gains persisted into the scene (restart-once notice);
+  `audio_peaks` is null (no fake meters).
+- **New Settings UI** (VideoSection.tsx): Medal-style Moon preset cards
+  (Low/Medium/New Moon/First Quarter/Waning Gibbous/Full Moon) with Medal
+  recommended ranges, FPS 24-144, codec H264/H265/AV1, GPU/CPU encoder,
+  custom bitrate/FPS, duration, container, RAM/performance warnings, and an
+  "Motor OBS (aislado)" panel (ObsEngineSection.tsx).
+- **Optional first-run hardware test** (	est_hardware + wizard): start with
+  candidate values (not persisted), record ~10 s, save, validate duration/size,
+  suggest one step down on failure, restore the previous buffer state.
+- **Packaging**: uild-aux/fetch-obs.ps1 pins OBS portable
+  32.2.2 (sha256 verified) + obs-cmd 1.0.2 (sha256 verified, the release
+  that fixed replay-save flushing); etch-obs.sh does the Linux .deb
+  best-effort unpack plus a system-obs fallback; Tauri overlays bundle both.
+- **Gates**: cargo test 36 passed, cargo clippy --all-targets -- -D
+  warnings clean, pnpm build clean, zero-cfg grep clean, game_capture
+  only in guard constants/tests. Pending (owner): Windows in-game pass,
+  system-OBS coexistence, Linux portal run.
+
+### V3.1 — aislamiento corregido: modo portable real (2026-09-18)
+
+- **Hallazgo (probado en vivo)**: OBS Studio 32.2.2 en Windows IGNORA
+  `--config-dir`: arrancó en `Portable mode: false` y escribió en
+  `%APPDATA%\obs-studio` (log + user.ini), descartando ese enfoque.
+- **Fix**: MoonClip ahora **copia** el OBS embebido a una carpeta escribible
+  propia (`%LOCALAPPDATA%\MoonClip\obs` en Windows,
+  `~/.local/share/MoonClip/obs` en Linux), escribe `portable_mode.txt` y
+  arranca con `--portable`. OBS escribe `config/` dentro de esa copia por
+  construcción; la config del usuario queda intocable. Marker de build para
+  re-copiar cuando cambie la versión embebida; el `Repair` sigue borrando
+  solo nuestra config.
+- **Linux system-obs**: sin copia posible → `--config-dir` + config guard.
+- **fetch-obs**: ya no ejecuta OBS jamás (ni `--help` ni `--version`) y
+  quedó pinneado y verificado por sha256: OBS 32.2.2 + obs-cmd v1.0.2.
+- Gates: `cargo clippy --all-targets -D warnings` limpio, 37 tests,
+  `pnpm build` limpio.

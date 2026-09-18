@@ -188,10 +188,7 @@ pub fn run() {
             // Bundled path first, dev-layout file second, window icon last.
             let icon = app
                 .path()
-                .resolve(
-                    "icons/tray-icon.png",
-                    tauri::path::BaseDirectory::Resource,
-                )
+                .resolve("icons/tray-icon.png", tauri::path::BaseDirectory::Resource)
                 .ok()
                 .and_then(|p| std::fs::read(p).ok())
                 .and_then(|b| load_tray_icon(&b))
@@ -215,7 +212,15 @@ pub fn run() {
                             let _ = w.set_focus();
                         }
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        // Stop the embedded OBS gracefully before exiting so no
+                        // orphan child is left holding the capture/encoder.
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = commands::stop_buffer(handle.clone()).await;
+                            handle.exit(0);
+                        });
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -294,12 +299,13 @@ pub fn run() {
             commands::audio_peaks,
             commands::set_track_gain,
             commands::set_track_mute,
-            commands::gsr_info,
-            commands::fix_gsr_caps,
+            commands::obs_info,
+            commands::repair_obs_config,
             commands::list_audio_devices,
             commands::preview_track,
             commands::open_clip_external,
             commands::video_options,
+            commands::test_hardware,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

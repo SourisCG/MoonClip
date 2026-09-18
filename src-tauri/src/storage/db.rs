@@ -9,21 +9,21 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, CustomApp, RegisterAppInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
 const MIGRATION_004: &str = include_str!("../../migrations/004_video.sql");
 const MIGRATION_005: &str = include_str!("../../migrations/005_fps.sql");
 const MIGRATION_006: &str = include_str!("../../migrations/006_monitor.sql");
+const MIGRATION_007: &str = include_str!("../../migrations/007_obs.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
 impl DbState {
     pub fn open(app: &AppHandle) -> Result<Self, String> {
         let db_path = paths::db_file_path(app)?;
-        let conn =
-            Connection::open(&db_path).map_err(|e| format!("cannot open database: {e}"))?;
+        let conn = Connection::open(&db_path).map_err(|e| format!("cannot open database: {e}"))?;
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| format!("cannot read schema version: {e}"))?;
@@ -52,6 +52,10 @@ impl DbState {
                 conn.execute_batch(MIGRATION_006)
                     .map_err(|e| format!("migration 006 failed: {e}"))?;
             }
+            if version < 7 {
+                conn.execute_batch(MIGRATION_007)
+                    .map_err(|e| format!("migration 007 failed: {e}"))?;
+            }
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
         }
@@ -78,8 +82,7 @@ impl DbState {
             .unwrap_or_default();
         if current.trim().is_empty() {
             let dir = paths::default_clips_dir();
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("cannot create clips dir: {e}"))?;
+            std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create clips dir: {e}"))?;
             conn.execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'clips_directory'",
                 params![dir.to_string_lossy()],
@@ -94,8 +97,11 @@ impl DbState {
                     params![fresh.to_string_lossy()],
                 )
                 .map_err(|e| format!("cannot save clips_directory: {e}"))?;
-                eprintln!("[moonclip] clips library relocated ({moved} files): {} -> {}",
-                    legacy.display(), fresh.display());
+                eprintln!(
+                    "[moonclip] clips library relocated ({moved} files): {} -> {}",
+                    legacy.display(),
+                    fresh.display()
+                );
                 return Ok(());
             }
             std::fs::create_dir_all(&current)
@@ -107,10 +113,10 @@ impl DbState {
         Ok(())
     }
 
-    fn lock(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
-        self.0.lock().map_err(|e| format!("database lock poisoned: {e}"))
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        self.0
+            .lock()
+            .map_err(|e| format!("database lock poisoned: {e}"))
     }
 
     pub fn clips_dir(&self) -> Result<PathBuf, String> {
@@ -186,7 +192,14 @@ impl DbState {
             "INSERT INTO clips
              (id, file_name, thumbnail_name, game_title, duration_ms, file_size_bytes)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, file_name, thumbnail_name, game_title, duration_ms, file_size_bytes],
+            params![
+                id,
+                file_name,
+                thumbnail_name,
+                game_title,
+                duration_ms,
+                file_size_bytes
+            ],
         )
         .map_err(|e| format!("cannot insert clip: {e}"))?;
         let clip: ClipRecord = conn
@@ -357,8 +370,7 @@ impl DbState {
         }
         if key == "clips_directory" {
             let dir = PathBuf::from(value);
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("cannot create clips dir: {e}"))?;
+            std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create clips dir: {e}"))?;
         }
         let conn = self.lock()?;
         conn.execute(
@@ -397,7 +409,12 @@ impl DbState {
     }
 
     pub fn register_app(&self, input: RegisterAppInput) -> Result<CustomApp, String> {
-        const STRATEGIES: &[&str] = &["exact_exe", "cmdline_contains", "window_title", "wine_target"];
+        const STRATEGIES: &[&str] = &[
+            "exact_exe",
+            "cmdline_contains",
+            "window_title",
+            "wine_target",
+        ];
         if input.display_name.trim().is_empty() || input.target_exe.trim().is_empty() {
             return Err("display_name and target_exe are required".into());
         }

@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # Local install/upgrade of the embedded build on THIS machine.
-# Package install + KMS capability + KDE/Wayland taskbar association.
+# Package install + KDE/Wayland taskbar association.
 # Re-run after each new build:  pnpm tauri:build:linux && pnpm app:install
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 RPM="$(ls -t "$ROOT"/src-tauri/target/release/bundle/rpm/*.rpm 2>/dev/null | head -1)"
-HELPER="/usr/lib/MoonClip/binaries/$TRIPLE/gsr-kms-server"
 
 if [ -z "$RPM" ]; then
   echo "error: no RPM found. Run first: pnpm tauri:build:linux" >&2
@@ -16,13 +14,6 @@ fi
 
 echo "==> installing $RPM"
 pkexec rpm -Uvh --replacepkgs "$RPM"
-
-# Updates replace the file, dropping file capabilities; the app also offers a
-# one-click fix in Settings -> Video when this is missing.
-if ! getcap "$HELPER" 2>/dev/null | grep -q cap_sys_admin; then
-  echo "==> granting cap_sys_admin to $HELPER"
-  pkexec setcap cap_sys_admin+ep "$HELPER"
-fi
 
 # KDE/Wayland matches the window appId (`dev.souriscg.moonclip`) against a
 # .desktop file with that exact name. The bundled file is MoonClip.desktop, so
@@ -45,5 +36,5 @@ if command -v kbuildsycoca6 >/dev/null; then
   kbuildsycoca6 >/dev/null 2>&1 || true
 fi
 
-echo "OK: installed, KMS cap applied, taskbar association present"
+echo "OK: installed and taskbar association present"
 echo "Launch from the app menu (MoonClip)."

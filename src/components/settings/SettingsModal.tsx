@@ -6,6 +6,7 @@ import { FolderOpen, KeyRound } from "lucide-react";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocale } from "../../hooks/useLocale";
 import { AudioSection } from "./AudioSection";
+import { ObsEngineSection } from "./ObsEngineSection";
 import { VideoSection } from "./VideoSection";
 import type { EngineStatus } from "../../hooks/useEngine";
 
@@ -235,6 +236,8 @@ export function SettingsModal({
         )}
       </div>
       <VideoSection />
+
+      <ObsEngineSection />
 
       <p className="pt-2 font-mono text-[11px] text-slate-600">
         build {buildId()}

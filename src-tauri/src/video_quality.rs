@@ -30,6 +30,29 @@ pub fn bitrate_kbps(height: u32, codec: &str) -> u32 {
     }
 }
 
+/// Medal's recommended bitrate range (kbps) per height and codec — shown in
+/// the settings UI next to the exact ladder cell so users understand where a
+/// custom value sits (Medal support table, 2026).
+pub fn recommended_kbps(height: u32, codec: &str) -> (u32, u32) {
+    match (height, codec) {
+        (360, _) | (480, _) => (3000, 5000),
+        (720, "h264" | "x264") => (8000, 12000),
+        (720, _) => (5000, 8000),
+        (1080, "h264" | "x264") => (15000, 20000),
+        (1080, "hevc") => (10000, 15000),
+        (1080, _) => (7000, 10000),
+        (1440, "h264" | "x264") => (20000, 30000),
+        (1440, "hevc") => (15000, 25000),
+        (1440, _) => (10000, 20000),
+        (2160, "h264" | "x264") => (50000, 70000),
+        (2160, "hevc") => (25000, 50000),
+        (2160, _) => (20000, 35000),
+        (_, "h264" | "x264") => (15000, 20000),
+        (_, "hevc") => (10000, 15000),
+        (_, _) => (7000, 10000),
+    }
+}
+
 /// Export-time CQP/CRF per delivered height (Medal ladder, SPEC §4).
 /// Only used for offline/re-encodes; the live buffer is always CBR.
 #[allow(dead_code)] // wired into the export/editor path in a later phase
@@ -44,32 +67,14 @@ pub fn cqp_export(height: u32) -> u32 {
     }
 }
 
-/// Exact NVENC HQ `-ffmpeg-video-opts` (old-MoonLit table). Dashes verified
-/// live: GSR accepts every key, saves clean, bitrate lands on target.
-/// Apply ONLY on NVIDIA + h264/hevc (meaningless/invalid elsewhere).
-/// Profile is per-codec: `high` exists only in H.264 — HEVC uses `main`
-/// (passing `high` to hevc_nvenc kills encoder init: no clip at all).
-pub fn nvenc_hq_opts(codec: &str) -> String {
-    let profile = if codec == "hevc" { "main" } else { "high" };
-    format!("preset=p7;tune=hq;profile={profile};bf=2;spatial-aq=1;multipass=disabled")
+/// Exact RAM/VRAM-ring megabytes for N seconds at a CBR bitrate.
+pub fn ring_mb(bitrate_kbps: u32, seconds: u32) -> u32 {
+    ((bitrate_kbps as u64 * seconds as u64) / 8 / 1000) as u32
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{bitrate_kbps, cqp_export, nvenc_hq_opts};
-
-    #[test]
-    fn hevc_gets_main_profile() {
-        let o = nvenc_hq_opts("hevc");
-        assert!(o.contains("profile=main"), "{o}");
-        assert!(!o.contains("profile=high"), "{o}");
-    }
-
-    #[test]
-    fn h264_keeps_high_profile() {
-        let o = nvenc_hq_opts("h264");
-        assert!(o.contains("profile=high"), "{o}");
-    }
+    use super::{bitrate_kbps, cqp_export, recommended_kbps, HEIGHTS};
 
     #[test]
     fn ladder_covers_medal_rows() {
@@ -92,6 +97,24 @@ mod tests {
     }
 
     #[test]
+    fn recommended_ranges_bracket_the_ladder() {
+        for &h in &HEIGHTS {
+            for codec in ["h264", "hevc", "av1", "x264"] {
+                let (min, max) = recommended_kbps(h, codec);
+                assert!(min < max, "{h} {codec} {min}-{max}");
+                let pick = bitrate_kbps(h, codec);
+                assert!(
+                    pick >= min && pick <= max,
+                    "{h}p {codec}: ladder {pick} outside Medal range {min}-{max}"
+                );
+            }
+        }
+        // Known Medal rows.
+        assert_eq!(recommended_kbps(1080, "h264"), (15000, 20000));
+        assert_eq!(recommended_kbps(2160, "hevc"), (25000, 50000));
+    }
+
+    #[test]
     fn cqp_export_matches_ladder() {
         assert_eq!(cqp_export(360), 24);
         assert_eq!(cqp_export(480), 23);
@@ -103,9 +126,4 @@ mod tests {
         assert_eq!(cqp_export(0), 20);
         assert_eq!(cqp_export(1234), 20);
     }
-}
-
-/// Exact RAM/VRAM-ring megabytes for N seconds at a CBR bitrate.
-pub fn ring_mb(bitrate_kbps: u32, seconds: u32) -> u32 {
-    ((bitrate_kbps as u64 * seconds as u64) / 8 / 1000) as u32
 }

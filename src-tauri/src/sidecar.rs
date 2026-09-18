@@ -1,7 +1,7 @@
 //! Sidecar path resolution (OS-free): bundled binaries first, system fallback.
-//! Layout: <res|exe>/binaries/<triple>/gpu-screen-recorder (+ gsr-kms-server, ffmpeg).
+//! Layout: <res|exe>/binaries/<triple>/… (obs/, obs-cmd, ffmpeg-<triple>).
 //! Dev layout: src-tauri/binaries/<triple>/ (walked up from target/debug/<bin>).
-//! OS-specific bits (caps, device lists, binary resolution) live under os/, never here.
+//! OS-specific bits (device lists, binary resolution) live under os/, never here.
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};

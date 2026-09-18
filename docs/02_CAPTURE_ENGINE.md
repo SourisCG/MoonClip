@@ -1,293 +1,177 @@
-# 02 — Capture Engine (Replay Buffer + Dual Audio)
+# 02 — Capture Engine (embedded OBS + obs-cmd)
 
 ## 1. Concept
 
-A clip app does NOT record continuously to disk. It keeps already-encoded packets in a RAM FIFO and remuxes to `.mp4`/`.mkv` on hotkey (no re-encode).
+A clip app is a rolling RAM replay buffer, not a recorder. MoonClip V3 owns no
+encoder of its own: it ships an **isolated OBS Studio** and a bundle of
+`obs-cmd`, and drives the OBS replay buffer:
 
-- GPU zero-copy capture → hardware encode (NVENC / AMF / QuickSync / VA-API) → ring buffer in RAM → flush on shortcut.
-
-## 2. Linux: `gpu-screen-recorder` (GSR) as sidecar daemon
-
-GSR is the fastest path on Linux (X11 + Wayland, KMS/DRM direct, no portal dialog).
-
-### 2.1 CLI (replay + triple audio)
-
-```bash
-gpu-screen-recorder \
-  -w screen \
-  -f 60 \
-  -k h264 \
-  -c mp4 \
-  -r 30 \
-  -a "default_output|default_input" \
-  -a "default_output" \
-  -a "default_input" \
-  -o /home/user/Videos/MoonClip
+```
+Settings (SQLite) -> Rust writes basic.ini + MoonClip scene collection
+                  -> stages a writable PORTABLE copy of the embedded OBS
+                     (portable_mode.txt) and launches it
+                  -> obs-cmd replay start      (buffer rolls in OBS RAM)
+F9                -> obs-cmd replay save       ("Saved replay: <path>")
+                  -> thumbnail + duration probe + SQLite index (unchanged)
 ```
 
-Track layout (order = track number):
-- **Track 1 = MIX** (`-a "desktop|mic"` merged): game + mic together, plays in any player / social embed. This is what gets shared.
-- **Track 2 = game only**, **Track 3 = mic only**: solo stems for the Phase 5 editor.
-- Merged `-a "x|y"` in any other position would merge there instead — keep the mix first.
+No re-encode happens on save: OBS writes the replay file directly (its output
+resolution is the resolution the user picked; scaling is GPU-side inside OBS).
 
-The mix recording stream is named `gsr-combined-<random>` by GSR (proven in
-source); solos are `gsr-<arg>`. Matching is exact against our `-a` args.
+## 2. Isolation (the user's OBS is never touched, on either OS)
 
-- `-w screen`: primary/focused monitor via KMS/NVFBC (no screencast dialog).
-- `-r 30`: N-second RAM ring. `-o` is a **directory** in replay mode; GSR names files `replay_YYYY-MM-DD_HH-MM-SS.mp4`.
-- `-a` (repeatable): Track 1 = MIX (`"desktop|mic"`), Track 2 = desktop/game, Track 3 = mic (AAC stereo each).
+- **Own config dir:** Windows `%LOCALAPPDATA%\MoonClip\obs`; Linux
+  `~/.local/share/MoonClip/obs`. The embedded OBS is staged there as a
+  writable portable copy with a `portable_mode.txt`, so OBS itself writes
+  `<copy>/config/obs-studio/...` — `%APPDATA%\obs-studio` /
+  `~/.config/obs-studio` are never read or written (this replaces the earlier
+  `--config-dir` attempt, which OBS on Windows ignored). A marker file
+  re-stages the copy when the bundled build changes.
+- **Own identity:** generated profile `MoonClip`, collection `MoonClip`, scene
+  `MoonClip Capture`, audio sources `MoonClip Game Audio` / `MoonClip Mic`.
+- **Coexistence:** `--multi` lets our OBS run next to the user's OBS.
+- **Private websocket:** `127.0.0.1:<obs_ws_port>` (default 4456) with a
+  generated password persisted in SQLite (`obs_ws_password`); obs-websocket is
+  configured inside OUR config dir only.
+- **Guards:** `os/obs.rs` kills the child if it does not create
+  `<config_root>/obs-studio` within 12 s (i.e. portable mode was not honored);
+  on Linux a system `obs` fallback uses `--config-dir` with the same guard.
+- **Orphans:** force-killed sessions leave OBS children; `kill_orphans()`
+  sweeps processes whose image path is OUR bundled binary and whose parent is
+  gone. The user's own OBS path never matches.
+- **Repair:** `repair_obs_config` stops the buffer and deletes ONLY the
+  MoonClip-owned config root (regenerated on next start).
 
-### 2.2 Video quality: Medal ladder + old-MoonLit NVENC HQ recipe
+## 3. Anti-cheat (hard rule, ~0 hook risk)
 
-Bitrates are Medal's official recommended table (CBR). GSR runs
-`-bm cbr -q <kbps> -tune quality -keyint 2`, plus NVENC HQ passthrough
-on NVIDIA + h264/hevc only: `preset=p7;tune=hq;profile=high;bf=2;spatial-aq=1;multipass=disabled`
-(all keys validated live against our bundled GSR: accepted, saves clean,
-bitrate on target).
+Kernel anti-cheats (Vanguard, VAC, FACEIT, EAC, BattlEye) block or flag
+**hook-based** capture because it injects a DLL into the game process. The
+generated scene NEVER uses OBS's `game_capture`; only compositor-level sources:
 
-> **Windows trip:** same ladder + same bitrates, captured by the bundled
-> FFmpeg `gfxcapture` filter (Windows.Graphics.Capture → D3D11 zero-copy)
-> and encoded by NVENC/AMF/QuickSync (no GSR on Windows — see §3 and
-> `09_WINDOWS_HANDOFF.md`). Windows scales on the GPU live, so the
-> save-transcode ladder below does not apply there (`save_plan()` is `None`).
-> Per-vendor save-transcode mapping lives in `os::video::transcode_encoder`
-> (Nvenc/Amf/Qsv); VAAPI save-transcode on AMD/Linux is intentionally
-> unmapped (render-node plumbing needs real-HW validation) → saver keeps the
-> source file with a visible log, never silently.
+| OS | Source id | Method |
+|---|---|---|
+| Windows | `monitor_capture` | DXGI Desktop Duplication (index-based, `method: 1`) |
+| Windows (opt-in) | `window_capture` | WGC window capture (`method: 2`) |
+| Linux | `pipewire-desktop-capture-source` | XDG portal (Wayland/X11) |
+| Linux (opt-in) | `pipewire-window-capture-source` | XDG portal window picker |
 
-| Height | H264 | H265 | AV1 | 60 s RAM (h264) |
-|---|---|---|---|---|
-| source | row of real height | … | … | … |
-| 360p | 3M | 3M | 3M | ~23 MB |
-| 720p | 10M | 7M | 7M | ~75 MB |
-| 1080p | 20M (= old-MoonLit 20000 Kbps table) | 12M | 8M | ~150 MB |
-| 1440p | 25M | 20M | 15M | ~188 MB |
+Audio is loopback/PipeWire (`wasapi_output_capture` + `wasapi_input_capture` /
+`pulse_output_capture` + `pulse_input_capture`) — no in-game hooking. Tests
+assert the forbidden source id never appears in any generated artifact
+(`os/obs.rs::collection_never_uses_game_capture` +
+`os/windows/obs.rs::video_source_never_game_capture`).
 
-Notes: 1080p@20M matches the old-MoonLit advanced table 1:1 (CBR/HQ/AQ/BF2/keyint-2s).
-On Windows the default NVENC preset is **P5**, the preset OBS's own Auto
-Configuration Wizard picks for this hardware (the user's OBS recipe is
-otherwise identical). Measured on an RTX 3060 under COD with the real
-zero-copy chain: P7 pulled only 19.6 fps with 852 dups / 20 s (~0.5x realtime),
-P6 57.8 fps / 126 dups, P5 50 fps / 207. Remaining dups are the game's own fps
-(a 60 fps CFR clip of a ~58 fps game has ~2 dups/s; OBS identical).
-Linux GSR keeps the P7 HQ passthrough (parity with the validated table above).
-`x264` (Windows CPU fallback, always listed) follows the h264 ladder row;
-save-time it maps to `libx264` (`veryfast` + `zerolatency`).`preset=p7`/`profile=high` alone were tested and only work as part of the full
-set above (alone they starve keyframes in tiny test buffers — an artifact of
-short `-r`, not production buffers; the full set saves clean).
-VAAPI/QSV/AMD keep GSR defaults (`very_high`, no passthrough opts).
-FPS selector: 30 or 60 (default 60), same bitrate ladder for both — at 30fps
-each frame gets ~2x the bits (same RAM per second, half the encoder load,
-more judder from high-refresh sources). `-s` omitted at source resolution.
-Same-second double saves never collide: the saver renames to `stem_2.mp4`,
-`stem_3.mp4`… instead of overwriting + UNIQUE failure.
-V2 adds the 480p and 2160p rows to the shared ladder (H264 5M / 60M,
-HEVC 5M / 35M, AV1 5M / 25M) and `video_quality::cqp_export`
-(24/23/22/20/19/18) for offline re-encodes; the buffer itself is always CBR.
-Custom mode (`video_mode=custom`) uses the `custom_bitrate_kbps` slider
-(3 000–100 000) and `custom_fps`, clamped to 30/60 in V1 with a notice.
-The saved container follows the `container` setting (`mp4` default with
-`+faststart`, or `mkv`).
+Trade-off (documented): Display capture films the whole monitor (overlays
+included). That is the same OS-level path Xbox Game Bar uses; the residual
+risk is the same as any overlay/capture tool, not the injection risk.
 
-### 2.3 Delivery strategy: source buffer + lanczos on save
+## 4. Generated profile (basic.ini) — MoonClip-owned
 
-Verdict from live A/B (same NVENC recipe sharp at 1080p native, soft at
-720p on a 1:1 monitor): the backend's live scaler is soft on text at
-non-integer ratios. So when the target height sits below the source height,
-the ring buffer runs at **source** resolution (source-row CBR) and the saver
-downscales with `scale=-2:H:flags=lanczos` (NVENC, target-row CBR) before
-indexing. Direct capture otherwise. The Video UI shows the BUFFER cost and a
-"records at source, delivers with lanczos" note whenever transcoding applies.
-Monitor is explicit (`-w <name>`, default automatic); quality is a function of
-settings, never of whichever monitor the backend finds first.
+Advanced output + replay buffer, 3 AAC tracks (Mix first), Media ladder CBR:
 
-### 2.2 Control from Rust
+- `[Output] Mode=Advanced`
+- `[AdvOut] RecType=Standard`, `RecFormat2=mp4|mkv`, `RecFilePath=<clips dir>`,
+  `RecEncoder=<OBS encoder id>`, `RecRB=true`, `RecRBTime=<seconds>`,
+  `RecRBSize=<estimated MB + 50% + 64>`, `RecTracks=7` (`1` when
+  compatibility mode is on), `RecAudioEncoder=ffmpeg_aac`,
+  `Track1Bitrate=320`, `Track2Bitrate=320`, `Track3Bitrate=192`,
+  `Track1Name=Master Mix [Game+Voice]`, `Track2Name=Game/Desktop`,
+  `Track3Name=Mic`, `ApplyServiceSettings=false`
+- `[Video] BaseCX/CY` = monitor size, `OutputCX/CY` = requested resolution
+  (aspect-kept, even), `FPSType=0`, `FPSCommon=24|30|60|120|144`,
+  `ScaleType=bicubic`, `ColorFormat=NV12`, `ColorSpace=709`,
+  `ColorRange=Partial`
+- `[Audio] SampleRate=48000`, `ChannelSetup=Stereo`
 
-- Spawn as `tokio::process::Child` on app start / game start.
-- `save_clip()`:
-  1. Snapshot the save time, then `nix::sys::signal::kill(pid, SIGUSR1)`.
-  2. Poll every 100 ms (up to 5 s) for the `.mp4` whose mtime is >= the
-     signal — a fixed sleep proved racy on slow disks / large rings, and
-     "newest file" could return a previous clip; never falls back to one.
-- `stop()`: `SIGINT` + `child.wait()`.
-- `Drop`: `start_kill()` to avoid zombies.
-- Stdio: GSR's stdout/stderr are drained by background readers into a bounded
-  200-line ring. An unread 64 KB pipe buffer fills under load (GSR logs frame
-  telemetry several times per second) and blocks GSR mid-capture.
-- Liveness: `check_alive()` (`try_wait`) runs on the `engine_status` UI poll
-  AND on a 2 s backend watchdog (the webview is paused while tray-hidden, so
-  the UI poll alone cannot detect it during gaming). If GSR exited, the engine
-  is dropped, the log tail surfaces in the UI and `moonclip://engine-stopped`
-  fires + notification. No silent dead buffer.
-- Codec ids: app `x264` = CPU encoding, spawned as `-k h264 -encoder cpu`
-  (GSR rejects `h264_software` as a `-k` value; `--info` only reports it as a
-  capability). NVENC HQ passthrough is skipped for x264 and save-scale uses
-  `libx264` for it.
+`recordEncoder.json` is CBR everywhere: NVENC `preset2=p5 + tune=hq +
+multipass=disabled + bf=2 + psycho_aq=1 + no lookahead`; AMF `quality + vbaq`;
+QSV `medium + async_depth=4`; x264 `veryfast`; VAAPI (Linux AMD) via
+`ffmpeg_vaapi` + `/dev/dri/renderD128`. Encoder ids are resolved per
+vendor/codec/platform in `os/{windows,linux}/obs.rs::encoder_id`.
 
-### 2.3 Permissions (avoid portal UX pain)
+## 5. Generated collection — 3 audio tracks
 
-- Preferred: direct KMS capture, zero dialogs. Upstream GSR checks the cap on
-  its KMS helper (`gsr-kms-server`, spawned next to the binary) and falls back
-  to launching it via `pkexec` — an admin prompt on every capture start — when
-  the cap is missing. Set it once at install/first run:
-  ```bash
-  sudo setcap cap_sys_admin+ep "$(dirname "$(which gpu-screen-recorder)")/gsr-kms-server"
-  ```
-  `os/linux/caps.rs` checks/fixes this same helper (one-click `pkexec` fix).
-- Fallback: XDG Portal `ScreenCast` with `persist_mode=2` + saved `restore_token` + onboarding screen ("Pick Entire Screen → Check Remember → Share"). If stream metadata looks like a single window, warn the user.
-- Audio discovery: `pactl list short sources` / `pw-dump`. `*.monitor` = output, others = inputs.
+`sources`: the scene + one display source. `AuxAudioDevice1` = game/desktop
+(mixers `1|2`), `AuxAudioDevice2` = mic (mixers `1|4`); in compatibility mode
+both are `1` (Mix only). `volume` carries the persisted gain (0-200 % →
+0.0-2.0 multiplier) and `muted` the persisted mute, so the saved file layout
+stays: Track 1 `Master Mix [Game+Voice]`, Track 2 `Game/Desktop`,
+Track 3 `Microphone`.
 
-### 2.5 Live per-track gain (no editing, no monitoring side effects)
+Live behaviour:
+- **Mute** applies in live through `obs-cmd audio mute|unmute <source>`.
+- **Gain** lives in the scene: changing it restarts the buffer once with a
+  visible notice (`set_track_gain` → `restart_if_running`).
+- **Peaks/meters:** not exposed by obs-cmd → `audio_peaks` returns `null`
+  (the UI hides the meters; no fake data).
 
-GSR has no volume flag, so gain is applied at the PipeWire layer:
-each `-a` input is its own recording stream (source-output). Setting
-`pactl set-source-output-volume <idx> <pct>` changes ONLY what GSR captures —
-device volumes (what the user hears) are untouched. Same mechanism as
-pavucontrol's Recording tab, which upstream itself recommends.
+## 6. obs-cmd contract
 
-- Streams are found via `pactl -f json list source-outputs`, matched by
-  `application.name` (~gpu-screen-recorder) and `media.name` (~monitor = game),
-  with index-order fallback. Re-polled after spawn (streams appear async).
-- Gains (`gain_game/gain_mic`, `mute_game/mute_mic`) persist in `settings`,
-  apply live through `set_track_gain`/`set_track_mute`, and re-apply on every
-  `start_buffer`. Range 0–200% (safe ceilings: game ≈100 — it already peaks
-  near 0 dB at unity; mic ≈120–150 depending on the source; 200% is a boost
-  tool for quiet sources, not a recommended level).
-- Windows: gains persist identically; software multiplication lands on the
-  WASAPI capture path (we own it there).
+`os/obs.rs::Obscmd` builds `obs-cmd --websocket obsws://127.0.0.1:<port>/<pw>`
+and parses:
+- `replay status` → `Replay Buffer is running` / `... is not running`
+- `replay save` → `Saved replay: <path>` (v1.0.2 polls until flush); fallback
+  `replay last-replay` → `Last replay path: <path>`
+- `audio mute|unmute <source>` → exit status only
 
-### 2.6 Deps (Linux)
+All calls are timeout-bounded; failures surface the last output line. Save
+still validates the path exists on disk before indexing it.
 
-```toml
-[target.'cfg(target_os = "linux")'.dependencies]
-nix = { version = "0.29", features = ["signal", "process"] }
-tokio = { version = "1", features = ["process", "time"] }
-rodio = "0.21" # confirmation ding (synthesized, no assets)
-```
+## 7. Quality ladder and custom mode
 
-## 3. Windows: bundled FFmpeg `gfxcapture` (WGC) + WASAPI
+- Ladder (Medal table, CBR): 360p 3M · 480p 5M · 720p 10/7/7M · 1080p
+  20/12/8M · 1440p 25/20/15M · 2160p 60/35/25M (h264/hevc/av1).
+  `video_quality.rs` exposes `bitrate_kbps`, `recommended_kbps` (Medal
+  recommended ranges shown in the UI) and `ring_mb`.
+- Custom mode: FPS ∈ {24,30,60,120,144}, bitrate 3 000–100 000 kbps; invalid
+  values fall back to the ladder (`custom_capture_params`, unit tested).
+- Encoder preference: GPU or CPU (x264). GPU resolves per vendor; unsupported
+  combos fail loudly at start with the OBS log tail, never silently.
 
-- **OS floor: Windows 10 version 1903 (build 18362)+, Windows 11 supported.**
-  WGC does not exist below 1903, so MoonClip for Windows requires 1903+;
-  the installer targets that floor (see `08_CI_CD_DISTRIBUTION.md`).
-- No DLL injection (anti-cheat safe for Valorant/CS2). The bundled FFmpeg
-  captures through its `gfxcapture` filter — the same **Windows.Graphics.
-  Capture** API Xbox Game Bar uses — and encodes **on the GPU**: frames stay
-  in D3D11 textures (`AV_PIX_FMT_D3D11`) straight into NVENC/AMF/QSV. There
-  is no WGC callback in the app process, no CPU readback and no rawvideo
-  pipe: one child process owns capture + encode + mux. (`MOONCLIP_CAPTURE_
-  SOURCE=ddagrab` switches the monitor source to Desktop Duplication as a
-  fallback; window/app capture will use `gfxcapture`'s `window_title`/
-  `window_exe`/`hwnd` selectors later.)
-- Files (V2 rewrite, 2026-09-17): `os/windows/detector.rs` (DXGI vendor,
-  monitors, probed codecs), `video.rs` (source cascade + filter graph),
-  `encode.rs` (§9 args + presets), `engine.rs` (child + ring + save),
-  `ring.rs` (MPEG-TS/PES index: PTS, keyframes, QPC calibration), `pts.rs`
-  (single QPC clock + 70 ms anchor bias), `audio.rs` (WASAPI loopback + mic),
-  `dsp.rs` (gain/mix/peaks/window builder), `mux.rs` (§10 container output),
-  `devices.rs` (WASAPI endpoints). `cpal` and the old `ts.rs` are gone.
-- Live chain (spawned at `start_buffer`):
-  ```
-  ffmpeg -loglevel info \
-    -filter_complex "gfxcapture=hmonitor=<H>:max_framerate=<cap>:capture_cursor=1
-                     [,width=W:height=H:resize_mode=scale_aspect:scale_mode=bicubic],showinfo[out]" \
-    -map [out] -an -c:v h264_nvenc <CBR ladder + NVENC HQ> \
-    -r <fps> -fps_mode cfr -muxdelay 0 -muxpreload 0 \
-    -f mpegts pipe:1
-  ```
-  The TS goes over a custom 8 MB anonymous pipe (`big_pipe`), not
-  `Stdio::piped()`: the default is 32 KB ~13 ms of slack at 20 Mbps, so any
-  drain hiccup blocked ffmpeg and duplicated frames.
-  Monitor selection is by **HMONITOR** (cross-process handle, validated) so
-  the Rust-side DXGI list is authoritative. The buffer runs at the requested
-  height: scaling happens inside the filter on the GPU (`resize_mode`), so
-  saves are copy-only. `<cap>` is 2x the output rate clamped to the panel
-  refresh (`capture_max_fps`; `MOONCLIP_CAPTURE_MAX_FPS` overrides) — under a
-  game the full refresh would burn GPU copies the CFR filter discards.
-  `-r <fps> -fps_mode cfr` pins the CFR timeline
-  Medal/OBS style; `showinfo` logs each frame's PTS (100 ns, pre-encoder) on
-  stderr.
-- **A/V sync is two lines, no per-codec constants.** `ts.rs` parses PAT/PMT
-  and every video PES (PTS in 90 kHz, unwrapped) and indexes keyframes
-  (H.264 IDR / HEVC IRAP NAL scan; AV1 falls back to an `ffmpeg -ss` probe).
-  The PTS clock is anchored to QPC with `min(stderr_arrival - pts)`, taken
-  from `showinfo` **before the encoder**, so encoder lookahead (p7 + CBR can
-  buffer ~0.5 s) cannot shift the mapping. At save, the chosen keyframe's QPC
-  is `calib + key_pts` and both the video cut and the audio window start
-  there. A rig-measured constant (`DEFAULT_SYNC_BIAS_MS = 70`, override
-  `MOONCLIP_SYNC_BIAS_MS`) absorbs the compositor/frame-pool delivery lag
-  that `showinfo` cannot see; it is not per-codec. Residual on the
-  flash+beep rig: **median −3 ms, max ±13 ms**.
-- **Audio (`audio.rs` + `dsp.rs`)** runs on the `wasapi` crate (0.24):
-  endpoint loopback = render endpoint + `Direction::Capture` in shared mode
-  (the crate sets `AUDCLNT_STREAMFLAGS_LOOPBACK`), mic = `eCapture`; the
-  client is f32 48 kHz stereo with `autoconvert`. Each packet carries
-  `BufferInfo::timestamp` (raw QPC ticks → `pts::qpc_ticks_to_ns`), so audio
-  and video share one clock; `dsp::build_window` rebuilds each stem on the
-  QPC grid (only gaps > 50 ms become silence). Capture threads push into
-  lock-free SPSC rings; a silent keep-alive render stream keeps loopback
-  delivering while the game is quiet; the supervisor follows the OS default
-  device and reopens errors/stalls (3 s stall → one reopen per episode + 30 s
-  slow retry). MMCSS "Pro Audio" on the capture threads.
-- **Source cascade:** WGC (`gfxcapture`) is primary; a startup `signalstats`
-  probe switches to `ddagrab` when WGC yields no frames or an all-black
-  picture (legacy exclusive fullscreen). A mid-session stall requests the
-  same switch through the liveness sweep (restart + notification).
-- **Encoder load defaults:** the live recipe is the measured-light one
-  (NVENC p5 + spatial AQ + BF2, single-pass, no look-ahead; AMF without
-  `preencode`; QSV without `look_ahead`; x264 `veryfast+zerolatency`). The
-  SPEC §9 heavy knobs are opt-in via `MOONCLIP_ENCODER_HQ_FULL=1`. The
-  `capture_max_fps` setting (0 = auto 2× clamped to refresh) lets high-refresh
-  panels trade motion sampling for GPU headroom. `+faststart` is a setting,
-  default OFF (it rewrites the whole mdat on save).
-- **Save is copy-only** (target <1 s): the ring index selects the latest
-  keyframe at/before `end − duration`, the staged TS starts exactly at that
-  PES with the latest PAT/PMT prepended (no `-ss` seek), WAVs for the solo
-  stems are written in parallel and muxed with `-c:v copy` + the §10 layout
-  (AAC 320/320/192, titles `Master Mix [Game+Voice]` / `Game/Desktop` /
-  `Microphone`, `+faststart`, `patch_audio_alternate_group`).
-- Robustness: the encoder child runs CPU class **HIGH by default**
-  (`cpu_priority_class`; `MOONCLIP_CAPTURE_CPU_PRIO=0` restores ABOVE_NORMAL)
-  with power throttling disabled and **GPU scheduling priority HIGH by default**
-  (`tune_child_priority`; `MOONCLIP_CAPTURE_GPU_PRIO=0` disables) — the same
-  lever OBS raises so WGC/NVENC do not starve behind a GPU-saturating game.
-  Leftover capture children from a force-killed session are swept at
-  `start_buffer` (`kill_orphan_ffmpeg`). A dead child/pipe stops the engine
-  (`check_alive` + 200-line stderr tail); a source with no fresh PES for 3 s
-  is reported as stalled (`log_tail`) instead of fabricating frozen frames.
-- Per-track live gain/mute (0–200%) works exactly as on Linux: the gain is
-  applied in our capture path (atomics read by the callback), never the OS
-  mixer; `audio_peaks` publishes windowed peaks for the UI meters.
+## 8. Save path
 
+1. `save_clip` → `obs-cmd replay save` (45 s timeout), parse the path, verify
+   it exists.
+2. Same-second dedupe renames to `stem_2.mp4`, `stem_3.mp4`… (existing).
+3. Duration probe + thumbnail in parallel via the bundled FFmpeg.
+4. Insert into SQLite (relative name), ding, `moonclip://clip-saved`.
+5. Global hotkey path: F9 → `handle_hotkey` → `do_save_clip` (debounced by
+   `HOTKEY_DEBOUNCE_MS`, serialized by `AppState::save_lock`).
 
-## 4. Rust trait (frozen interface)
+## 9. Hardware test (first-run wizard, optional)
+
+`test_hardware(height?, fps?, seconds=10)` starts the buffer with candidate
+values (NOT persisted), waits, saves, and validates:
+`validate_test_clip` requires real bytes (≥64 KB), a measurable duration
+within [50 %, 150 %+2 s] of the requested window. On failure it suggests one
+step down (2160/1440 → 720@60, >30 fps → 30) and the wizard offers a retry.
+The previous buffer state is restored afterwards; the test clip is deleted.
+
+## 10. Rust trait (frozen interface)
 
 ```rust
-// src-tauri/src/capture/mod.rs
-use std::path::PathBuf;
-use async_trait::async_trait; // or manual async in trait (Rust 1.75+)
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CaptureConfig { pub duration_seconds: u32, pub fps: u32, pub output_dir: PathBuf }
-
-#[async_trait]
 pub trait CaptureEngine: Send + Sync {
     async fn start_buffer(&mut self, config: CaptureConfig) -> Result<(), String>;
     async fn save_clip(&mut self) -> Result<PathBuf, String>;
     async fn stop_buffer(&mut self) -> Result<(), String>;
-    fn backend_name(&self) -> &'static str; // running state = Option<Engine> in AppState
+    fn tracks_linked(&self) -> usize;
+    fn check_alive(&mut self) -> bool;
+    fn log_tail(&self) -> Vec<String>;
+    async fn set_mute(&mut self, track: &str, muted: bool) -> Result<(), String>;
 }
 ```
 
-Use `async-trait` if toolchain needs it; otherwise native `async fn` in traits.
+`os/obs.rs` holds the shared implementation (`ObsEngine`) and the
+`ObsPlatform` seam; `os/windows/obs.rs` / `os/linux/obs.rs` provide the
+platform bits. Selection happens only in `os/mod.rs` (zero-`cfg` elsewhere).
 
-## 5. Feedback (must-have for fullscreen)
+## 11. Acceptance (V3)
 
-- Audio cue: `rodio` plays embedded `clip_saved.wav` (~0.2s ding) after flush. WebView notifications are invisible in exclusive fullscreen.
-- Optional overlay: secondary Tauri window (`transparent:true, decorations:false, alwaysOnTop:true, skipTaskbar:true`, `set_ignore_cursor_events(true)`), auto-hide after 2s. Linux caveat: layer-shell behavior varies on Wayland.
-
-## 6. Acceptance (Phase 3)
-
-- [ ] F9 in-game writes `.mp4` of last 30s in < 1s.
-- [ ] File has 2 audio tracks (game + mic).
-- [ ] Idle: no disk writes from capture; RAM ring only.
+- [ ] F9 in-game writes an OBS replay `.mp4` with 3 audio tracks (Mix first).
+- [ ] The user's own OBS can run simultaneously; its config never changes.
+- [ ] Changing preset/encoder/monitor/audio restarts the buffer once (notice).
+- [ ] `game_capture` appears in no generated file (test-enforced).
+- [ ] Hardware test reports a valid clip at the suggested preset.
+- [ ] `cargo test`, `cargo clippy -D warnings`, `pnpm build`, zero-`cfg` grep.
+- [ ] Windows: BO7/CS2/Vanguard in-game pass (owner).
+- [ ] Linux: portal picker once, then clip with 3 tracks (owner).

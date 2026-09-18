@@ -66,6 +66,8 @@ export interface HeightOpt {
   label: string;
   /** CBR kbps per codec, in codec order. */
   bitrates: number[];
+  /** Medal recommended (min,max) kbps per codec, in codec order. */
+  recommended: [number, number][];
   /** Exact 60 s ring megabytes per codec, in codec order. */
   ring_mb_60s: number[];
 }
@@ -89,14 +91,40 @@ export interface VideoOptions {
   transcoding: boolean;
   max_source_height: number;
   vendor: string;
+  /** Encoder preference: gpu | cpu. */
+  encoder: string;
+  /** Hardware monitors can be oversampled (24..144). */
+  fps_options: number[];
 }
 
-/** Mirrors Rust GsrInfo (Linux-only fields; harmless on Windows). */
-export interface GsrInfo {
-  path: string;
-  source: string;
-  caps_ok: boolean;
+/** Mirrors Rust ObsInfo (embedded, isolated OBS engine). */
+export interface ObsInfo {
   present: boolean;
+  version: string;
+  obscmd_present: boolean;
+  config_dir: string;
+  profile: string;
+  collection: string;
+  websocket_port: number;
+  source: string;
+  log_tail: string[];
+}
+
+/** Mirrors Rust HardwareTestResult. */
+export interface HardwareTestResult {
+  ok: boolean;
+  height: number;
+  fps: number;
+  codec: string;
+  encoder: string;
+  bitrate_kbps: number;
+  requested_seconds: number;
+  startup_ms: number;
+  measured_duration_ms: number;
+  size_bytes: number;
+  fallback_height: number | null;
+  fallback_fps: number | null;
+  error: string | null;
 }
 
 /** Mirrors Rust AudioDevice. */

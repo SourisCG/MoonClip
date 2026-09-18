@@ -1,5 +1,7 @@
 # Built sidecars live here (never commit binaries).
-# Regenerate with: ./build-aux/build-gsr.sh  (pinned source, see docs/THIRD_PARTY.md)
-# CI builds them per release; end-user packages ship them inside.
+# Regenerate with: pwsh build-aux/fetch-obs.ps1 (Windows)
+#                  bash build-aux/fetch-obs.sh  (Linux, also fetches obs-cmd)
+#                  + build-aux/fetch-ffmpeg.ps1 / .sh for the editor FFmpeg.
+# CI fetches them per release; end-user packages ship them inside.
 */
 !.gitkeep

@@ -2,8 +2,9 @@
 # Fetch the pinned static FFmpeg sidecar (Linux) into
 # src-tauri/binaries/<triple>/ffmpeg-<triple>.
 # BtbN `linux64-gpl` (same vendor/pin style as build-aux/fetch-ffmpeg.ps1 on
-# Windows): needs libx264 + NVENC for the save-time lanczos path, and aac for
-# the capture mux fallback. Binary is glibc-dynamic only (no distro libs).
+# Windows): needs libx264 (editor exports/vertical) and aac; NVENC/HEVC are
+# kept for future hardware-accelerated editor paths. Capture itself is owned
+# by the embedded OBS. Binary is glibc-dynamic only (no distro libs).
 set -euo pipefail
 
 # Bump the pin by updating these three values together (autobuild tag + asset).

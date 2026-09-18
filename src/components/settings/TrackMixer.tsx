@@ -67,6 +67,7 @@ export function TrackMixer() {
     <div className="space-y-1.5 rounded-xl border border-white/5 bg-black/30 p-2.5">
       {row("game", gains.game, gains.mute_game)}
       {row("mic", gains.mic, gains.mute_mic)}
+      <p className="px-1 pt-0.5 text-[10px] text-slate-600">{t("audio.gain_restart")}</p>
     </div>
   );
 }
