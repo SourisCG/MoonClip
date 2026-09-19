@@ -8,6 +8,32 @@
 
 use std::path::PathBuf;
 
+/// Custom encoder selection for video_mode=custom (None = ladder recipe).
+/// `encoder` is an exact OBS encoder id from the pinned catalog;
+/// `settings` is the validated user map (`obsopt.*` keys).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CustomEncoder {
+    pub encoder: String,
+    pub settings: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Custom [Video] tab for video_mode=custom (None = ladder video).
+/// `fps_type`: "common" | "integer" | "fractional".
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CustomVideo {
+    pub out_width: u32,
+    pub out_height: u32,
+    pub scale_type: String,
+    pub fps_type: String,
+    pub fps_common: u32,
+    pub fps_int: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub color_format: String,
+    pub color_space: String,
+    pub color_range: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CaptureConfig {
     pub duration_seconds: u32,
@@ -47,6 +73,10 @@ pub struct CaptureConfig {
     /// the output resolution equals the base.
     pub base_width: u32,
     pub base_height: u32,
+    /// Custom encoder selection (video_mode=custom). None = ladder recipe.
+    pub custom_encoder: Option<CustomEncoder>,
+    /// Custom [Video] tab (video_mode=custom). None = ladder video.
+    pub custom_video: Option<CustomVideo>,
     /// Resolved embedded OBS binary (None = resolve via bundle/PATH).
     pub obs_bin: Option<PathBuf>,
     /// Resolved embedded obs-cmd binary.
@@ -79,6 +109,12 @@ pub trait CaptureEngine: Send + Sync {
     /// cannot apply it live return an error (the setting still persists).
     async fn set_mute(&mut self, _track: &str, _muted: bool) -> Result<(), String> {
         Err("live mute not supported by this backend".into())
+    }
+    /// Live gain for one capture track, 0-200 %. Backends that cannot apply
+    /// it live return an error (the setting still persists and applies on
+    /// the next start).
+    async fn set_volume(&mut self, _track: &str, _percent: u32) -> Result<(), String> {
+        Err("live volume not supported by this backend".into())
     }
 }
 

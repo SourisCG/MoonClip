@@ -839,3 +839,67 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   quedó pinneado y verificado por sha256: OBS 32.2.2 + obs-cmd v1.0.2.
 - Gates: `cargo clippy --all-targets -D warnings` limpio, 37 tests,
   `pnpm build` limpio.
+
+### V3.2 - Custom = todas las opciones de video de OBS + volumen en vivo (2026-09-19)
+
+- **Menu simplificado**: la vista simple deja solo monitor + presets Moon +
+  duracion + contenedor. El toggle Custom abre TODAS las opciones de salida
+  de video de OBS: picker de encoder (catalogo pinneado por plataforma x
+  vendor detectado x probe ffmpeg), schema completo por familia
+  (NVENC/x264/QSV/AMF/VAAPI) + pestana Video (resolucion, filtro, FPS
+  comun/entero/fraccionario, color). Cada opcion tiene estado Auto (= default
+  de OBS, clave omitida) y boton "Restaurar automatico".
+- **Registry `os/encoder_options.rs`**: unica fuente de verdad, tablas
+  extraidas de obs-studio@32.2.2 (nvenc-properties.c, obs-x264.c,
+  obs-qsv11.c, texture-amf.cpp + strings de la DLL, obs-ffmpeg-vaapi.c).
+  Hallazgo: nuestras claves NVENC eran de OBS 29 (`preset2`/`psycho_aq`/
+  `gpu`, ignoradas en silencio por OBS 32) -> ahora `preset`/
+  `adaptive_quantization`/`device`; QSV usaba `preset`/`async_depth`
+  inexistentes -> `target_usage` TU1-TU7 + `latency`.
+- **Auto por familia (deteccion de GPU automatica)**: vendor por DXGI;
+  NVENC/x264 recetas medidas; AMF/QSV/VAAPI receta Auto (CBR + bitrate, OBS
+  decide el resto) al no haber hardware para validar. Auto tambien corrige
+  el mapeo Linux AMD (cada codec a su id VAAPI: antes HEVC iba al id H.264).
+- **Persistencia**: migracion 008 (`custom_encoder_json`,
+  `custom_video_json`, validados pre-escritura); fix whitelist db.rs
+  (`video_encoder`/`gpu_index` antes rechazados -> el toggle GPU/CPU fallaba).
+- **Prueba real**: `test_hardware` acepta payloads Custom sin persistir
+  (boton "Probar 10 s") y verifica el stream real del clip
+  (`ffmpeg -i` parse: codec, alto y fps deben coincidir).
+- **Volumen en vivo**: `set_track_gain` aplica via
+  `obs-cmd input volume --set` sin reiniciar (fallback a un reinicio si el
+  live falla); TrackMixer muestra errores en vez de tragarlos.
+- Gates: `cargo test` 61 passed, `cargo clippy --all-targets -- -D warnings`
+  limpio, `pnpm build` limpio, zero-cfg (solo #[cfg(test)]). Pendiente
+  (owner): Probar 10 s en NVENC CBR/CQP + x264 CRF, presets AMD/QSV/VAAPI en
+  hardware real, pass in-game.
+
+### V3.3 - compatibilidad por codec + OBS invisible (2026-09-19)
+
+- **Registry por codec**: `OptionSpec` gana `codecs`, `codec_values`,
+  `codec_range`, `codec_int_values`, `codec_defaults`, `p010_values`,
+  `p010_ints` + reglas de visibilidad multiples (`when`+`and_when`).
+  `resolved_options(family, codec)` es la unica fuente para UI, sanitize y
+  `validate_pair` (incluye gate 10-bit <-> P010).
+- **Correcciones contra fuentes OBS 32.2.2**: AMF usaba claves inexistentes
+  (`vbaq`/`enforce_hrd`/`params`/`preanalysis` -> solo existen
+  `pre_analysis`/`bf`/`ffmpeg_opts`; `bf` AVC+AV1 0-5; perfil HEVC no existe;
+  preset AV1 incluye `highQuality`; rate_control suma HQVBR/HQCBR).
+  NVENC `max_bitrate` tambien en CQVBR; x264 `crf` en VBR, `bitrate` en ABR,
+  `buffer_size` requiere `use_bufsize`; VAAPI `qp`/`bitrate` en QVBR.
+- **UI Custom**: schema por encoder (no por familia), opciones invalidas en
+  gris deshabilitadas, `sanitizeVals` descarta al cambiar, bitrate sembrado
+  del ladder al entrar/cambiar/resetear, `resetAuto` resetea TODO (encoder
+  auto + Video tab), resumen "Aplicado".
+- **NumberField** compartido (draft al editar, commit en blur/Enter, clamp):
+  migados out_w/h, fps int/num/den, ints del registry, duracion custom,
+  max_gb.
+- **OBS invisible (Windows)**: `user.ini` sin bandeja, sin
+  `--minimize-to-tray`, watcher que oculta la ventana (PID+imagen, titulo
+  "OBS ", dialogos intactos), AMUI compartida, staged exe renombrado a
+  `moonclip-obs.exe`. Linux: best-effort xdotool/wmctrl.
+- **db.rs**: migracion 008 conectada (SCHEMA_VERSION 8).
+- Gates: `cargo test` 64 passed, `cargo clippy --all-targets -- -D warnings`
+  limpio, `pnpm build` limpio, zero-cfg (solo #[cfg(test)]). Pendiente
+  (owner): Probar 10 s, in-game, coexistencia sin bandeja/ventana visible,
+  Task Manager agrupado, Linux.

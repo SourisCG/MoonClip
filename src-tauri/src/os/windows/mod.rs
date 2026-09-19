@@ -46,5 +46,15 @@ pub fn prepare_environment() {
             &state as *const _ as *const core::ffi::c_void,
             std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
         );
+        // Shared AppUserModelID for the MoonClip process tree: cooperative
+        // processes (our embedded OBS) group with MoonClip in the shell
+        // instead of looking like a second "OBS Studio". Best effort.
+        use windows::core::HSTRING;
+        use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+        let _ = SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(APP_USER_MODEL_ID));
     }
 }
+
+/// Shared shell identity for MoonClip and its embedded engine
+/// ("cooperative processes" per Microsoft's AppUserModelID guidance).
+pub const APP_USER_MODEL_ID: &str = "dev.souriscg.moonclip";

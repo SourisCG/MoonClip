@@ -39,6 +39,14 @@ resolution is the resolution the user picked; scaling is GPU-side inside OBS).
 - **Orphans:** force-killed sessions leave OBS children; `kill_orphans()`
   sweeps processes whose image path is OUR bundled binary and whose parent is
   gone. The user's own OBS path never matches.
+- **Invisible engine (Windows):** the embedded copy runs with the tray icon
+  disabled (`user.ini` `[BasicWindow] SysTrayEnabled=false`, no
+  `--minimize-to-tray`) and MoonClip hides its main window right after spawn
+  (`conceal_window`: 15 s watcher, PID + staged-image guard, off-screen
+  parking). No tray icon, no taskbar button, no window: the instance nests
+  under MoonClip as a background child instead of a second "OBS Studio"
+  app, and can never be confused with (or touch) the user's own OBS.
+  Error dialogs keep their own titles and stay visible for diagnosis.
 - **Repair:** `repair_obs_config` stops the buffer and deletes ONLY the
   MoonClip-owned config root (regenerated on next start).
 
@@ -123,10 +131,24 @@ still validates the path exists on disk before indexing it.
   20/12/8M · 1440p 25/20/15M · 2160p 60/35/25M (h264/hevc/av1).
   `video_quality.rs` exposes `bitrate_kbps`, `recommended_kbps` (Medal
   recommended ranges shown in the UI) and `ring_mb`.
-- Custom mode: FPS ∈ {24,30,60,120,144}, bitrate 3 000–100 000 kbps; invalid
-  values fall back to the ladder (`custom_capture_params`, unit tested).
-- Encoder preference: GPU or CPU (x264). GPU resolves per vendor; unsupported
-  combos fail loudly at start with the OBS log tail, never silently.
+- Ladder encoder recipe comes from the registry (`os/encoder_options.rs`):
+  measured NVENC/x264 recipes on validated families, Auto (CBR + bitrate
+  only, OBS decides the rest) on AMD/QSV/VAAPI. GPU vendor auto-detects via
+  DXGI; unsupported combos fail loudly at start with the OBS log tail.
+- Custom mode (video_mode=custom): every OBS video-output option —
+  encoder picker (pinned per-platform catalog × vendor × live probe),
+  full per-encoder schema (rate control, bitrate, keyframe, preset, tuning,
+  B-frames, GPU, free-text opts…), plus the Video tab (output resolution,
+  scale filter, FPS common/integer/fractional, color format/space/range).
+  Persisted as validated `custom_encoder_json` / `custom_video_json`
+  (migration 008); unknown ids/keys/values are rejected before anything is
+  written. Each option has an Auto state (omitted key = OBS default).
+- Codec compatibility is dynamic: the registry scopes every option/value
+  per codec (from OBS 32.2.2 plugin sources); the UI greys out whatever is
+  invalid for the current codec, discards it on codec change, and blocks
+  10-bit profiles unless the color format is P010. Un-Autoing an option
+  seeds the codec-scoped OBS default. Entering Custom seeds the ladder
+  bitrate so the first Apply records at the expected rate.
 
 ## 8. Save path
 
@@ -147,7 +169,23 @@ within [50 %, 150 %+2 s] of the requested window. On failure it suggests one
 step down (2160/1440 → 720@60, >30 fps → 30) and the wizard offers a retry.
 The previous buffer state is restored afterwards; the test clip is deleted.
 
-## 10. Rust trait (frozen interface)
+Since the Custom panel, `test_hardware` also accepts full Custom payloads
+(`encoderId`, `encoderSettings`, `customVideo`, NOT persisted) for the
+"Probar 10 s" button, and — duration aside — reads the real encoded stream
+back from the file (`ffmpeg -i` parse, no ffprobe in the sidecar):
+`check_probe` requires codec, output height and fps to match the request,
+or the test fails. This is the proof that OBS really applied the settings.
+
+## 10. Live mixer (volume without restart)
+
+`set_track_gain` persists the 0-200 % gain and applies it live through
+`obs-cmd input volume --set <mul> <source>` while the buffer runs (trait
+`CaptureEngine::set_volume`); only a failed live apply falls back to the
+single-restart path. The generated scene still carries the persisted gain,
+so the next start renders it even without a running buffer. Mixer errors
+are shown in the UI, never swallowed.
+
+## 11. Rust trait (frozen interface)
 
 ```rust
 pub trait CaptureEngine: Send + Sync {
@@ -158,6 +196,7 @@ pub trait CaptureEngine: Send + Sync {
     fn check_alive(&mut self) -> bool;
     fn log_tail(&self) -> Vec<String>;
     async fn set_mute(&mut self, track: &str, muted: bool) -> Result<(), String>;
+    async fn set_volume(&mut self, track: &str, percent: u32) -> Result<(), String>;
 }
 ```
 
@@ -165,13 +204,13 @@ pub trait CaptureEngine: Send + Sync {
 `ObsPlatform` seam; `os/windows/obs.rs` / `os/linux/obs.rs` provide the
 platform bits. Selection happens only in `os/mod.rs` (zero-`cfg` elsewhere).
 
-## 11. Acceptance (V3)
+## 12. Acceptance (V3)
 
 - [ ] F9 in-game writes an OBS replay `.mp4` with 3 audio tracks (Mix first).
 - [ ] The user's own OBS can run simultaneously; its config never changes.
-- [ ] Changing preset/encoder/monitor/audio restarts the buffer once (notice).
+- [ ] Changing preset/custom settings/monitor/audio restarts the buffer once (notice); mixer gain applies live.
 - [ ] `game_capture` appears in no generated file (test-enforced).
-- [ ] Hardware test reports a valid clip at the suggested preset.
+- [ ] Hardware test reports a valid clip at the suggested preset; Custom "Probar 10 s" proves codec/resolution/fps.
 - [ ] `cargo test`, `cargo clippy -D warnings`, `pnpm build`, zero-`cfg` grep.
 - [ ] Windows: BO7/CS2/Vanguard in-game pass (owner).
 - [ ] Linux: portal picker once, then clip with 3 tracks (owner).

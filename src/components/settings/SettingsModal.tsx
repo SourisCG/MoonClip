@@ -6,6 +6,7 @@ import { FolderOpen, KeyRound } from "lucide-react";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocale } from "../../hooks/useLocale";
 import { AudioSection } from "./AudioSection";
+import { NumberField } from "./NumberField";
 import { ObsEngineSection } from "./ObsEngineSection";
 import { VideoSection } from "./VideoSection";
 import type { EngineStatus } from "../../hooks/useEngine";
@@ -150,14 +151,12 @@ export function SettingsModal({
 
       <div className={row}>
         <span className={label}>{t("settings.max_gb")}</span>
-        <input
-          type="number"
+        <NumberField
+          value={settings.max_storage_gb ? Number(settings.max_storage_gb) : undefined}
           min={1}
           max={500}
           className={input}
-          defaultValue={settings.max_storage_gb}
-          key={`gb-${settings.max_storage_gb}`}
-          onBlur={(e) => void save("max_storage_gb", e.target.value)}
+          onCommit={(v) => void save("max_storage_gb", String(v))}
         />
       </div>
 

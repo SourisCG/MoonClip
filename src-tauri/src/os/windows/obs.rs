@@ -19,10 +19,16 @@ use std::sync::OnceLock;
 
 use tokio::process::Command;
 
+use super::super::encoder_options::{catalog_windows, EncoderEntry};
 use super::super::obs::{
     copy_dir_recursive, marker_matches, obs_build_fingerprint, write_marker, ObsEngine,
     ObsPlatform, ObsRuntime,
 };
+
+/// Encoder ids compiled into the pinned Windows OBS build (Custom picker).
+pub fn encoder_catalog() -> &'static [EncoderEntry] {
+    catalog_windows()
+}
 
 pub struct WindowsPlatform {
     /// Job object handle (raw) created once; OBS children are assigned to it so
@@ -96,10 +102,17 @@ fn source_root(obs_bin: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("unexpected OBS layout: {}", obs_bin.display()))
 }
 
+/// Staged OBS binary name. Renamed from `obs64.exe` so the embedded
+/// instance is unmistakable in Task Manager (and never confused with the
+/// user's own OBS): all OBS path lookups are directory-relative, the name
+/// itself is unused.
+pub const STAGED_OBS_EXE: &str = "moonclip-obs.exe";
+
 /// Stage (once per bundled build) the writable portable copy.
 fn stage_runtime(obs_bin: &Path) -> Result<PathBuf, String> {
     let root = runtime_root()?;
-    let runtime_bin = root.join("bin").join("64bit").join("obs64.exe");
+    let runtime_bin = root.join("bin").join("64bit").join(STAGED_OBS_EXE);
+    let legacy_bin = root.join("bin").join("64bit").join("obs64.exe");
     let fingerprint = obs_build_fingerprint(obs_bin);
     let marker = root.join(".moonclip-source");
     if runtime_bin.exists() && marker_matches(&marker, &fingerprint) {
@@ -116,6 +129,12 @@ fn stage_runtime(obs_bin: &Path) -> Result<PathBuf, String> {
             .map_err(|e| format!("cannot refresh OBS runtime {}: {e}", root.display()))?;
     }
     copy_dir_recursive(&src, &root)?;
+    // Rename the staged launcher so Task Manager shows MoonClip's engine,
+    // not a second "OBS Studio".
+    if legacy_bin.exists() {
+        std::fs::rename(&legacy_bin, &runtime_bin)
+            .map_err(|e| format!("cannot brand staged OBS binary: {e}"))?;
+    }
     // Portable mode marker: OBS writes config/ inside the copy.
     std::fs::write(root.join("portable_mode.txt"), b"")
         .map_err(|e| format!("cannot enable OBS portable mode: {e}"))?;
@@ -148,8 +167,10 @@ impl ObsPlatform for WindowsPlatform {
             collection.into(),
             // Coexist with the user's own OBS instance.
             "--multi".into(),
-            // Out of the way: tray + no shutdown/update prompts.
-            "--minimize-to-tray".into(),
+            // NOTE: no `--minimize-to-tray`: with the tray disabled in
+            // user.ini that flag is a no-op for hiding, and MoonClip hides
+            // the window itself (conceal_window) so the embedded instance
+            // is never visible and never in the tray.
             "--disable-shutdown-check".into(),
             "--disable-updater".into(),
             "--only-bundled-plugins".into(),
@@ -187,8 +208,26 @@ impl ObsPlatform for WindowsPlatform {
         }
     }
 
+    fn conceal_window(&self, pid: u32, exe: &Path) {
+        watch_and_hide_window(pid, exe);
+    }
+
+    fn sys_tray_enabled(&self) -> bool {
+        // No tray icon for the embedded instance: MoonClip hides the
+        // window itself (conceal_window) so the user never sees OBS.
+        false
+    }
+
     fn kill_orphans(&self, obs_bin: &Path) {
         kill_orphan_process(obs_bin);
+        // One-time sweep of the pre-rename binary name in the same copy
+        // (upgrades from builds that staged `obs64.exe`).
+        if let Some(dir) = obs_bin.parent() {
+            let legacy = dir.join("obs64.exe");
+            if legacy != obs_bin {
+                kill_orphan_process(&legacy);
+            }
+        }
     }
 
     fn video_source(&self, monitor: &str, window: &str) -> (&'static str, serde_json::Value) {
@@ -245,11 +284,145 @@ impl ObsPlatform for WindowsPlatform {
             _ => None,
         }
     }
+
+    fn encoder_catalog(&self) -> &'static [EncoderEntry] {
+        encoder_catalog()
+    }
 }
 
 /// New engine wired to this platform.
 pub fn new_engine() -> ObsEngine {
     ObsEngine::new(Box::new(WindowsPlatform::new()))
+}
+
+/// ~15 s watcher thread polling every 50 ms: only top-level, ownerless,
+/// visible windows whose title starts with "OBS " are hidden — error
+/// dialogs keep their own titles and stay visible for diagnosis. The PID +
+/// image-path guard means a reused PID or the user's own OBS can never be
+/// touched.
+fn watch_and_hide_window(pid: u32, exe: &Path) {
+    use std::time::{Duration, Instant};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        SetWindowPos, ShowWindow, GW_OWNER, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        SW_HIDE,
+    };
+
+    fn image_of(pid: u32) -> Option<String> {
+        unsafe {
+            let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+                return None;
+            };
+            let mut buf = [0u16; 512];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(
+                h,
+                PROCESS_NAME_WIN32,
+                windows::core::PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            );
+            let _ = windows::Win32::Foundation::CloseHandle(h);
+            if ok.is_err() {
+                return None;
+            }
+            Some(String::from_utf16_lossy(&buf[..len as usize]))
+        }
+    }
+
+    fn title_of(hwnd: HWND) -> String {
+        unsafe {
+            let mut buf = [0u16; 256];
+            let n = GetWindowTextW(hwnd, &mut buf);
+            String::from_utf16_lossy(&buf[..n as usize])
+        }
+    }
+
+    fn is_obs_main_window(hwnd: HWND, pid: u32) -> bool {
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() {
+                return false;
+            }
+            let mut wpid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut wpid));
+            if wpid != pid {
+                return false;
+            }
+            // Owned popups (error dialogs) are left alone.
+            if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+                if !owner.is_invalid() {
+                    return false;
+                }
+            }
+            title_of(hwnd).starts_with("OBS ")
+        }
+    }
+
+    fn hide(hwnd: HWND) {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+            // Belt and suspenders: park it off-screen as well.
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                -32000,
+                -32000,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
+            );
+        }
+    }
+
+    fn sweep(pid: u32, exe_lower: &str) {
+        // PID-reuse guard: only hide windows of OUR staged binary.
+        let same = image_of(pid)
+            .map(|p| p.to_lowercase().replace("\\\\?\\", "").replace('\\', "/") == *exe_lower)
+            .unwrap_or(false);
+        if !same {
+            return;
+        }
+        struct Acc {
+            pid: u32,
+            out: Vec<isize>,
+        }
+        unsafe extern "system" fn cb(hwnd: HWND, l: LPARAM) -> BOOL {
+            let acc = unsafe { &mut *(l.0 as *mut Acc) };
+            if is_obs_main_window(hwnd, acc.pid) {
+                acc.out.push(hwnd.0 as isize);
+            }
+            true.into()
+        }
+        let mut acc = Acc { pid, out: vec![] };
+        unsafe {
+            let _ = EnumWindows(Some(cb), LPARAM(&mut acc as *mut Acc as isize));
+        }
+        for h in acc.out {
+            hide(HWND(h as *mut core::ffi::c_void));
+        }
+    }
+
+    let exe_lower = std::fs::canonicalize(exe)
+        .map(|p| {
+            p.to_string_lossy()
+                .to_lowercase()
+                .replace("\\\\?\\", "")
+                .replace('\\', "/")
+        })
+        .unwrap_or_default();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            sweep(pid, &exe_lower);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        sweep(pid, &exe_lower);
+    });
 }
 
 /// Kill our own leftover OBS processes (force-killed sessions never run Drop).
@@ -372,7 +545,10 @@ mod tests {
         assert!(s.contains("--profile MoonClip"), "{s}");
         assert!(s.contains("--collection MoonClip"));
         assert!(s.contains("--multi"));
-        assert!(s.contains("--minimize-to-tray"));
+        assert!(
+            !s.contains("--minimize-to-tray"),
+            "tray is disabled in user.ini; MoonClip hides the window itself"
+        );
         assert!(
             !s.contains("--config-dir"),
             "portable mode must not rely on --config-dir"

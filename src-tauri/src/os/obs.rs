@@ -101,6 +101,17 @@ pub trait ObsPlatform: Send + Sync {
     /// with KILL_ON_JOB_CLOSE) so a force-kill or crash never leaves it
     /// running. Best effort; implementations may no-op.
     fn adopt_child(&self, _pid: u32) {}
+    /// Hide the OBS main window right after spawn so the user never sees
+    /// it (no window, no tray). Best effort; must never touch other
+    /// processes (filter by exact PID + image path) and never block startup.
+    /// Implementations may no-op (Linux owner iterates).
+    fn conceal_window(&self, _pid: u32, _exe: &Path) {}
+    /// Whether this platform's OBS instance keeps its tray icon enabled.
+    /// Windows disables it (the watcher hides the window instead); other
+    /// platforms keep the tray path until they implement concealment.
+    fn sys_tray_enabled(&self) -> bool {
+        true
+    }
     /// Kill leftover MoonClip OBS processes from a force-killed session.
     /// MUST only match our exact bundled binary path; never the user's OBS.
     fn kill_orphans(&self, obs_bin: &Path);
@@ -112,6 +123,8 @@ pub trait ObsPlatform: Send + Sync {
     fn mic_audio_source_id(&self) -> &'static str;
     /// OBS encoder id for (vendor, codec, encoder preference).
     fn encoder_id(&self, vendor: &str, codec: &str, encoder: &str) -> Option<&'static str>;
+    /// Encoder ids compiled into this platform's OBS build (Custom picker).
+    fn encoder_catalog(&self) -> &'static [super::encoder_options::EncoderEntry];
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +134,27 @@ pub trait ObsPlatform: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct ObsProfile {
     pub encoder_id: String,
+    /// App codec (h264/hevc/av1): resolved identity, asserted in tests.
+    #[allow(dead_code)]
     pub codec: String,
+    /// Exact map written to recordEncoder.json (ladder recipe or validated
+    /// Custom settings).
+    pub encoder_settings: serde_json::Map<String, serde_json::Value>,
+    /// Full [Video] tab (ladder defaults or validated Custom video).
+    pub scale_type: String,
+    /// 0 = common values, 1 = integer, 2 = fractional.
+    pub fps_type: u8,
+    /// As-written FPSCommon (e.g. "60").
+    pub fps_common: String,
+    pub fps_int: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub color_format: String,
+    pub color_space: String,
+    pub color_range: String,
+    /// GPU index for hardware encoders (kept on the config; the resolved
+    /// `device` key lives in `encoder_settings`).
+    #[allow(dead_code)]
     pub gpu_index: u32,
     pub fps: u32,
     pub base_width: u32,
@@ -185,35 +218,149 @@ pub fn normalize_device_id(stored: &str, render: bool) -> String {
 
 impl ObsProfile {
     pub fn from_config(cfg: &CaptureConfig, platform: &dyn ObsPlatform) -> Result<Self, String> {
-        let codec = match cfg.codec.as_str() {
-            "h264" | "hevc" | "av1" => cfg.codec.clone(),
-            other => return Err(format!("unsupported codec '{other}'")),
-        };
-        let encoder_id = platform
-            .encoder_id(&cfg.vendor, &codec, &cfg.encoder)
-            .ok_or_else(|| {
-                format!(
-                    "no OBS encoder for codec '{}' / '{}' on '{}'",
-                    codec, cfg.encoder, cfg.vendor
-                )
-            })?
-            .to_string();
+        use super::encoder_options as enc;
         let base_w = even(cfg.base_width.max(2));
         let base_h = even(cfg.base_height.max(2));
-        let (out_w, out_h) = if cfg.out_height == 0 || cfg.out_height >= base_h {
-            (base_w, base_h)
-        } else {
-            let h = even(cfg.out_height);
-            (scaled_width(base_w, base_h, h), h)
+
+        // Encoder id + codec first (explicit Custom id from this
+        // platform's catalog, or the ladder vendor mapping).
+        let (encoder_id, codec) = match &cfg.custom_encoder {
+            Some(custom) => {
+                let entry = platform
+                    .encoder_catalog()
+                    .iter()
+                    .find(|e| e.id == custom.encoder)
+                    .copied()
+                    .ok_or_else(|| format!("encoder '{}' not in this OBS build", custom.encoder))?;
+                (entry.id.to_string(), entry.codec.to_string())
+            }
+            None => {
+                let codec = match cfg.codec.as_str() {
+                    "h264" | "hevc" | "av1" => cfg.codec.clone(),
+                    other => return Err(format!("unsupported codec '{other}'")),
+                };
+                let encoder_id = platform
+                    .encoder_id(&cfg.vendor, &codec, &cfg.encoder)
+                    .ok_or_else(|| {
+                        format!(
+                            "no OBS encoder for codec '{}' / '{}' on '{}'",
+                            codec, cfg.encoder, cfg.vendor
+                        )
+                    })?
+                    .to_string();
+                (encoder_id, codec)
+            }
         };
-        let bitrate = cfg.bitrate_kbps.clamp(1_000, 200_000);
+        let codec_family =
+            enc::family_of(&encoder_id).ok_or_else(|| format!("unknown encoder '{encoder_id}'"))?;
+
+        // Video tab: validated Custom overrides or ladder defaults. The
+        // color format gates 10-bit encoder profiles in the pair check.
+        let custom_video = match &cfg.custom_video {
+            Some(v) => Some(enc::parse_custom_video(
+                codec_family,
+                &codec,
+                &serde_json::to_string(v).map_err(|e| e.to_string())?,
+            )?),
+            None => None,
+        };
+        let color = custom_video.as_ref().map(|v| v.color_format.as_str());
+
+        // Encoder settings: validated Custom map (pair-checked against the
+        // video color) or the ladder recipe for this encoder.
+        let encoder_settings = match &cfg.custom_encoder {
+            Some(custom) => enc::validate_pair(codec_family, &codec, &custom.settings, color)?,
+            None => {
+                let bitrate = cfg.bitrate_kbps.clamp(1_000, 200_000);
+                enc::ladder_recipe(&encoder_id, bitrate, cfg.gpu_index, &codec)
+                    .ok_or_else(|| format!("no recipe for encoder '{encoder_id}'"))?
+            }
+        };
+
+        // Bitrate for the replay-ring math: explicit Custom `bitrate` when
+        // the user set one, else the ladder value.
+        let bitrate = match encoder_settings.get("bitrate").and_then(|v| v.as_u64()) {
+            Some(b) => (b as u32).clamp(1_000, 200_000),
+            None => cfg.bitrate_kbps.clamp(1_000, 200_000),
+        };
         let seconds = cfg.duration_seconds.clamp(1, 3600);
+
+        // Video tab: validated Custom overrides or ladder defaults.
+        let (
+            out_w,
+            out_h,
+            scale_type,
+            fps_type,
+            fps_common,
+            fps_int,
+            fps_num,
+            fps_den,
+            color_format,
+            color_space,
+            color_range,
+            fps,
+        ) = match custom_video {
+            Some(vv) => {
+                let fps = enc::custom_effective_fps(&vv);
+                (
+                    vv.out_width,
+                    vv.out_height,
+                    vv.scale_type,
+                    match vv.fps_type.as_str() {
+                        "integer" => 1,
+                        "fractional" => 2,
+                        _ => 0,
+                    },
+                    vv.fps_common.to_string(),
+                    vv.fps_int,
+                    vv.fps_num,
+                    vv.fps_den,
+                    vv.color_format,
+                    vv.color_space,
+                    vv.color_range,
+                    fps,
+                )
+            }
+            None => {
+                let (out_w, out_h) = if cfg.out_height == 0 || cfg.out_height >= base_h {
+                    (base_w, base_h)
+                } else {
+                    let h = even(cfg.out_height);
+                    (scaled_width(base_w, base_h, h), h)
+                };
+                (
+                    out_w,
+                    out_h,
+                    "bicubic".to_string(),
+                    0,
+                    cfg.fps.clamp(1, 360).to_string(),
+                    60,
+                    60,
+                    1,
+                    "NV12".to_string(),
+                    "709".to_string(),
+                    "Partial".to_string(),
+                    cfg.fps.clamp(1, 360),
+                )
+            }
+        };
+
         let (video_source_id, video_settings) = platform.video_source(&cfg.monitor, &cfg.window);
         Ok(Self {
             encoder_id,
             codec,
+            encoder_settings,
+            scale_type,
+            fps_type,
+            fps_common,
+            fps_int,
+            fps_num,
+            fps_den,
+            color_format,
+            color_space,
+            color_range,
             gpu_index: cfg.gpu_index,
-            fps: cfg.fps.clamp(1, 360),
+            fps,
             base_width: base_w,
             base_height: base_h,
             out_width: out_w,
@@ -297,13 +444,20 @@ pub fn render_basic_ini(p: &ObsProfile) -> String {
     s.push_str(&format!("BaseCY={}\n", p.base_height));
     s.push_str(&format!("OutputCX={}\n", p.out_width));
     s.push_str(&format!("OutputCY={}\n", p.out_height));
-    // FPSType 0 = "Common FPS values"; 24/30/60/120/144 are all common values.
-    s.push_str("FPSType=0\n");
-    s.push_str(&format!("FPSCommon={}\n", p.fps));
-    s.push_str("ScaleType=bicubic\n");
-    s.push_str("ColorFormat=NV12\n");
-    s.push_str("ColorSpace=709\n");
-    s.push_str("ColorRange=Partial\n\n");
+    // FPSType 0 = common values, 1 = integer, 2 = fractional.
+    s.push_str(&format!("FPSType={}\n", p.fps_type));
+    match p.fps_type {
+        1 => s.push_str(&format!("FPSInt={}\n", p.fps_int)),
+        2 => {
+            s.push_str(&format!("FPSNum={}\n", p.fps_num));
+            s.push_str(&format!("FPSDen={}\n", p.fps_den));
+        }
+        _ => s.push_str(&format!("FPSCommon={}\n", p.fps_common)),
+    }
+    s.push_str(&format!("ScaleType={}\n", p.scale_type));
+    s.push_str(&format!("ColorFormat={}\n", p.color_format));
+    s.push_str(&format!("ColorSpace={}\n", p.color_space));
+    s.push_str(&format!("ColorRange={}\n\n", p.color_range));
     s.push_str("[Audio]\n");
     s.push_str("SampleRate=48000\n");
     s.push_str("ChannelSetup=Stereo\n");
@@ -311,74 +465,12 @@ pub fn render_basic_ini(p: &ObsProfile) -> String {
     s
 }
 
-/// `recordEncoder.json` for the selected encoder. CBR everywhere (predictable
-/// RAM ring); per-vendor recipe mirrors the old measured light defaults
-/// (NVENC p5 + spatial AQ + BF2, no look-ahead, single pass).
+/// `recordEncoder.json` for the selected encoder: the validated settings map
+/// on the profile (ladder recipe or Custom). OBS 32.2.2 silently ignores
+/// unknown keys, so every key here comes from the encoder_options registry.
 pub fn render_record_encoder_json(p: &ObsProfile) -> String {
-    use serde_json::{json, Map, Value};
-    let value: Value = if p.encoder_id.contains("nvenc") {
-        let mut o = Map::new();
-        o.insert("bitrate".into(), json!(p.bitrate_kbps));
-        o.insert("max_bitrate".into(), json!(p.bitrate_kbps));
-        o.insert("rate_control".into(), json!("CBR"));
-        o.insert("preset2".into(), json!("p5"));
-        o.insert("tune".into(), json!("hq"));
-        o.insert("multipass".into(), json!("disabled"));
-        o.insert("bf".into(), json!(2));
-        o.insert("psycho_aq".into(), json!(true));
-        o.insert("lookahead".into(), json!(false));
-        o.insert("keyint_sec".into(), json!(2));
-        o.insert("gpu".into(), json!(p.gpu_index));
-        if p.codec == "h264" {
-            o.insert("profile".into(), json!("high"));
-        } else if p.codec == "hevc" {
-            o.insert("profile".into(), json!("main"));
-        }
-        Value::Object(o)
-    } else if p.encoder_id.contains("_amf") {
-        let mut o = Map::new();
-        o.insert("bitrate".into(), json!(p.bitrate_kbps));
-        o.insert("rate_control".into(), json!("CBR"));
-        o.insert("preset".into(), json!("quality"));
-        o.insert("bf".into(), json!(2));
-        o.insert("vbaq".into(), json!(true));
-        o.insert("keyint_sec".into(), json!(2));
-        o.insert("enforce_hrd".into(), json!(false));
-        if p.codec == "h264" {
-            o.insert("profile".into(), json!("high"));
-        }
-        Value::Object(o)
-    } else if p.encoder_id.contains("qsv") {
-        let mut o = Map::new();
-        o.insert("bitrate".into(), json!(p.bitrate_kbps));
-        o.insert("rate_control".into(), json!("CBR"));
-        o.insert("preset".into(), json!("medium"));
-        o.insert("async_depth".into(), json!(4));
-        o.insert("keyint_sec".into(), json!(2));
-        if p.codec == "h264" {
-            o.insert("profile".into(), json!("high"));
-        }
-        Value::Object(o)
-    } else if p.encoder_id == "ffmpeg_vaapi" {
-        // Linux AMD/unknown-GPU path: render node 0 is the safe default.
-        let mut o = Map::new();
-        o.insert("bitrate".into(), json!(p.bitrate_kbps));
-        o.insert("rate_control".into(), json!("CBR"));
-        o.insert("vaapi_device".into(), json!("/dev/dri/renderD128"));
-        o.insert("keyint_sec".into(), json!(2));
-        Value::Object(o)
-    } else if p.encoder_id == "obs_x264" {
-        let mut o = Map::new();
-        o.insert("bitrate".into(), json!(p.bitrate_kbps));
-        o.insert("rate_control".into(), json!("CBR"));
-        o.insert("preset".into(), json!("veryfast"));
-        o.insert("profile".into(), json!("high"));
-        o.insert("keyint_sec".into(), json!(2));
-        Value::Object(o)
-    } else {
-        json!({ "bitrate": p.bitrate_kbps, "rate_control": "CBR", "keyint_sec": 2 })
-    };
-    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".into())
+    serde_json::to_string_pretty(&serde_json::Value::Object(p.encoder_settings.clone()))
+        .unwrap_or_else(|_| "{}".into())
 }
 
 /// OBS volume multiplier from a 0-200 % gain (1.0 = unity).
@@ -576,8 +668,17 @@ pub fn render_global_ini() -> String {
 /// `FirstRun=true`, OBS 32 queues `on_autoConfigure_triggered` on the first
 /// portable start, which pops a "configure OBS for recording" dialog and can
 /// break/undo a replay-buffer start while the wizard is pending.
-pub fn render_user_ini() -> String {
-    "[General]\nFirstRun=true\n".to_string()
+/// `tray`: keep OBS's own tray icon (Linux fallback until the window can be
+/// hidden there); Windows disables it and hides the window instead so the
+/// user never sees the embedded instance.
+pub fn render_user_ini(tray: bool) -> String {
+    let mut s = String::from("[General]\nFirstRun=true\n");
+    if !tray {
+        s.push_str(
+            "\n[BasicWindow]\nSysTrayEnabled=false\nSysTrayWhenStarted=false\nSysTrayMinimizeToTray=false\n",
+        );
+    }
+    s
 }
 
 /// `plugin_config/obs-websocket/config.json` for OUR instance only.
@@ -601,7 +702,11 @@ pub fn websocket_url(port: u16, password: &str) -> String {
 }
 
 /// Write every generated file for one start. Returns the profile dir.
-pub fn write_obs_config(root: &Path, p: &ObsProfile) -> Result<PathBuf, String> {
+pub fn write_obs_config(
+    root: &Path,
+    p: &ObsProfile,
+    tray_enabled: bool,
+) -> Result<PathBuf, String> {
     let conf = root.join("obs-studio");
     let profile_dir = conf.join("basic").join("profiles").join(OBS_PROFILE);
     let scenes_dir = conf.join("basic").join("scenes");
@@ -625,7 +730,7 @@ pub fn write_obs_config(root: &Path, p: &ObsProfile) -> Result<PathBuf, String> 
         render_collection(p, &uuids),
     )?;
     write(conf.join("global.ini"), render_global_ini())?;
-    write(conf.join("user.ini"), render_user_ini())?;
+    write(conf.join("user.ini"), render_user_ini(tray_enabled))?;
     write(
         ws_dir.join("config.json"),
         render_websocket_config(p.websocket_port, &p.websocket_password),
@@ -880,6 +985,50 @@ impl Obscmd {
             .await?;
         parse_current_scene(&out).ok_or_else(|| "cannot parse current scene".to_string())
     }
+
+    /// Live gain of a generated audio source
+    /// (`obs-cmd input volume --set <mul> <source>`).
+    pub async fn input_volume(
+        &self,
+        source: &str,
+        percent: u32,
+        platform: &dyn ObsPlatform,
+    ) -> Result<(), String> {
+        let mul = volume_mul(percent);
+        let set = format!("{mul:.4}");
+        let args = input_volume_args(source, &set);
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.run(&refs, platform, Duration::from_secs(15))
+            .await
+            .map(|_| ())
+    }
+}
+
+/// OBS volume multiplier for a 0-200 % gain (1.0 = unity). Values above 1.0
+/// are valid OBS multipliers (boost up to 2x); whether a given obs-cmd
+/// build accepts >1.0 is probed live at runtime with a restart fallback.
+pub fn volume_mul(percent: u32) -> f64 {
+    (percent.clamp(0, 200) as f64) / 100.0
+}
+
+/// Pure arg builder for `obs-cmd input volume` (unit tested).
+pub fn input_volume_args(source: &str, set: &str) -> Vec<String> {
+    vec![
+        "input".to_string(),
+        "volume".to_string(),
+        "--set".to_string(),
+        set.to_string(),
+        source.to_string(),
+    ]
+}
+
+/// Generated audio source name for a mixer track.
+pub fn volume_source(track: &str) -> Option<&'static str> {
+    match track {
+        "game" => Some(GAME_SOURCE_NAME),
+        "mic" => Some(MIC_SOURCE_NAME),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -989,7 +1138,12 @@ impl CaptureEngine for ObsEngine {
         );
 
         // 2. Our own profile/scene/websocket config, before OBS starts.
-        write_obs_config(&self.config_root, &profile)?;
+        // The tray flag comes from the platform (Windows runs traceless).
+        write_obs_config(
+            &self.config_root,
+            &profile,
+            self.platform.sys_tray_enabled(),
+        )?;
 
         // 3. Sweep leftovers of OUR runtime binary from a force-killed session.
         self.platform.kill_orphans(&rt.bin);
@@ -1021,6 +1175,9 @@ impl CaptureEngine for ObsEngine {
             // Windows job object: OBS dies when MoonClip does, even on a
             // force-kill (no orphan holding capture/encode sessions).
             self.platform.adopt_child(pid);
+            // Hide the embedded window right away so the user never sees
+            // it (no-op on platforms without concealment).
+            self.platform.conceal_window(pid, &rt.bin);
         }
 
         // 5. Safety guard: if OBS writes outside our config, abort immediately.
@@ -1098,11 +1255,13 @@ impl CaptureEngine for ObsEngine {
         // assignment). Refuse to run rather than save black clips.
         match obscmd.current_scene(self.platform.as_ref()).await {
             Ok(scene) if scene == SCENE_NAME => {}
-            Ok(other) => return Err(self
-                .fail_start(format!(
+            Ok(other) => {
+                return Err(self
+                    .fail_start(format!(
                     "OBS program scene is '{other}', expected '{SCENE_NAME}' (would record black)"
                 ))
-                .await),
+                    .await)
+            }
             Err(e) => eprintln!("[moonclip] warning: cannot verify OBS program scene: {e}"),
         }
 
@@ -1184,6 +1343,14 @@ impl CaptureEngine for ObsEngine {
             .audio_mute(source, muted, self.platform.as_ref())
             .await
     }
+
+    async fn set_volume(&mut self, track: &str, percent: u32) -> Result<(), String> {
+        let source = volume_source(track).ok_or_else(|| format!("unknown track '{track}'"))?;
+        let obscmd = self.obscmd()?;
+        obscmd
+            .input_volume(source, percent, self.platform.as_ref())
+            .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1238,6 +1405,9 @@ mod tests {
                 _ => None,
             }
         }
+        fn encoder_catalog(&self) -> &'static [super::super::encoder_options::EncoderEntry] {
+            super::super::encoder_options::catalog_windows()
+        }
     }
 
     fn config() -> CaptureConfig {
@@ -1263,6 +1433,8 @@ mod tests {
             vendor: "nvidia".into(),
             base_width: 2560,
             base_height: 1440,
+            custom_encoder: None,
+            custom_video: None,
             obs_bin: Some(PathBuf::from("obs64.exe")),
             obscmd_bin: Some(PathBuf::from("obs-cmd.exe")),
             websocket_port: 4456,
@@ -1344,21 +1516,107 @@ mod tests {
     }
 
     #[test]
-    fn record_encoder_json_is_cbr_per_vendor() {
+    fn record_encoder_json_uses_registry_recipes() {
+        // Ladder NVENC: measured recipe with OBS 32 keys (preset, NOT preset2).
         let p = profile();
+        assert_eq!(p.encoder_id, "obs_nvenc_h264_tex");
         let v: serde_json::Value = serde_json::from_str(&render_record_encoder_json(&p)).unwrap();
         assert_eq!(v["rate_control"], "CBR");
         assert_eq!(v["bitrate"], 20_000);
-        assert_eq!(v["preset2"], "p5");
+        assert_eq!(v["preset"], "p5");
+        assert_eq!(v["tune"], "hq");
         assert_eq!(v["multipass"], "disabled");
+        assert_eq!(v["adaptive_quantization"], true);
+        assert_eq!(v["device"], -1);
         assert_eq!(v["profile"], "high");
+        assert!(v.get("preset2").is_none(), "{v}");
+        assert!(v.get("psycho_aq").is_none(), "{v}");
+        assert!(v.get("gpu").is_none(), "{v}");
 
+        // CPU ladder: measured x264 recipe.
         let mut c = config();
         c.encoder = "cpu".into();
         let p = ObsProfile::from_config(&c, &FakePlatform).unwrap();
         let v: serde_json::Value = serde_json::from_str(&render_record_encoder_json(&p)).unwrap();
         assert_eq!(v["rate_control"], "CBR");
         assert_eq!(v["preset"], "veryfast");
+
+        // Unvalidated ladder family (AMD): Auto recipe only.
+        let mut c = config();
+        c.vendor = "amd".into();
+        let p = ObsProfile::from_config(&c, &FakePlatform).unwrap();
+        assert_eq!(p.encoder_id, "h264_texture_amf");
+        let v: serde_json::Value = serde_json::from_str(&render_record_encoder_json(&p)).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"bitrate": 20_000, "rate_control": "CBR"})
+        );
+    }
+
+    #[test]
+    fn custom_encoder_and_video_render_verbatim() {
+        use super::super::encoder_options as enc;
+        let mut c = config();
+        let raw_enc = r#"{"encoder":"obs_nvenc_h264_tex","settings":{"rate_control":"CQP","cqp":20,"preset":"p7"}}"#;
+        let custom = enc::parse_custom_encoder(raw_enc).unwrap();
+        c.custom_encoder = Some(crate::os::api::CustomEncoder {
+            encoder: custom.encoder,
+            settings: custom.settings,
+        });
+        let raw_vid = r#"{"out_width":2560,"out_height":1440,"scale_type":"lanczos","fps_type":"fractional","fps_common":60,"fps_int":60,"fps_num":60000,"fps_den":1001,"color_format":"NV12","color_space":"709","color_range":"Partial"}"#;
+        let vv = enc::parse_custom_video(enc::EncoderFamily::Nvenc, "h264", raw_vid).unwrap();
+        c.custom_video = Some(crate::os::api::CustomVideo {
+            out_width: vv.out_width,
+            out_height: vv.out_height,
+            scale_type: vv.scale_type,
+            fps_type: vv.fps_type,
+            fps_common: vv.fps_common,
+            fps_int: vv.fps_int,
+            fps_num: vv.fps_num,
+            fps_den: vv.fps_den,
+            color_format: vv.color_format,
+            color_space: vv.color_space,
+            color_range: vv.color_range,
+        });
+        let p = ObsProfile::from_config(&c, &FakePlatform).unwrap();
+        assert_eq!(p.codec, "h264");
+        let v: serde_json::Value = serde_json::from_str(&render_record_encoder_json(&p)).unwrap();
+        assert_eq!(v["rate_control"], "CQP");
+        assert_eq!(v["cqp"], 20);
+        // Custom bitrate absent -> ladder bitrate drives the ring math.
+        assert_eq!(p.bitrate_kbps, 20_000);
+        let ini = render_basic_ini(&p);
+        assert!(ini.contains("OutputCX=2560"), "{ini}");
+        assert!(ini.contains("OutputCY=1440"), "{ini}");
+        assert!(ini.contains("ScaleType=lanczos"), "{ini}");
+        assert!(ini.contains("FPSType=2"), "{ini}");
+        assert!(ini.contains("FPSNum=60000"), "{ini}");
+        assert!(ini.contains("FPSDen=1001"), "{ini}");
+
+        // Unknown encoder id on this platform fails loudly.
+        let mut c = config();
+        c.custom_encoder = Some(crate::os::api::CustomEncoder {
+            encoder: "wat".into(),
+            settings: serde_json::Map::new(),
+        });
+        let err = ObsProfile::from_config(&c, &FakePlatform).unwrap_err();
+        assert!(err.contains("not in this OBS build"), "{err}");
+    }
+
+    #[test]
+    fn volume_helpers_map_tracks_and_multipliers() {
+        assert_eq!(volume_source("game"), Some(GAME_SOURCE_NAME));
+        assert_eq!(volume_source("mic"), Some(MIC_SOURCE_NAME));
+        assert_eq!(volume_source("mix"), None);
+        assert!((volume_mul(0) - 0.0).abs() < 1e-9);
+        assert!((volume_mul(100) - 1.0).abs() < 1e-9);
+        assert!((volume_mul(200) - 2.0).abs() < 1e-9);
+        assert!((volume_mul(999) - 2.0).abs() < 1e-9);
+        let args = input_volume_args("MoonClip Game Audio", "0.7500");
+        assert_eq!(
+            args,
+            vec!["input", "volume", "--set", "0.7500", "MoonClip Game Audio"]
+        );
     }
 
     #[test]
@@ -1497,9 +1755,21 @@ mod tests {
 
     #[test]
     fn user_ini_suppresses_first_run_wizard() {
-        let ini = render_user_ini();
-        assert!(ini.contains("[General]"));
-        assert!(ini.contains("FirstRun=true"), "{ini}");
+        for tray in [true, false] {
+            let ini = render_user_ini(tray);
+            assert!(ini.contains("[General]"), "{ini}");
+            assert!(ini.contains("FirstRun=true"), "{ini}");
+        }
+    }
+
+    #[test]
+    fn user_ini_disables_tray_when_asked() {
+        let on = render_user_ini(true);
+        assert!(!on.contains("SysTrayEnabled"), "{on}");
+        let off = render_user_ini(false);
+        assert!(off.contains("SysTrayEnabled=false"), "{off}");
+        assert!(off.contains("SysTrayWhenStarted=false"), "{off}");
+        assert!(off.contains("SysTrayMinimizeToTray=false"), "{off}");
     }
 
     #[test]

@@ -36,15 +36,18 @@ engine: the embedded, isolated OBS Studio driven by the bundled `obs-cmd`.
                root/obs-studio/basic/scenes/MoonClip.json
                root/obs-studio/global.ini
                root/obs-studio/plugin_config/obs-websocket/config.json
-           -> stage writable portable OBS copy at %LOCALAPPDATA%\MoonClip\obs
-              (copy + portable_mode.txt + build marker; once per build)
-                          --collection MoonClip --multi --minimize-to-tray
-                          --disable-shutdown-check --disable-updater
-                          --only-bundled-plugins
-           -> config guard (root/obs-studio must appear, else abort)
-           -> wait obs-cmd `replay status` (private websocket)
-           -> obs-cmd `replay start`
-F9         -> obs-cmd `replay save` -> "Saved replay: <path>" -> DB index
+            -> stage writable portable OBS copy at %LOCALAPPDATA%\MoonClip\obs
+               (copy + portable_mode.txt + build marker; once per build)
+               staged exe renamed to moonclip-obs.exe (unmistakable in TM)
+                           --collection MoonClip --multi
+                           --disable-shutdown-check --disable-updater
+                           --only-bundled-plugins
+            -> hide window (conceal_window watcher; no tray: user.ini
+               SysTrayEnabled=false) -> config guard (root/obs-studio must
+               appear, else abort)
+            -> wait obs-cmd `replay status` (private websocket)
+            -> obs-cmd `replay start`
+F9         -> obs-cmd replay save -> "Saved replay: <path>" -> DB index
 ```
 
 - `root` = `%LOCALAPPDATA%\MoonClip\obs` — NEVER `%APPDATA%\obs-studio`.
@@ -95,12 +98,16 @@ F9         -> obs-cmd `replay save` -> "Saved replay: <path>" -> DB index
   `video_encoder` (`gpu`|`cpu`), `gpu_index`, `out_height` (0=source),
   `fps` (24/30/60/120/144), `buffer_seconds`, `video_mode`
   (`ladder`|`custom`), `custom_bitrate_kbps` (3–100 Mbps), `custom_fps`,
+  `custom_encoder_json`, `custom_video_json` (migration 008),
   `container`, `monitor`, `obs_ws_port`, `obs_ws_password`, gains/mutes.
-- UI: `VideoSection.tsx` (Moon preset cards + FPS/codec/encoder pills + custom
-  mode + duration + container) and `ObsEngineSection.tsx` (motor status +
-  Repair). `SettingsModal` composes them.
+- UI: `VideoSection.tsx` (Moon preset cards + Custom panel with per-encoder
+  schema, codec-compat greying, sanitize-on-change, ladder-seeded bitrate,
+  applied summary) + `NumberField.tsx` (shared numeric input: draft while
+  typing, commit on blur/Enter, clamp+normalize) and `ObsEngineSection.tsx`
+  (motor status + Repair). `SettingsModal` composes them.
 - `RESTART_KEYS` in `commands.rs` restarts the buffer ONCE per change, with
-  revert-on-failure and a notification; gains are restart keys too.
+  revert-on-failure and a notification; gains apply live first (restart only
+  as fallback).
 
 ## 6. Commands (IPC surface)
 
@@ -129,6 +136,11 @@ F9         -> obs-cmd `replay save` -> "Saved replay: <path>" -> DB index
       con 3 pistas, cambio de preset/encoder/monitor con restart, Display
       capture en exclusiva, Vanguard/CS2 in-game, test de hardware desde el
       wizard, reparar OBS.
+- [ ] Coexistencia visible: con el búfer corriendo NO hay icono de bandeja
+      de MoonClip-OBS, NO hay ventana (ni parpadeo), y en el Administrador
+      de tareas no hay un segundo "OBS Studio" suelto (el motor aparece
+      como hijo de MoonClip / `moonclip-obs.exe`, nunca se confunde con el
+      OBS del usuario).
 - [ ] Legacy FSE (best effort; Display capture is compositor-level).
 
 ## 9. Test rig

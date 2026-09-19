@@ -95,6 +95,94 @@ export interface VideoOptions {
   encoder: string;
   /** Hardware monitors can be oversampled (24..144). */
   fps_options: number[];
+  /** Custom picker: pinned catalog entries with live availability. */
+  encoders: EncoderOpt[];
+  /** Custom form: full option schema per encoder family. */
+  encoder_schema: EncoderSchema[];
+  /** Color formats each catalog encoder accepts. */
+  encoder_colors: EncoderColors[];
+  /** [Video] tab enums. */
+  scale_filters: string[];
+  fps_types: string[];
+  fps_common_values: number[];
+  color_spaces: string[];
+  color_ranges: string[];
+  /** Current Custom selection (null when ladder). */
+  custom: CustomSelection | null;
+}
+
+/** Mirrors Rust EncoderOpt. */
+export interface EncoderOpt {
+  id: string;
+  codec: string;
+  family: string;
+  validated: boolean;
+  available: boolean;
+}
+
+/** Mirrors Rust OptionSpecJson (resolved for one encoder). */
+export interface OptionSpecJson {
+  key: string;
+  kind: "enum" | "int" | "bool" | "text";
+  values: string[];
+  int_values: number[];
+  min: number;
+  max: number;
+  step: number;
+  default: string | number | boolean | null;
+  i18n: string;
+  visible_when: { key: string; values: string[]; and_key: string | null; and_values: string[] } | null;
+  /** False when the option does not exist for this codec: render greyed out, never send. */
+  supported: boolean;
+  /** Values only valid with P010 color format (greyed out otherwise). */
+  p010_values: string[];
+  p010_ints: number[];
+}
+
+/** Mirrors Rust EncoderSchema (per encoder id, codec already resolved). */
+export interface EncoderSchema {
+  encoder: string;
+  family: string;
+  codec: string;
+  validated: boolean;
+  options: OptionSpecJson[];
+}
+
+/** Mirrors Rust EncoderColors. */
+export interface EncoderColors {
+  id: string;
+  formats: string[];
+}
+
+/** Mirrors Rust CustomSelection. */
+export interface CustomSelection {
+  encoder: string;
+  settings: Record<string, string | number | boolean>;
+  video: CustomVideo | null;
+}
+
+/** Mirrors Rust CustomVideo. */
+export interface CustomVideo {
+  out_width: number;
+  out_height: number;
+  scale_type: string;
+  fps_type: string;
+  fps_common: number;
+  fps_int: number;
+  fps_num: number;
+  fps_den: number;
+  color_format: string;
+  color_space: string;
+  color_range: string;
+}
+
+/** Mirrors Rust VideoProbe. */
+export interface VideoProbe {
+  codec_name: string;
+  profile: string;
+  width: number;
+  height: number;
+  fps: number;
 }
 
 /** Mirrors Rust ObsInfo (embedded, isolated OBS engine). */
@@ -124,6 +212,7 @@ export interface HardwareTestResult {
   size_bytes: number;
   fallback_height: number | null;
   fallback_fps: number | null;
+  probe: VideoProbe | null;
   error: string | null;
 }
 

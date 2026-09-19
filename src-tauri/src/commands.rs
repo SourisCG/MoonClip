@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::os::encoder_options as enc;
 use crate::os::{
     self, backend_name, devices, new_engine, obs, resolve_obs, resolve_obscmd, video, AudioDevice,
-    CaptureConfig, CaptureEngine,
+    CaptureConfig, CaptureEngine, CustomEncoder, CustomVideo,
 };
 use crate::state::AppState;
 use crate::storage::models::{ClipRecord, CustomApp, RegisterAppInput};
@@ -117,6 +118,57 @@ pub(crate) struct StartOverrides {
     pub encoder: Option<String>,
     pub bitrate_kbps: Option<u32>,
     pub duration_seconds: Option<u32>,
+    /// Full Custom payloads for the "Probar" button (validated, not persisted).
+    pub custom_encoder: Option<CustomEncoder>,
+    pub custom_video: Option<CustomVideo>,
+}
+
+/// Validate Custom JSON payloads before persisting: unknown encoder ids,
+/// unknown options and out-of-range values are rejected with a clear error
+/// and nothing is written. `proposed` carries the values about to be written
+/// so the encoder+video pair validates together. Empty strings mean "unused".
+async fn validate_custom_pair(
+    app: &AppHandle,
+    proposed: &HashMap<String, String>,
+) -> Result<(), String> {
+    let db = app.state::<DbState>();
+    let stored = db.get_settings().unwrap_or_default();
+    let ce_raw = proposed
+        .get("custom_encoder_json")
+        .or_else(|| stored.get("custom_encoder_json"))
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let cv_raw = proposed
+        .get("custom_video_json")
+        .or_else(|| stored.get("custom_video_json"))
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let custom_encoder = if ce_raw.trim().is_empty() {
+        None
+    } else {
+        let parsed = enc::parse_custom_encoder(ce_raw)?;
+        let entry = enc::lookup_encoder(&parsed.encoder)
+            .ok_or_else(|| format!("unknown encoder '{}'", parsed.encoder))?;
+        Some((entry, parsed))
+    };
+    if !cv_raw.trim().is_empty() {
+        let (entry, parsed) = match &custom_encoder {
+            Some((e, p)) => (*e, p),
+            // Video overrides only make sense with an explicit Custom
+            // encoder (color formats are family-specific).
+            None => return Err("custom video needs a custom encoder first".into()),
+        };
+        let video = enc::parse_custom_video(entry.family, entry.codec, cv_raw)?;
+        // Cross-check encoder settings against the video color (10-bit
+        // profiles need P010): the pair validates together or not at all.
+        enc::validate_pair(
+            entry.family,
+            entry.codec,
+            &parsed.settings,
+            Some(&video.color_format),
+        )?;
+    }
+    Ok(())
 }
 
 /// Build one validated capture config from persisted settings (+ overrides).
@@ -153,6 +205,51 @@ pub(crate) async fn build_capture_config(
         }
     }
 
+    // Custom mode (video_mode=custom): validated encoder + video payloads.
+    // Codec and fps come from the payloads; unknown ids/values fail loudly.
+    let mut custom_encoder: Option<CustomEncoder> = None;
+    let mut custom_video: Option<CustomVideo> = None;
+    if setting_str(&db, "video_mode", "ladder") == "custom" {
+        let ce_raw = setting_str(&db, "custom_encoder_json", "");
+        if !ce_raw.trim().is_empty() {
+            custom_encoder = Some(enc::parse_custom_encoder(&ce_raw)?);
+        }
+        if let Some(ce) = &custom_encoder {
+            let entry = enc::lookup_encoder(&ce.encoder)
+                .ok_or_else(|| format!("unknown encoder '{}'", ce.encoder))?;
+            codec = entry.codec.to_string();
+            let cv_raw = setting_str(&db, "custom_video_json", "");
+            if !cv_raw.trim().is_empty() {
+                custom_video = Some(enc::parse_custom_video(entry.family, entry.codec, &cv_raw)?);
+            }
+        }
+    }
+    // Test/"Probar" overrides replace persisted payloads (validated here,
+    // never persisted).
+    if let Some(ce) = &overrides.custom_encoder {
+        let entry = enc::lookup_encoder(&ce.encoder)
+            .ok_or_else(|| format!("unknown encoder '{}'", ce.encoder))?;
+        enc::validate(entry.family, entry.codec, &ce.settings)?;
+        codec = entry.codec.to_string();
+        custom_encoder = Some(ce.clone());
+    }
+    if let Some(cv) = &overrides.custom_video {
+        let (family, fam_codec) = custom_encoder
+            .as_ref()
+            .and_then(|ce| enc::lookup_encoder(&ce.encoder))
+            .map(|e| (e.family, e.codec.to_string()))
+            .unwrap_or((enc::EncoderFamily::Nvenc, codec.clone()));
+        let raw = serde_json::to_string(cv).map_err(|e| e.to_string())?;
+        custom_video = Some(enc::parse_custom_video(family, &fam_codec, &raw)?);
+    }
+    // Pair gate (same as the pre-write check): 10-bit profiles need P010.
+    if let Some(ce) = &custom_encoder {
+        if let Some(entry) = enc::lookup_encoder(&ce.encoder) {
+            let color = custom_video.as_ref().map(|v| v.color_format.as_str());
+            enc::validate_pair(entry.family, entry.codec, &ce.settings, color)?;
+        }
+    }
+
     // Monitors: the OBS `monitor_id` device id is the stored value (stable
     // across index changes); legacy indices/alt names still resolve.
     let monitors = video::list_monitors().await;
@@ -180,7 +277,10 @@ pub(crate) async fn build_capture_config(
     };
     let ladder_bitrate = crate::video_quality::bitrate_kbps(
         if out_height == 0 {
-            base_height
+            custom_video
+                .as_ref()
+                .map(|v| v.out_height)
+                .unwrap_or(base_height)
         } else {
             out_height
         },
@@ -195,6 +295,10 @@ pub(crate) async fn build_capture_config(
     );
     if fps_clamped {
         eprintln!("[moonclip] custom fps not in Medal values, using {fps}");
+    }
+    // Full Custom payloads override the legacy custom bitrate/fps.
+    if let Some(cv) = &custom_video {
+        fps = enc::custom_effective_fps(cv);
     }
     if let Some(f) = overrides.fps {
         fps = f;
@@ -261,6 +365,8 @@ pub(crate) async fn build_capture_config(
         vendor: video::vendor().await,
         base_width,
         base_height,
+        custom_encoder,
+        custom_video,
         obs_bin: Some(obs_bin),
         obscmd_bin: Some(obscmd_bin),
         websocket_port: port,
@@ -351,6 +457,8 @@ const RESTART_KEYS: &[&str] = &[
     "video_mode",
     "custom_bitrate_kbps",
     "custom_fps",
+    "custom_encoder_json",
+    "custom_video_json",
     "gain_game",
     "gain_mic",
 ];
@@ -385,6 +493,11 @@ pub async fn set_setting(app: AppHandle, key: String, value: String) -> Result<(
         let db = app.state::<DbState>();
         db.get_settings().ok().and_then(|s| s.get(&key).cloned())
     };
+    if key == "custom_encoder_json" || key == "custom_video_json" {
+        let mut proposed = HashMap::new();
+        proposed.insert(key.clone(), value.clone());
+        validate_custom_pair(&app, &proposed).await?;
+    }
     {
         let db = app.state::<DbState>();
         db.set_setting(&key, &value)?;
@@ -498,6 +611,17 @@ pub struct SettingPair {
 pub async fn set_settings(app: AppHandle, values: Vec<SettingPair>) -> Result<(), String> {
     if values.is_empty() {
         return Ok(());
+    }
+    // Custom payloads validate BEFORE anything is written (atomic).
+    if values
+        .iter()
+        .any(|p| p.key == "custom_encoder_json" || p.key == "custom_video_json")
+    {
+        let proposed: HashMap<String, String> = values
+            .iter()
+            .map(|p| (p.key.clone(), p.value.clone()))
+            .collect();
+        validate_custom_pair(&app, &proposed).await?;
     }
     let previous: Vec<(String, Option<String>)> = {
         let db = app.state::<DbState>();
@@ -942,8 +1066,10 @@ fn check_track(track: &str) -> Result<(), String> {
     }
 }
 
-/// Gain lives in the generated OBS scene, so a running buffer restarts once
-/// (with a visible notice) to apply it — same semantics as other settings.
+/// Gain applies live through obs-cmd while the buffer runs (no restart).
+/// When live apply fails (e.g. an obs-cmd build rejecting boosts above
+/// 100 %), it falls back to the single-restart path. Persisted either way,
+/// so the next start renders it in the scene.
 #[tauri::command]
 pub async fn set_track_gain(
     app: AppHandle,
@@ -962,6 +1088,30 @@ pub async fn set_track_gain(
             },
             &pct.to_string(),
         )?;
+    }
+    let running = {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        guard.is_some()
+    };
+    if running {
+        let live: Result<(), String> = {
+            let st = app.state::<AppState>();
+            let mut guard = st.recorder.lock().await;
+            match guard.as_mut() {
+                Some(engine) => engine.set_volume(&track, pct).await,
+                None => Err("engine stopped".into()),
+            }
+        };
+        match live {
+            Ok(()) => {
+                set_audio_error(&app, None).await;
+                return Ok(read_gains(&app));
+            }
+            Err(e) => {
+                eprintln!("[moonclip] live gain failed ({e}), restarting buffer");
+            }
+        }
     }
     if let Err(e) = restart_if_running(&app).await {
         set_audio_error(&app, Some(e.clone())).await;
@@ -1119,6 +1269,128 @@ pub struct MonitorOpt {
     pub label: String,
 }
 
+/// One OBS encoder for the Custom picker (single source of truth: the
+/// pinned per-platform catalog + GPU vendor + live ffmpeg probe).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EncoderOpt {
+    pub id: String,
+    pub codec: String,
+    pub family: String,
+    pub validated: bool,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VisibleWhen {
+    pub key: String,
+    pub values: Vec<String>,
+    pub and_key: Option<String>,
+    pub and_values: Vec<String>,
+}
+
+/// One registry option serialized for the dynamic Custom form, already
+/// resolved for one concrete encoder (codec-scoped values/ranges/defaults).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OptionSpecJson {
+    pub key: String,
+    pub kind: String,
+    pub values: Vec<String>,
+    pub int_values: Vec<i64>,
+    pub min: i64,
+    pub max: i64,
+    pub step: i64,
+    pub default: Option<serde_json::Value>,
+    pub i18n: String,
+    pub visible_when: Option<VisibleWhen>,
+    /// False when the option does not exist for this codec: the UI renders
+    /// it greyed out and never sends it; the backend rejects it.
+    pub supported: bool,
+    /// Values only valid with P010 color format (greyed out otherwise).
+    pub p010_values: Vec<String>,
+    pub p010_ints: Vec<i64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EncoderSchema {
+    pub encoder: String,
+    pub family: String,
+    pub codec: String,
+    pub validated: bool,
+    pub options: Vec<OptionSpecJson>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EncoderColors {
+    pub id: String,
+    pub formats: Vec<String>,
+}
+
+/// Current Custom selection (validated payloads, empty when ladder).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CustomSelection {
+    pub encoder: String,
+    pub settings: serde_json::Map<String, serde_json::Value>,
+    pub video: Option<CustomVideo>,
+}
+
+fn family_slug(f: enc::EncoderFamily) -> &'static str {
+    match f {
+        enc::EncoderFamily::Nvenc => "nvenc",
+        enc::EncoderFamily::X264 => "x264",
+        enc::EncoderFamily::Qsv => "qsv",
+        enc::EncoderFamily::Amf => "amf",
+        enc::EncoderFamily::Vaapi => "vaapi",
+    }
+}
+
+fn spec_json(r: &enc::ResolvedOption) -> OptionSpecJson {
+    let kind = match r.kind {
+        enc::SpecKind::Enum => "enum",
+        enc::SpecKind::Int => "int",
+        enc::SpecKind::Bool => "bool",
+        enc::SpecKind::Text => "text",
+    };
+    let default = match r.default {
+        Some(enc::SpecDefault::Str(v)) => Some(serde_json::Value::from(v)),
+        Some(enc::SpecDefault::Int(v)) => Some(serde_json::Value::from(v)),
+        Some(enc::SpecDefault::Bool(v)) => Some(serde_json::Value::from(v)),
+        None => None,
+    };
+    let visible_when = r.visible.when.map(|(k, vs)| {
+        let (and_key, and_values) = r
+            .visible
+            .and_when
+            .map(|(ak, avs)| {
+                (
+                    Some(ak.to_string()),
+                    avs.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or((None, Vec::new()));
+        VisibleWhen {
+            key: k.to_string(),
+            values: vs.iter().map(|v| v.to_string()).collect(),
+            and_key,
+            and_values,
+        }
+    });
+    OptionSpecJson {
+        key: r.key.to_string(),
+        kind: kind.to_string(),
+        values: r.values.iter().map(|v| v.to_string()).collect(),
+        int_values: r.int_values.clone(),
+        min: r.min,
+        max: r.max,
+        step: r.step,
+        default,
+        i18n: r.i18n.to_string(),
+        visible_when,
+        supported: r.supported,
+        p010_values: r.p010_values.iter().map(|v| v.to_string()).collect(),
+        p010_ints: r.p010_ints.clone(),
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VideoOptions {
     pub codecs: Vec<CodecOpt>,
@@ -1138,6 +1410,21 @@ pub struct VideoOptions {
     pub encoder: String,
     /// Hardware monitors can be oversampled (24..144).
     pub fps_options: Vec<u32>,
+    /// Custom picker: pinned catalog entries with live availability.
+    pub encoders: Vec<EncoderOpt>,
+    /// Custom form: option schema resolved per encoder id (codec-scoped
+    /// values/ranges/defaults; unsupported options carry supported=false).
+    pub encoder_schema: Vec<EncoderSchema>,
+    /// Color formats each catalog encoder accepts.
+    pub encoder_colors: Vec<EncoderColors>,
+    /// [Video] tab enums.
+    pub scale_filters: Vec<String>,
+    pub fps_types: Vec<String>,
+    pub fps_common_values: Vec<u32>,
+    pub color_spaces: Vec<String>,
+    pub color_ranges: Vec<String>,
+    /// Current Custom selection (None fields when ladder).
+    pub custom: Option<CustomSelection>,
 }
 
 #[tauri::command]
@@ -1221,6 +1508,78 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         })
         .collect();
 
+    // Custom picker: pinned catalog filtered by detected vendor and the
+    // live codec probe (x264 needs no GPU, so it is always available).
+    let families = enc::families_for_vendor(&vendor);
+    let offered: Vec<String> = codecs.iter().map(|c| c.id.clone()).collect();
+    let encoders = crate::os::encoder_catalog()
+        .iter()
+        .map(|e| {
+            let in_family = families.contains(&e.family);
+            let codec_ok = offered.iter().any(|c| c == e.codec) || e.id == "obs_x264";
+            EncoderOpt {
+                id: e.id.to_string(),
+                codec: e.codec.to_string(),
+                family: family_slug(e.family).to_string(),
+                validated: enc::family_validated(e.family),
+                available: in_family && codec_ok,
+            }
+        })
+        .collect::<Vec<_>>();
+    let encoder_schema = crate::os::encoder_catalog()
+        .iter()
+        .map(|e| EncoderSchema {
+            encoder: e.id.to_string(),
+            family: family_slug(e.family).to_string(),
+            codec: e.codec.to_string(),
+            validated: enc::family_validated(e.family),
+            options: enc::resolved_options(e.family, e.codec)
+                .iter()
+                .map(spec_json)
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let encoder_colors = crate::os::encoder_catalog()
+        .iter()
+        .map(|e| EncoderColors {
+            id: e.id.to_string(),
+            formats: enc::valid_color_formats(e.family, e.codec)
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+
+    // Current Custom selection (validated payloads; absent when ladder).
+    let custom = (|| -> Option<CustomSelection> {
+        let ce_raw = setting_str(&db, "custom_encoder_json", "");
+        if ce_raw.trim().is_empty() {
+            return None;
+        }
+        let parsed = enc::parse_custom_encoder(&ce_raw).ok()?;
+        let entry = enc::lookup_encoder(&parsed.encoder)?;
+        let cv_raw = setting_str(&db, "custom_video_json", "");
+        let video = if cv_raw.trim().is_empty() {
+            None
+        } else {
+            let v: CustomVideo = serde_json::from_str(&cv_raw).ok()?;
+            Some(v)
+        };
+        // Re-validate the pair so a stale DB can never reach the UI as valid
+        // (settings + 10-bit profile gate against the stored video color).
+        let video_color = video.as_ref().map(|v| v.color_format.as_str());
+        enc::validate_pair(entry.family, entry.codec, &parsed.settings, video_color).ok()?;
+        if let Some(v) = &video {
+            let raw = serde_json::to_string(v).ok()?;
+            enc::parse_custom_video(entry.family, entry.codec, &raw).ok()?;
+        }
+        Some(CustomSelection {
+            encoder: parsed.encoder,
+            settings: parsed.settings,
+            video,
+        })
+    })();
+
     Ok(VideoOptions {
         codecs,
         heights,
@@ -1235,6 +1594,15 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         vendor,
         encoder,
         fps_options: vec![24, 30, 60, 120, 144],
+        encoders,
+        encoder_schema,
+        encoder_colors,
+        scale_filters: enc::SCALE_FILTERS.iter().map(|s| s.to_string()).collect(),
+        fps_types: vec!["common".into(), "integer".into(), "fractional".into()],
+        fps_common_values: enc::FPS_COMMON_VALUES.to_vec(),
+        color_spaces: enc::COLOR_SPACES.iter().map(|s| s.to_string()).collect(),
+        color_ranges: enc::COLOR_RANGES.iter().map(|s| s.to_string()).collect(),
+        custom,
     })
 }
 
@@ -1293,6 +1661,28 @@ mod custom_mode_tests {
             custom_capture_params("custom", "60", "", 60, 20000),
             (60, 20000, false)
         );
+    }
+
+    #[test]
+    fn probe_check_matches_request() {
+        use super::check_probe;
+        use crate::editor::ffmpeg::VideoProbe;
+        let probe = VideoProbe {
+            codec_name: "h264".into(),
+            profile: "High".into(),
+            width: 1920,
+            height: 1080,
+            fps: 60.0,
+        };
+        assert!(check_probe(&probe, "h264", 1080, 60).is_ok());
+        // Wrong codec / height / fps all fail loudly.
+        assert!(check_probe(&probe, "hevc", 1080, 60).is_err());
+        assert!(check_probe(&probe, "h264", 1440, 60).is_err());
+        assert!(check_probe(&probe, "h264", 1080, 30).is_err());
+        // NTSC-ish drift is tolerated; real mismatch is not.
+        let mut p = probe.clone();
+        p.fps = 59.94;
+        assert!(check_probe(&p, "h264", 1080, 60).is_ok());
     }
 }
 
@@ -1400,6 +1790,9 @@ pub struct HardwareTestResult {
     /// the UI selection, never persisted without the user's click).
     pub fallback_height: Option<u32>,
     pub fallback_fps: Option<u32>,
+    /// Real encoded stream of the test clip (codec/resolution/fps read back
+    /// from the file: proof OBS applied the requested settings).
+    pub probe: Option<crate::editor::ffmpeg::VideoProbe>,
     pub error: Option<String>,
 }
 
@@ -1441,21 +1834,106 @@ pub(crate) fn test_fallback(height: u32, fps: u32) -> (Option<u32>, Option<u32>)
     }
 }
 
+/// Check the real encoded stream against what was requested: codec, output
+/// height and fps must match, or the settings were not really applied.
+pub(crate) fn check_probe(
+    probe: &crate::editor::ffmpeg::VideoProbe,
+    codec: &str,
+    expect_height: u32,
+    expect_fps: u32,
+) -> Result<(), String> {
+    if probe.codec_name != codec {
+        return Err(format!(
+            "encoded codec is '{}', expected '{codec}'",
+            probe.codec_name
+        ));
+    }
+    if probe.height != expect_height {
+        return Err(format!(
+            "encoded {}p, expected {expect_height}p",
+            probe.height
+        ));
+    }
+    if (probe.fps - expect_fps as f64).abs() > 2.0 {
+        return Err(format!(
+            "encoded {:.1} fps, expected {expect_fps} fps",
+            probe.fps
+        ));
+    }
+    Ok(())
+}
+
+/// Expected output height for a test (Custom video > explicit override >
+/// stored ladder height > monitor base).
+async fn expected_test_height(app: &AppHandle, overrides: &StartOverrides) -> u32 {
+    if let Some(cv) = &overrides.custom_video {
+        return cv.out_height;
+    }
+    if let Some(h) = overrides.height {
+        return h;
+    }
+    let db = app.state::<DbState>();
+    let stored: u32 = setting_str(&db, "out_height", "0").parse().unwrap_or(0);
+    if stored > 0 {
+        return stored;
+    }
+    let monitors = video::list_monitors().await;
+    video::resolve_monitor(&monitors, &setting_str(&db, "monitor", ""))
+        .map(|m| m.height)
+        .unwrap_or(1080)
+}
+
 /// Optional first-run test: start the buffer with candidate values (not
 /// persisted), record for `seconds`, save, validate the file and restore the
 /// previous buffer state. Returns the measured numbers for the wizard.
+/// NOTE: Tauri camelCases Rust params on the wire: frontend sends
+/// `encoderId`, `encoderSettings` and `customVideo`.
 #[tauri::command]
 pub async fn test_hardware(
     app: AppHandle,
     height: Option<u32>,
     fps: Option<u32>,
     seconds: Option<u32>,
+    encoder_id: Option<String>,
+    encoder_settings: Option<serde_json::Map<String, serde_json::Value>>,
+    custom_video: Option<CustomVideo>,
 ) -> Result<HardwareTestResult, String> {
     let seconds = seconds.unwrap_or(10).clamp(5, 30);
+    // Full Custom payloads for the "Probar" button (validated, not persisted).
+    let custom_encoder = match (encoder_id, encoder_settings) {
+        (Some(id), settings) => {
+            let entry =
+                enc::lookup_encoder(&id).ok_or_else(|| format!("unknown encoder '{id}'"))?;
+            let map = settings.unwrap_or_default();
+            enc::validate(entry.family, entry.codec, &map)?;
+            Some(CustomEncoder {
+                encoder: id,
+                settings: map,
+            })
+        }
+        (None, _) => None,
+    };
+    if custom_video.is_some() && custom_encoder.is_none() {
+        return Err("custom video needs a custom encoder".into());
+    }
+    if let (Some(cv), Some(ce)) = (&custom_video, &custom_encoder) {
+        let entry = enc::lookup_encoder(&ce.encoder)
+            .ok_or_else(|| format!("unknown encoder '{}'", ce.encoder))?;
+        let raw = serde_json::to_string(cv).map_err(|e| e.to_string())?;
+        let video = enc::parse_custom_video(entry.family, entry.codec, &raw)?;
+        enc::validate_pair(
+            entry.family,
+            entry.codec,
+            &ce.settings,
+            Some(&video.color_format),
+        )?;
+    }
     let overrides = StartOverrides {
         height,
         fps,
         duration_seconds: Some(seconds),
+        custom_encoder,
+        custom_video,
         ..Default::default()
     };
     let config = build_capture_config(&app, &overrides).await?;
@@ -1467,11 +1945,14 @@ pub async fn test_hardware(
     stop_engine(&app).await.ok();
 
     let t0 = std::time::Instant::now();
+    let expect_height = expected_test_height(&app, &overrides).await;
+    let expect_codec = config.codec.clone();
+    let expect_fps = config.fps;
     let mut result = HardwareTestResult {
         ok: false,
-        height: config.out_height,
-        fps: config.fps,
-        codec: config.codec.clone(),
+        height: expect_height,
+        fps: expect_fps,
+        codec: expect_codec.clone(),
         encoder: config.encoder.clone(),
         bitrate_kbps: config.bitrate_kbps,
         requested_seconds: seconds,
@@ -1480,6 +1961,7 @@ pub async fn test_hardware(
         size_bytes: 0,
         fallback_height: None,
         fallback_fps: None,
+        probe: None,
         error: None,
     };
 
@@ -1507,7 +1989,22 @@ pub async fn test_hardware(
             result.size_bytes = size;
             result.measured_duration_ms = duration.max(0) as u64;
             match validate_test_clip(duration, size, seconds) {
-                Ok(()) => result.ok = true,
+                Ok(()) => {
+                    // Prove OBS really encoded what was requested.
+                    match crate::editor::ffmpeg::probe_video_stream(&ffmpeg, &path).await {
+                        Some(probe) => {
+                            result.probe = Some(probe.clone());
+                            match check_probe(&probe, &expect_codec, expect_height, expect_fps) {
+                                Ok(()) => result.ok = true,
+                                Err(e) => result.error = Some(e),
+                            }
+                        }
+                        None => {
+                            result.error =
+                                Some("could not read the video stream of the test clip".into());
+                        }
+                    }
+                }
                 Err(e) => result.error = Some(e),
             }
             // The test clip is not a user clip: remove it.

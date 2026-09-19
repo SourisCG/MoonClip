@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 
 mod api;
+pub mod encoder_options;
 #[cfg(target_os = "linux")]
 pub mod linux;
 pub mod obs;
@@ -18,7 +19,7 @@ pub mod windows;
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub mod linux;
 
-pub use api::{AudioDevice, CaptureConfig, CaptureEngine};
+pub use api::{AudioDevice, CaptureConfig, CaptureEngine, CustomEncoder, CustomVideo};
 
 #[cfg(target_os = "linux")]
 pub use linux::{backend_name, devices, open, paths, prepare_environment, video, Engine};
@@ -81,6 +82,20 @@ pub fn obs_config_root() -> Result<PathBuf, String> {
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn obs_config_root() -> Result<PathBuf, String> {
     linux::obs::config_root()
+}
+
+/// Encoder ids compiled into this platform's OBS build (Custom picker).
+#[cfg(target_os = "linux")]
+pub fn encoder_catalog() -> &'static [encoder_options::EncoderEntry] {
+    linux::obs::encoder_catalog()
+}
+#[cfg(target_os = "windows")]
+pub fn encoder_catalog() -> &'static [encoder_options::EncoderEntry] {
+    windows::obs::encoder_catalog()
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn encoder_catalog() -> &'static [encoder_options::EncoderEntry] {
+    linux::obs::encoder_catalog()
 }
 
 /// Free physical memory in MB when the platform can report it (used by the

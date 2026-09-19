@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, CustomApp, RegisterAppInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -17,6 +17,7 @@ const MIGRATION_004: &str = include_str!("../../migrations/004_video.sql");
 const MIGRATION_005: &str = include_str!("../../migrations/005_fps.sql");
 const MIGRATION_006: &str = include_str!("../../migrations/006_monitor.sql");
 const MIGRATION_007: &str = include_str!("../../migrations/007_obs.sql");
+const MIGRATION_008: &str = include_str!("../../migrations/008_custom_video.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -55,6 +56,10 @@ impl DbState {
             if version < 7 {
                 conn.execute_batch(MIGRATION_007)
                     .map_err(|e| format!("migration 007 failed: {e}"))?;
+            }
+            if version < 8 {
+                conn.execute_batch(MIGRATION_008)
+                    .map_err(|e| format!("migration 008 failed: {e}"))?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
@@ -330,6 +335,8 @@ impl DbState {
             "mic_device",
             "desktop_device",
             "video_codec",
+            "video_encoder",
+            "gpu_index",
             "out_height",
             "fps",
             "monitor",
@@ -337,6 +344,8 @@ impl DbState {
             "video_mode",
             "custom_bitrate_kbps",
             "custom_fps",
+            "custom_encoder_json",
+            "custom_video_json",
             "setup_done",
             "capture_max_fps",
             "faststart",
@@ -350,6 +359,15 @@ impl DbState {
             }
             "video_mode" if !matches!(value, "ladder" | "custom") => {
                 return Err("video_mode must be ladder or custom".into());
+            }
+            "video_encoder" if !matches!(value, "gpu" | "cpu") => {
+                return Err("video_encoder must be gpu or cpu".into());
+            }
+            "gpu_index" => {
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| "gpu_index must be a number".to_string())?;
             }
             "setup_done" if !matches!(value, "0" | "1") => {
                 return Err("setup_done must be 0 or 1".into());

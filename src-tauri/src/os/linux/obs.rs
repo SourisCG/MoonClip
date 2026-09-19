@@ -17,10 +17,16 @@ use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
+use super::super::encoder_options::{catalog_linux, EncoderEntry};
 use super::super::obs::{
     copy_dir_recursive, marker_matches, obs_build_fingerprint, write_marker, ObsEngine,
     ObsPlatform, ObsRuntime,
 };
+
+/// Encoder ids compiled into the pinned Linux OBS build (Custom picker).
+pub fn encoder_catalog() -> &'static [EncoderEntry] {
+    catalog_linux()
+}
 
 pub struct LinuxPlatform;
 
@@ -138,6 +144,37 @@ impl ObsPlatform for LinuxPlatform {
         kill_orphan_process(obs_bin);
     }
 
+    /// Best-effort window hiding on X11 (Wayland has no global window
+    /// control): unmap OBS top-level windows via xdotool/wmctrl when
+    /// installed. All failures ignored; the Linux owner iterates here.
+    fn conceal_window(&self, pid: u32) {
+        use std::process::Command;
+        use std::time::Duration;
+        let id = pid.to_string();
+        // Fire twice (right away + after boot) so a late-created main
+        // window is still caught; each attempt is self-limiting.
+        for attempt in 0..2 {
+            let id = id.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(if attempt == 0 { 1 } else { 8 }));
+                // xdotool: unmap every window owned by our PID.
+                let _ = Command::new("xdotool")
+                    .args(["search", "--pid", &id, "windowunmap"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                // wmctrl fallback: hide by OBS window title.
+                let _ = Command::new("wmctrl")
+                    .args(["-r", "OBS", "-b", "add,hidden"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            });
+        }
+    }
+
     fn video_source(&self, _monitor: &str, window: &str) -> (&'static str, serde_json::Value) {
         // Wayland/X11 screen capture through the XDG portal (compositor-level,
         // no injection). OBS opens the system picker on first use; the user
@@ -168,9 +205,16 @@ impl ObsPlatform for LinuxPlatform {
             ("intel", "hevc") => Some("obs_qsv11_hevc"),
             ("intel", "av1") => Some("obs_qsv11_av1"),
             // AMD on Linux has no AMF; OBS goes through FFmpeg VAAPI.
-            ("amd", "h264") | ("amd", "hevc") => Some("ffmpeg_vaapi"),
+            // Each codec needs its own VAAPI id: `ffmpeg_vaapi` is H.264-only.
+            ("amd", "h264") => Some("ffmpeg_vaapi"),
+            ("amd", "hevc") => Some("hevc_ffmpeg_vaapi"),
+            ("amd", "av1") => Some("av1_ffmpeg_vaapi"),
             _ => None,
         }
+    }
+
+    fn encoder_catalog(&self) -> &'static [EncoderEntry] {
+        encoder_catalog()
     }
 }
 
@@ -240,7 +284,15 @@ mod tests {
         );
         assert_eq!(p().encoder_id("intel", "h264", "gpu"), Some("obs_qsv11_v2"));
         assert_eq!(p().encoder_id("amd", "h264", "gpu"), Some("ffmpeg_vaapi"));
-        assert_eq!(p().encoder_id("amd", "av1", "gpu"), None);
+        // VAAPI ids are codec-specific: the H.264 id must never serve HEVC/AV1.
+        assert_eq!(
+            p().encoder_id("amd", "hevc", "gpu"),
+            Some("hevc_ffmpeg_vaapi")
+        );
+        assert_eq!(
+            p().encoder_id("amd", "av1", "gpu"),
+            Some("av1_ffmpeg_vaapi")
+        );
         assert_eq!(p().encoder_id("nvidia", "h264", "cpu"), Some("obs_x264"));
     }
 

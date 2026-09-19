@@ -114,9 +114,144 @@ pub async fn make_thumbnail(
     Ok(())
 }
 
+/// Real video stream of a file, parsed from `ffmpeg -i` stderr (the static
+/// sidecar does not ship ffprobe). Used by the hardware test to prove OBS
+/// really encoded what was requested (codec / resolution / fps).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct VideoProbe {
+    pub codec_name: String,
+    pub profile: String,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+}
+
+/// Parse one `ffmpeg -i` stream line, e.g.
+/// `Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 19427 kb/s, 60 fps, 60 tbr, ...`
+pub fn parse_video_stream_line(line: &str) -> Option<VideoProbe> {
+    let after = line.trim().split_once("Video:")?.1.trim();
+    let codec_name = after
+        .split([' ', '('])
+        .next()?
+        .trim()
+        .trim_end_matches(',')
+        .to_string();
+    if codec_name.is_empty() {
+        return None;
+    }
+    // Profile: first "(...)" group WITHOUT "/" inside the codec descriptor
+    // (before the first comma). Pixel/tag groups like "(avc1 / ...)" or the
+    // "(tv, bt709, ...)" pixel descriptor are skipped.
+    let head = after.split(',').next().unwrap_or(after);
+    let mut profile = String::new();
+    let mut rest = head;
+    while let Some(open) = rest.find('(') {
+        let inner = &rest[open + 1..];
+        let Some(close) = inner.find(')') else {
+            break;
+        };
+        let group = &inner[..close];
+        if !group.contains('/') && !group.trim().is_empty() {
+            profile = group.trim().to_string();
+            break;
+        }
+        rest = &inner[close + 1..];
+    }
+    // Dimensions: first WxH token.
+    let (mut width, mut height) = (0u32, 0u32);
+    for tok in after.split([' ', ',', '[']) {
+        let t = tok.trim();
+        if let Some((w, h)) = t.split_once('x') {
+            if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                if w > 0 && h > 0 {
+                    width = w;
+                    height = h;
+                    break;
+                }
+            }
+        }
+    }
+    if width == 0 || height == 0 {
+        return None;
+    }
+    // Frame rate: number right before a standalone "fps" token.
+    let toks: Vec<&str> = after.split([' ', ',']).collect();
+    let mut fps = 0.0f64;
+    for (i, t) in toks.iter().enumerate() {
+        if t.trim_matches(|c: char| !c.is_alphanumeric()) == "fps" && i > 0 {
+            if let Ok(f) = toks[i - 1].trim().trim_end_matches(',').parse::<f64>() {
+                fps = f;
+                break;
+            }
+        }
+    }
+    if fps <= 0.0 {
+        return None;
+    }
+    Some(VideoProbe {
+        codec_name,
+        profile,
+        width,
+        height,
+        fps,
+    })
+}
+
+/// Read the first video stream of `input` via `ffmpeg -i` (None = unparsable).
+pub async fn probe_video_stream(ffmpeg: &Path, input: &Path) -> Option<VideoProbe> {
+    let out = tokio::process::Command::new(ffmpeg)
+        .args(["-hide_banner", "-i", &input.to_string_lossy()])
+        .output()
+        .await
+        .ok()?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    stderr
+        .lines()
+        .filter(|l| l.contains("Video:"))
+        .find_map(parse_video_stream_line)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::make_thumbnail;
+    use super::{make_thumbnail, parse_video_stream_line};
+
+    #[test]
+    fn video_stream_line_parses_obs_clips() {
+        let p = parse_video_stream_line(
+            "  Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 19427 kb/s, 60 fps, 60 tbr, 15360 tbn (default)",
+        )
+        .unwrap();
+        assert_eq!(p.codec_name, "h264");
+        assert_eq!(p.profile, "High");
+        assert_eq!((p.width, p.height), (1920, 1080));
+        assert!((p.fps - 60.0).abs() < 1e-9);
+
+        let p = parse_video_stream_line(
+            "Stream #0:0: Video: hevc (Main 10), yuv420p10le(tv, bt2020nc/bt2020/smpte2084), 3840x2160, 29.97 fps, 29.97 tbr, 1k tbn",
+        )
+        .unwrap();
+        assert_eq!(p.codec_name, "hevc");
+        assert_eq!(p.profile, "Main 10");
+        assert_eq!((p.width, p.height), (3840, 2160));
+        assert!((p.fps - 29.97).abs() < 1e-9);
+
+        // No profile group: profile stays empty, dims/fps still parse.
+        let p = parse_video_stream_line(
+            "Stream #0:0: Video: av1, yuv420p(tv, bt709, progressive), 2560x1440, 120 fps, 120 tbr, 15360 tbn",
+        )
+        .unwrap();
+        assert_eq!(p.codec_name, "av1");
+        assert_eq!(p.profile, "");
+        assert_eq!((p.width, p.height), (2560, 1440));
+
+        // Audio lines and garbage never parse as video.
+        assert!(parse_video_stream_line(
+            "Stream #0:1(und): Audio: aac (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 320 kb/s (default)"
+        )
+        .is_none());
+        assert!(parse_video_stream_line("Duration: 00:00:10.00").is_none());
+        assert!(parse_video_stream_line("Stream #0:0: Video: vp9, 640x480").is_none());
+    }
 
     /// Regression: thumbnails must work on limited-range yuv420p (what NVENC
     /// and swscale produce), where ffmpeg 9's mjpeg encoder is strict.
