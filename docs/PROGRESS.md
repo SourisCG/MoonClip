@@ -27,6 +27,66 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **V3.5 — obs-websocket in-process + Linux zero-contact (2026-09-23)**
+  - **obs-cmd removed** (both OSes): v1.0.2 (its latest release) ships
+    `input settings`, `input volume`, `input mute` and `audio mute` as stubs
+    that only print "experimental" — the portal token read-back and live
+    gains/mutes were silently dead on Windows too. MoonClip now talks
+    obs-websocket v5 directly via `obws` (`os/obsws.rs`): replay
+    start/stop/status/save (with the flush polling obs-cmd carried for issue
+    #103), scene check, source-active + screenshot, video settings, input
+    settings/volume/mute. Removed from `build-obs.sh`, `fetch-obs.ps1`,
+    `tauri.windows.conf.json`, both `binary.rs` and `CaptureConfig`.
+  - **Linux concealment fixed**: the KWin script used `QTimer` (not available
+    in KWin's JS engine) and ran once; it is now a one-shot script re-run from
+    Rust at 0.3/1/2.5/5/10 s with `skipTaskbar/skipPager/noBorder/opacity=0/
+    minimized=true` (verified live: both OBS windows matched by exact PID).
+    No OBS tray icon on KDE; tray fallback elsewhere.
+  - **Portal token resilience**: `write_obs_config` now merges the
+    `RestoreToken` OBS saved in the previous `MoonClip.json` when the DB has
+    none, so a force-kill no longer re-prompts the picker.
+  - **Linux E2E findings that drove this**: OBS ran and captured fine (NVENC,
+    3 tracks, canvas learned 1920x1080); the visible window was closed by the
+    user, which killed the engine (`engine died`), and the token never
+    reached the DB because of the obs-cmd stub.
+  - Pending (owner): Windows compile + in-game pass (shared code changed);
+    Linux re-test of concealment/no-picker/live sliders after this change.
+
+- **V3.4 — Linux OBS trip (2026-09-23)**
+  - Linux never compiled after V3: fixed the `conceal_window` signature (trait
+    takes pid+exe) and a dead import; `cargo test` green on Fedora.
+  - Embedded OBS on Linux is now **built from source**
+    (`build-aux/build-obs.sh`, pinned tag `32.2.2` + submodules): the Ubuntu
+    `.deb` path was dropped (no portable Linux tarball; Ubuntu sonames do not
+    exist on Fedora). Minimal plugin set, `-DENABLE_RELOCATABLE=ON`, neutral
+    compiled-in prefix (`/nonexistent/moonclip-obs`) so OBS cannot scan a
+    second plugin path (fixed duplicate source registrations); stages
+    `bin/obs` + `obs-ffmpeg-mux` + `obs-nvenc-test` + `lib64/obs-plugins` +
+    `share/obs`. Verified live: OBS 32.2.2, NVENC h264/hevc registered,
+    linux-pipewire loaded, user config untouched.
+  - Isolation fixed for Linux: OBS has **no** `--portable`/`--config-dir`;
+    the engine launches it with
+    `XDG_CONFIG_HOME=~/.local/share/MoonClip/obs/config` (verified: config
+    lands there, `~/.config/obs-studio` untouched, both OBSes coexist).
+  - Wayland Medal-style portal: new `obs_restore_token` setting, pre-seeded
+    `RestoreToken` in the generated collection and a read-back of the
+    refreshed single-use token after each start (obs-cmd at the time; see V3.5
+    — that command turned out to be a stub and was replaced by obs-websocket). Start waits for a real stream (screenshot
+    probe) and fails loudly when the picker is cancelled. Settings → Video
+    shows "Pantalla elegida / Cambiar pantalla…" (`clear_portal_token`); the
+    SetupWizard hints the first picker.
+  - Canvas learning: source screenshot probe (PNG IHDR) +
+    obs-cmd `video-settings set` (real command) + persisted
+    `obs_source_width/height` (the
+    portal decides the size, not our profile; fixes rotated/portrait
+    monitors).
+  - Concealment: KWin script matching the exact child PID (verified live:
+    `opacity=0`, `skipTaskbar=true` on both OBS windows) with the tray icon as
+    fallback elsewhere; `memory_free_mb` wired on Linux (`/proc/meminfo`).
+  - Pending (owner): in-game F9 pass, restart with no picker, "Change
+    screen", coexistence with the user's OBS, and packaging
+    (`pnpm tauri:build:linux` + `app:install`).
+
 - **Windows: in-game lag + save slowness pass (2026-09-17)** — a 120 s clip
   saved from the field showed **~65 % duplicate frames** (mpdecimate: 2 563
   unique of ~7 300) and saves of **7–19 s** (SATA). Root causes and fixes:
