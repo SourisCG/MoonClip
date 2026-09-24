@@ -87,6 +87,8 @@ export interface VideoOptions {
   current_height: number;
   current_fps: number;
   current_monitor: string;
+  /** Wayland portal: a persisted screen choice exists (silent restore). */
+  portal_ready: boolean;
   buffer_height: number;
   transcoding: boolean;
   max_source_height: number;
@@ -189,7 +191,6 @@ export interface VideoProbe {
 export interface ObsInfo {
   present: boolean;
   version: string;
-  obscmd_present: boolean;
   config_dir: string;
   profile: string;
   collection: string;

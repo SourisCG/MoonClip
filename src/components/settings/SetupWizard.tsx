@@ -151,6 +151,9 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
               <p className="text-[11px] text-slate-500">
                 {t("wizard.test_hint", { seconds: TEST_SECONDS })}
               </p>
+              {opts && opts.monitors.length === 0 && !opts.portal_ready && (
+                <p className="text-[11px] text-cyan-300/80">{t("wizard.portal_pick")}</p>
+              )}
             </div>
             <button
               onClick={() => void runTest(suggested, 60)}

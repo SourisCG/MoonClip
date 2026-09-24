@@ -50,7 +50,7 @@ export function ObsEngineSection() {
   if (error && !info) return <p className="font-mono text-xs text-red-400">{error}</p>;
   if (!info) return <p className="text-sm text-slate-400">{t("common.loading")}</p>;
 
-  const missing = !info.present || !info.obscmd_present;
+  const missing = !info.present;
 
   return (
     <div className="space-y-3 rounded-xl border border-white/5 bg-black/30 px-3 py-3">

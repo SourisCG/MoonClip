@@ -159,6 +159,18 @@ export function VideoSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Wayland: forget the portal choice so the picker opens again (restarts a
+   * running buffer so the dialog appears immediately). */
+  const changePortalScreen = async () => {
+    setError(null);
+    try {
+      await invoke("clear_portal_token");
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const customMode = settings?.video_mode === "custom";
   const bufferSeconds = Number(settings?.buffer_seconds ?? "30") || 30;
 
@@ -426,10 +438,27 @@ export function VideoSection() {
             </option>
           ))}
         </select>
-        {opts.monitors.length === 0 && (
-          <span className="mt-1 block text-[11px] text-slate-500">{t("video.portal_note")}</span>
-        )}
       </label>
+
+      {/* Screen (Linux/Wayland portal): selection lives in the system picker,
+          stored as a one-time restore token. */}
+      {opts.monitors.length === 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="text-sm text-slate-300">{t("video.portal_screen")}</p>
+            <p className="text-[11px] text-slate-500">
+              {opts.portal_ready ? t("video.portal_ready") : t("video.portal_note")}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void changePortalScreen()}
+            className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20"
+          >
+            {t("video.portal_change")}
+          </button>
+        </div>
+      )}
 
       {/* Preset cards (both modes; in Custom they set the output resolution) */}
       <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
