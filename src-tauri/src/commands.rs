@@ -1,12 +1,12 @@
 //! Tauri IPC handlers (Phase 2: persistence; Phase 3: capture).
-//! V3 capture engine: embedded, isolated OBS Studio driven through obs-cmd.
+//! V3 capture engine: embedded, isolated OBS Studio driven over obs-websocket.
 
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::os::encoder_options as enc;
 use crate::os::{
-    self, backend_name, devices, new_engine, obs, resolve_obs, resolve_obscmd, video, AudioDevice,
+    self, backend_name, devices, new_engine, obs, resolve_obs, video, AudioDevice,
     CaptureConfig, CaptureEngine, CustomEncoder, CustomVideo,
 };
 use crate::state::AppState;
@@ -320,7 +320,6 @@ pub(crate) async fn build_capture_config(
     }
 
     let (obs_bin, _) = resolve_obs(app)?;
-    let (obscmd_bin, _) = resolve_obscmd(app)?;
 
     Ok(CaptureConfig {
         duration_seconds,
@@ -365,10 +364,10 @@ pub(crate) async fn build_capture_config(
         vendor: video::vendor().await,
         base_width,
         base_height,
+        portal_restore_token: setting_str(&db, "obs_restore_token", ""),
         custom_encoder,
         custom_video,
         obs_bin: Some(obs_bin),
-        obscmd_bin: Some(obscmd_bin),
         websocket_port: port,
         websocket_password: password,
     })
@@ -401,9 +400,44 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
         }
     );
     let mut engine = new_engine();
+    let first_time = config.portal_restore_token.trim().is_empty();
     if let Err(e) = engine.start_buffer(config).await {
         eprintln!("[moonclip] obs start failed: {e}");
         return Err(e);
+    }
+    // Portal token + real canvas size: OBS refreshes the single-use restore
+    // token on every successful Start, and the portal (not our profile)
+    // decides the captured size. Persist both so the next start is silent and
+    // pixel-correct. First run waits for the picker; later runs fail fast.
+    let source_wait = if first_time {
+        std::time::Duration::from_secs(60)
+    } else {
+        std::time::Duration::from_secs(15)
+    };
+    let mut waited = std::time::Duration::ZERO;
+    let mut learned: Option<(u32, u32)> = None;
+    while waited < source_wait {
+        if let Some(size) = engine.detect_and_apply_source_size().await {
+            learned = Some(size);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        waited += std::time::Duration::from_millis(500);
+    }
+    let Some((src_w, src_h)) = learned else {
+        engine.stop_buffer().await.ok();
+        return Err(
+            "no screen captured: the system picker was cancelled or no stream was granted".into(),
+        );
+    };
+    if let Some(token) = engine.read_restore_token().await {
+        let db = app.state::<DbState>();
+        let _ = db.set_setting("obs_restore_token", &token);
+    }
+    {
+        let db = app.state::<DbState>();
+        let _ = db.set_setting("obs_source_width", &src_w.to_string());
+        let _ = db.set_setting("obs_source_height", &src_h.to_string());
     }
     let tracks = engine.tracks_linked();
     {
@@ -781,6 +815,47 @@ pub async fn stop_buffer(app: AppHandle) -> Result<EngineStatus, String> {
     stop_engine(&app).await
 }
 
+/// Forget the portal screen choice (Wayland "Change screen"): clears the
+/// restore token + learned canvas so the next start shows the system picker
+/// again. Restarts a running buffer so the picker appears immediately.
+#[tauri::command]
+pub async fn clear_portal_token(app: AppHandle) -> Result<EngineStatus, String> {
+    let was_running = {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        guard.is_some()
+    };
+    if was_running {
+        stop_engine(&app).await?;
+    }
+    {
+        let db = app.state::<DbState>();
+        db.set_setting("obs_restore_token", "")?;
+        db.set_setting("obs_source_width", "")?;
+        db.set_setting("obs_source_height", "")?;
+    }
+    // The generated collection carries the last RestoreToken OBS saved and
+    // `write_obs_config` merges it back, so it must be dropped too or the next
+    // start would restore silently and the picker would never appear.
+    if let Ok(root) = os::obs_config_root() {
+        let collection = root
+            .join("obs-studio")
+            .join("basic")
+            .join("scenes")
+            .join(format!("{}.json", obs::OBS_COLLECTION));
+        let _ = std::fs::remove_file(&collection);
+    }
+    if was_running {
+        start_engine(&app, &StartOverrides::default()).await?;
+        notify(
+            &app,
+            "Elige la pantalla a capturar (solo esta vez)",
+            "Pick the screen to capture (this time only)",
+        );
+    }
+    engine_status(app).await
+}
+
 /// Liveness sweep: drop a dead engine and surface the reason. Returns whether
 /// an engine is currently running. Used by `engine_status` AND by a backend
 /// watchdog task, because the webview (and its 2 s poll) is paused while the
@@ -1066,10 +1141,9 @@ fn check_track(track: &str) -> Result<(), String> {
     }
 }
 
-/// Gain applies live through obs-cmd while the buffer runs (no restart).
-/// When live apply fails (e.g. an obs-cmd build rejecting boosts above
-/// 100 %), it falls back to the single-restart path. Persisted either way,
-/// so the next start renders it in the scene.
+/// Gain applies live through obs-websocket while the buffer runs (no
+/// restart). When the live apply fails, it falls back to the single-restart
+/// path. Persisted either way, so the next start renders it in the scene.
 #[tauri::command]
 pub async fn set_track_gain(
     app: AppHandle,
@@ -1170,8 +1244,6 @@ pub struct ObsInfo {
     pub present: bool,
     /// `obs --version` output (empty when it cannot be probed).
     pub version: String,
-    /// obs-cmd binary resolved.
-    pub obscmd_present: bool,
     /// MoonClip-owned config dir (never the user's OBS config).
     pub config_dir: String,
     pub profile: String,
@@ -1212,11 +1284,9 @@ pub async fn obs_info(app: AppHandle) -> Result<ObsInfo, String> {
             }
             Err(_) => (false, String::new(), "missing".to_string()),
         };
-    let obscmd_present = resolve_obscmd(&app).is_ok();
     Ok(ObsInfo {
         present,
         version,
-        obscmd_present,
         config_dir: config_root.to_string_lossy().to_string(),
         profile: obs::OBS_PROFILE.to_string(),
         collection: obs::OBS_COLLECTION.to_string(),
@@ -1400,6 +1470,9 @@ pub struct VideoOptions {
     pub current_height: u32,
     pub current_fps: u32,
     pub current_monitor: String,
+    /// Wayland portal: a persisted screen choice exists (silent restore).
+    /// `false` = the next start shows the system picker once.
+    pub portal_ready: bool,
     /// With the OBS engine the buffer delivers at the requested resolution
     /// (GPU scaling inside OBS); kept for UI parity with the old backend.
     pub buffer_height: u32,
@@ -1588,6 +1661,7 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         current_height,
         current_fps,
         current_monitor,
+        portal_ready: !setting_str(&db, "obs_restore_token", "").is_empty(),
         buffer_height: current_height,
         transcoding: false,
         max_source_height,

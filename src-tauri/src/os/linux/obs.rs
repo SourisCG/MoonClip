@@ -1,27 +1,21 @@
 //! Linux platform binding for the shared embedded-OBS engine.
 //!
-//! Isolation strategy: MoonClip stages its OWN writable copy of the embedded
-//! OBS under `~/.local/share/MoonClip/obs`, drops a `portable_mode.txt` at its
-//! root and launches it with `--portable`, so OBS writes its `config/` INSIDE
-//! that copy by construction. `~/.config/obs-studio` is untouchable.
+//! Isolation strategy: OBS is launched with
+//! `XDG_CONFIG_HOME=<MoonClip data dir>/obs/config`, so OBS writes its whole
+//! `obs-studio/` tree (config, logs, plugin config) there. The user's own
+//! `~/.config/obs-studio` is never read or written, and both apps can run at
+//! the same time (`--multi`, private websocket port).
 //!
-//! If OBS is resolved from the system PATH (`/usr/bin/obs`, flatpak wrapper…)
-//! there is nothing to copy: MoonClip falls back to `--config-dir` and the
-//! config guard in `os/obs.rs` kills the child if the dir is not honored —
-//! never mixing configs silently.
+//! The bundled OBS is relocatable (RUNPATH `$ORIGIN/../lib64`), so no copy is
+//! needed; a system `obs` fallback (dev) gets the exact same env treatment.
 //!
 //! Anti-cheat: the only capture source generated is PipeWire portal screen
 //! capture (compositor-level). `game_capture` (process hooking) is never used.
 
 use std::path::{Path, PathBuf};
 
-use tokio::process::Command;
-
 use super::super::encoder_options::{catalog_linux, EncoderEntry};
-use super::super::obs::{
-    copy_dir_recursive, marker_matches, obs_build_fingerprint, write_marker, ObsEngine,
-    ObsPlatform, ObsRuntime,
-};
+use super::super::obs::{ObsEngine, ObsPlatform, ObsRuntime};
 
 /// Encoder ids compiled into the pinned Linux OBS build (Custom picker).
 pub fn encoder_catalog() -> &'static [EncoderEntry] {
@@ -30,106 +24,52 @@ pub fn encoder_catalog() -> &'static [EncoderEntry] {
 
 pub struct LinuxPlatform;
 
-/// MoonClip-owned OBS runtime root: `~/.local/share/MoonClip/obs`.
-pub fn runtime_root() -> Result<PathBuf, String> {
-    dirs::data_local_dir()
-        .map(|d| d.join("MoonClip").join("obs"))
-        .ok_or_else(|| "cannot resolve XDG data dir".to_string())
-}
-
-/// Dir that will contain `obs-studio/` (what `write_obs_config` fills).
+/// MoonClip-owned OBS config root: `~/.local/share/MoonClip/obs/config`.
+/// Exported to the child as `XDG_CONFIG_HOME`, so OBS writes
+/// `<root>/obs-studio/...` there (config, logs, plugin config).
 pub fn config_root() -> Result<PathBuf, String> {
-    Ok(runtime_root()?.join("config"))
-}
-
-/// System install prefixes we must not copy from (read-only or huge).
-fn is_system_path(bin: &Path) -> bool {
-    let s = bin.to_string_lossy();
-    [
-        "/usr/",
-        "/opt/",
-        "/snap/",
-        "/var/lib/flatpak/",
-        "/app/",
-        "/nix/store/",
-    ]
-    .iter()
-    .any(|p| s.starts_with(p))
-}
-
-/// Stage (once per bundled build) the writable portable copy. The bundled
-/// Linux layout is `<prefix>/bin/obs` + `<prefix>/lib` + `<prefix>/share`.
-fn stage_runtime(obs_bin: &Path) -> Result<PathBuf, String> {
-    let root = runtime_root()?;
-    let runtime_bin = root.join("bin").join("obs");
-    let fingerprint = obs_build_fingerprint(obs_bin);
-    let marker = root.join(".moonclip-source");
-    if runtime_bin.exists() && marker_matches(&marker, &fingerprint) {
-        return Ok(runtime_bin);
-    }
-    let src = obs_bin
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| format!("unexpected OBS layout: {}", obs_bin.display()))?;
-    eprintln!(
-        "[moonclip] staging portable OBS copy: {} -> {}",
-        src.display(),
-        root.display()
-    );
-    if root.exists() {
-        std::fs::remove_dir_all(&root)
-            .map_err(|e| format!("cannot refresh OBS runtime {}: {e}", root.display()))?;
-    }
-    copy_dir_recursive(&src, &root)?;
-    std::fs::write(root.join("portable_mode.txt"), b"")
-        .map_err(|e| format!("cannot enable OBS portable mode: {e}"))?;
-    write_marker(&marker, &fingerprint)?;
-    if !runtime_bin.exists() {
-        return Err(format!(
-            "OBS runtime copy incomplete: {} missing",
-            runtime_bin.display()
-        ));
-    }
-    Ok(runtime_bin)
+    dirs::data_local_dir()
+        .map(|d| d.join("MoonClip").join("obs").join("config"))
+        .ok_or_else(|| "cannot resolve XDG data dir".to_string())
 }
 
 impl ObsPlatform for LinuxPlatform {
     fn prepare_runtime(&self, bundled_bin: &Path) -> Result<ObsRuntime, String> {
-        if is_system_path(bundled_bin) {
-            // Best effort: isolate a system OBS with --config-dir; the config
-            // guard aborts if the build ignores it.
-            return Ok(ObsRuntime {
-                bin: bundled_bin.to_path_buf(),
-                config_root: config_root()?,
-                extra_args: vec![
-                    "--config-dir".into(),
-                    config_root()?.to_string_lossy().to_string(),
-                ],
-                portable: false,
-            });
-        }
-        let bin = stage_runtime(bundled_bin)?;
+        // No copy: the embedded build is relocatable and every write is
+        // redirected with XDG_CONFIG_HOME (see obs_launch_env). A system OBS
+        // (dev fallback) is isolated exactly the same way.
         Ok(ObsRuntime {
-            bin,
+            bin: bundled_bin.to_path_buf(),
             config_root: config_root()?,
-            extra_args: vec!["--portable".into()],
-            portable: true,
+            extra_args: vec![],
+            portable: false,
         })
     }
 
+    fn obs_launch_env(&self, config_root: &Path) -> Vec<(String, String)> {
+        vec![(
+            "XDG_CONFIG_HOME".to_string(),
+            config_root.to_string_lossy().to_string(),
+        )]
+    }
+
     fn obs_launch_args(&self, _config_root: &Path, profile: &str, collection: &str) -> Vec<String> {
-        vec![
-            "--profile".into(),
-            profile.into(),
-            "--collection".into(),
-            collection.into(),
-            "--multi".into(),
-            "--minimize-to-tray".into(),
-            "--disable-shutdown-check".into(),
-            "--disable-updater".into(),
-            "--only-bundled-plugins".into(),
-        ]
+        let mut args = vec![
+            "--profile".to_string(),
+            profile.to_string(),
+            "--collection".to_string(),
+            collection.to_string(),
+            "--multi".to_string(),
+            "--disable-shutdown-check".to_string(),
+            "--disable-updater".to_string(),
+            "--only-bundled-plugins".to_string(),
+        ];
+        // Only meaningful when the tray icon exists: with it disabled (KDE,
+        // hidden through KWin) this would just make OBS toggle its window.
+        if self.sys_tray_enabled() {
+            args.push("--minimize-to-tray".to_string());
+        }
+        args
     }
 
     fn working_dir(&self, obs_bin: &Path) -> Option<PathBuf> {
@@ -144,27 +84,62 @@ impl ObsPlatform for LinuxPlatform {
         kill_orphan_process(obs_bin);
     }
 
-    /// Best-effort window hiding on X11 (Wayland has no global window
-    /// control): unmap OBS top-level windows via xdotool/wmctrl when
-    /// installed. All failures ignored; the Linux owner iterates here.
-    fn conceal_window(&self, pid: u32) {
+    /// Hide the embedded OBS window. KDE Plasma (KWin scripting over DBus)
+    /// can do it on Wayland; other desktops keep the OBS tray icon as
+    /// fallback (see `sys_tray_enabled`). Never touches other processes:
+    /// windows are matched by our exact child PID.
+    ///
+    /// A PERSISTENT script is loaded: it hides already-existing windows and
+    /// connects to `workspace.windowAdded`, so the window is hidden the
+    /// instant it is created (no flash) and `skipSwitcher` keeps it out of
+    /// Alt+Tab (skipTaskbar alone does not). Unloaded on stop.
+    fn conceal_window(&self, pid: u32, _exe: &Path) {
+        if kwin_available() {
+            std::thread::spawn(move || {
+                // Stale scripts from force-killed sessions (KWin already
+                // loaded them, so removing the files is safe).
+                if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+                    for e in entries.flatten() {
+                        let name = e.file_name();
+                        let name = name.to_string_lossy();
+                        if name.starts_with("moonclip-kwin-conceal-") {
+                            let _ = std::fs::remove_file(e.path());
+                        }
+                    }
+                }
+                // KWin may not be ready for scripting at spawn time; a couple
+                // of quick attempts cover that without any visible window.
+                let mut ok = false;
+                for attempt in 0..5 {
+                    if conceal_with_kwin(pid) {
+                        ok = true;
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200 * (attempt + 1)));
+                }
+                if ok {
+                    eprintln!("[moonclip] obs window concealed via persistent KWin script (pid={pid})");
+                } else {
+                    eprintln!("[moonclip] warning: KWin conceal failed for pid={pid}");
+                }
+            });
+            return;
+        }
+        // X11 fallback (xdotool/wmctrl); Wayland without KWin relies on the
+        // tray icon kept by `sys_tray_enabled`.
         use std::process::Command;
         use std::time::Duration;
         let id = pid.to_string();
-        // Fire twice (right away + after boot) so a late-created main
-        // window is still caught; each attempt is self-limiting.
         for attempt in 0..2 {
             let id = id.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(if attempt == 0 { 1 } else { 8 }));
-                // xdotool: unmap every window owned by our PID.
                 let _ = Command::new("xdotool")
                     .args(["search", "--pid", &id, "windowunmap"])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .status();
-                // wmctrl fallback: hide by OBS window title.
                 let _ = Command::new("wmctrl")
                     .args(["-r", "OBS", "-b", "add,hidden"])
                     .stdin(std::process::Stdio::null())
@@ -173,6 +148,38 @@ impl ObsPlatform for LinuxPlatform {
                     .status();
             });
         }
+    }
+
+    /// No tray icon when KWin will hide the window; tray otherwise.
+    fn sys_tray_enabled(&self) -> bool {
+        !kwin_available()
+    }
+
+    /// Unload the persistent conceal script and remove its file.
+    fn unconceal_window(&self, pid: u32) {
+        if !kwin_available() {
+            return;
+        }
+        let plugin = format!("moonclip-conceal-{pid}");
+        let _ = std::process::Command::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                "org.kde.KWin",
+                "--object-path",
+                "/Scripting",
+                "--method",
+                "org.kde.kwin.Scripting.unloadScript",
+                &plugin,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("moonclip-kwin-conceal-{pid}.js")),
+        );
     }
 
     fn video_source(&self, _monitor: &str, window: &str) -> (&'static str, serde_json::Value) {
@@ -221,6 +228,129 @@ impl ObsPlatform for LinuxPlatform {
 /// New engine wired to this platform.
 pub fn new_engine() -> ObsEngine {
     ObsEngine::new(Box::new(LinuxPlatform))
+}
+
+/// KDE Plasma session with the KWin scripting DBus service reachable.
+fn kwin_available() -> bool {
+    let kde = std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|v| v.to_ascii_uppercase().contains("KDE"))
+        .unwrap_or(false)
+        || std::env::var("KDE_FULL_SESSION")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+    if !kde {
+        return false;
+    }
+    std::process::Command::new("gdbus")
+        .args([
+            "introspect",
+            "--session",
+            "--dest",
+            "org.kde.KWin",
+            "--object-path",
+            "/Scripting",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Load a PERSISTENT KWin script that hides our OBS windows (exact child PID)
+/// the instant they are created and keeps them out of taskbar/pager/Alt+Tab.
+/// Returns true when KWin accepted the script.
+fn conceal_with_kwin(pid: u32) -> bool {
+    use std::process::Command;
+
+    let plugin = format!("moonclip-conceal-{pid}");
+    let script = format!(
+        "var targetPid = {pid};\n\
+         function hideOurs(w) {{\n\
+           if (w && w.pid === targetPid) {{\n\
+             w.skipTaskbar = true;\n\
+             w.skipPager = true;\n\
+             w.skipSwitcher = true;\n\
+             w.noBorder = true;\n\
+             w.opacity = 0;\n\
+             w.minimized = true;\n\
+           }}\n\
+         }}\n\
+         var wins = workspace.windowList ? workspace.windowList() : [];\n\
+         for (var i = 0; i < wins.length; ++i) {{ hideOurs(wins[i]); }}\n\
+         if (workspace.windowAdded) {{ workspace.windowAdded.connect(hideOurs); }}\n"
+    );
+    // KWin reads the script file when the script is loaded/run, so it must
+    // stay on disk while the script lives (removed on unconceal).
+    let path = std::env::temp_dir().join(format!("moonclip-kwin-conceal-{pid}.js"));
+    let tmp = std::env::temp_dir().join(format!("moonclip-kwin-conceal-{pid}.js.tmp"));
+    if std::fs::write(&tmp, script).is_err() {
+        return false;
+    }
+    if std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    let loaded = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.kde.KWin",
+            "--object-path",
+            "/Scripting",
+            "--method",
+            "org.kde.kwin.Scripting.loadScript",
+            &path.to_string_lossy(),
+            &plugin,
+        ])
+        .output();
+    let Ok(out) = loaded else { return false };
+    if !out.status.success() {
+        eprintln!(
+            "[moonclip] KWin loadScript failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        return false;
+    }
+    let id: String = String::from_utf8_lossy(&out.stdout)
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+    if id.is_empty() {
+        eprintln!(
+            "[moonclip] KWin loadScript returned no id: {}",
+            String::from_utf8_lossy(&out.stdout).trim()
+        );
+        return false;
+    }
+    let run = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.kde.KWin",
+            "--object-path",
+            &format!("/Scripting/Script{id}"),
+            "--method",
+            "org.kde.kwin.Script.run",
+        ])
+        .output();
+    match run {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => {
+            eprintln!(
+                "[moonclip] KWin Script.run failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("[moonclip] KWin Script.run spawn failed: {e}");
+            false
+        }
+    }
 }
 
 /// Kill our own leftover OBS processes (force-killed sessions skip Drop).
@@ -306,12 +436,12 @@ mod tests {
     }
 
     #[test]
-    fn runtime_lives_inside_moonclip_data_dir() {
-        let root = runtime_root().unwrap();
+    fn config_lives_inside_moonclip_data_dir() {
+        let root = config_root().unwrap();
         let s = root.to_string_lossy();
         assert!(s.contains("MoonClip"), "{s}");
+        assert!(s.ends_with("obs/config"), "{s}");
         assert!(!s.ends_with(".config/obs-studio"), "{s}");
-        assert_eq!(config_root().unwrap(), root.join("config"));
     }
 
     #[test]
@@ -323,23 +453,22 @@ mod tests {
         );
         let s = args.join(" ");
         assert!(s.contains("--multi"), "{s}");
+        // Neither flag exists on Linux OBS; isolation is XDG_CONFIG_HOME only.
         assert!(!s.contains("--config-dir"), "{s}");
+        assert!(!s.contains("--portable"), "{s}");
     }
 
     #[test]
-    fn system_paths_are_detected() {
-        assert!(is_system_path(Path::new("/usr/bin/obs")));
-        assert!(is_system_path(Path::new("/var/lib/flatpak/app/obs")));
-        assert!(!is_system_path(Path::new(
-            "/home/u/.local/share/MoonClip/obs/bin/obs"
-        )));
-        assert!(!is_system_path(Path::new("/tmp/obs-portable/bin/obs")));
-    }
-
-    #[test]
-    fn prepare_runtime_falls_back_for_system_obs() {
+    fn launch_env_isolates_config() {
         let rt = p().prepare_runtime(Path::new("/usr/bin/obs")).unwrap();
-        assert!(!rt.portable);
-        assert!(rt.extra_args.iter().any(|a| a == "--config-dir"));
+        assert!(rt.extra_args.is_empty(), "{:?}", rt.extra_args);
+        let env = p().obs_launch_env(Path::new("/home/u/.local/share/MoonClip/obs/config"));
+        assert_eq!(
+            env,
+            vec![(
+                "XDG_CONFIG_HOME".to_string(),
+                "/home/u/.local/share/MoonClip/obs/config".to_string()
+            )]
+        );
     }
 }

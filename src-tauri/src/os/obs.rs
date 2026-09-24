@@ -2,18 +2,19 @@
 //!
 //! MoonClip drives its OWN OBS Studio installation, fully isolated from any
 //! OBS the user may have installed:
-//!   - config lives in a MoonClip-owned directory (`--config-dir`), never in
-//!     `%APPDATA%/obs-studio` or `~/.config/obs-studio`
+//!   - config lives in a MoonClip-owned directory (Windows: portable copy;
+//!     Linux: `XDG_CONFIG_HOME`), never in `%APPDATA%/obs-studio` or
+//!     `~/.config/obs-studio`
 //!   - the profile and scene collection are generated names ("MoonClip"), so
 //!     even a shared obs-websocket port can never touch the user's setup
 //!   - obs-websocket binds 127.0.0.1 on a dedicated port with a generated
-//!     password; only obs-cmd (bundled) talks to it
+//!     password; only MoonClip's in-process `obws` client talks to it
 //!
 //! Capture is replay-buffer only. The engine writes the profile (basic.ini +
 //! recordEncoder.json), the scene collection (Display capture + Game audio +
-//! Mic audio, 3 audio tracks with Mix first), then launches OBS and uses the
-//! bundled `obs-cmd` CLI for control (replay start/stop/save/status,
-//! last-replay, audio mute).
+//! Mic audio, 3 audio tracks with Mix first), then launches OBS and controls
+//! it over obs-websocket v5 (replay start/stop/save with flush polling,
+//! scene check, inputs volume/mute, screenshots, video settings).
 //!
 //! ANTI-CHEAT (hard rule): the generated scene NEVER uses `game_capture`.
 //! Game capture injects a DLL into the game process and is what kernel
@@ -26,6 +27,7 @@ use std::time::Duration;
 
 use tokio::process::{Child, Command};
 
+use super::obsws::Obsws;
 use super::{CaptureConfig, CaptureEngine};
 
 // ---------------------------------------------------------------------------
@@ -67,15 +69,16 @@ pub const FORBIDDEN_SOURCE_ID: &str = "game_capture";
 
 /// A prepared, writable OBS runtime: the binary actually launched, the config
 /// dir that will hold OUR `obs-studio/` folder, and any extra launch args.
-/// Windows/Linux prepare a portable copy of the embedded OBS so OBS itself
-/// writes its config inside MoonClip's data dir — the user's OBS config is
-/// untouchable by construction.
+/// Windows prepares a portable copy (portable_mode.txt) so OBS writes its
+/// config inside MoonClip's data dir; Linux redirects the same tree with
+/// `XDG_CONFIG_HOME` (see `obs_launch_env`). The user's OBS config is
+/// untouchable either way.
 #[derive(Debug, Clone)]
 pub struct ObsRuntime {
     pub bin: PathBuf,
     pub config_root: PathBuf,
     pub extra_args: Vec<String>,
-    /// Portable copy (true) vs system OBS with --config-dir (best effort).
+    /// Portable copy (Windows, true) vs env-redirected launch (Linux, false).
     pub portable: bool,
 }
 
@@ -89,8 +92,9 @@ pub trait ObsPlatform: Send + Sync {
     fn prepare_runtime(&self, bundled_bin: &Path) -> Result<ObsRuntime, String>;
     /// CLI args after the binary path for an isolated launch.
     fn obs_launch_args(&self, config_root: &Path, profile: &str, collection: &str) -> Vec<String>;
-    /// Extra environment for the OBS child (e.g. LINUX_PORTABLE).
-    fn obs_launch_env(&self) -> Vec<(String, String)> {
+    /// Extra environment for the OBS child. Linux redirects OBS's whole
+    /// config tree with `XDG_CONFIG_HOME` (the user's config is untouchable).
+    fn obs_launch_env(&self, _config_root: &Path) -> Vec<(String, String)> {
         vec![]
     }
     /// Working directory OBS expects (it locates `data/` relative to the exe).
@@ -106,6 +110,9 @@ pub trait ObsPlatform: Send + Sync {
     /// processes (filter by exact PID + image path) and never block startup.
     /// Implementations may no-op (Linux owner iterates).
     fn conceal_window(&self, _pid: u32, _exe: &Path) {}
+    /// Undo `conceal_window` when the engine stops (Linux: unload the KWin
+    /// script). Best effort; default no-op.
+    fn unconceal_window(&self, _pid: u32) {}
     /// Whether this platform's OBS instance keeps its tray icon enabled.
     /// Windows disables it (the watcher hides the window instead); other
     /// platforms keep the tray path until they implement concealment.
@@ -161,6 +168,9 @@ pub struct ObsProfile {
     pub base_height: u32,
     pub out_width: u32,
     pub out_height: u32,
+    /// Output follows the base (user chose "Source"): canvas learning keeps
+    /// them equal; otherwise the explicit ladder/custom height is preserved.
+    pub out_source: bool,
     pub bitrate_kbps: u32,
     pub replay_seconds: u32,
     pub replay_mb: u32,
@@ -286,6 +296,7 @@ impl ObsProfile {
         let seconds = cfg.duration_seconds.clamp(1, 3600);
 
         // Video tab: validated Custom overrides or ladder defaults.
+        let out_source = cfg.custom_video.is_none() && (cfg.out_height == 0 || cfg.out_height >= base_h);
         let (
             out_w,
             out_h,
@@ -345,7 +356,20 @@ impl ObsProfile {
             }
         };
 
-        let (video_source_id, video_settings) = platform.video_source(&cfg.monitor, &cfg.window);
+        let (video_source_id, mut video_settings) =
+            platform.video_source(&cfg.monitor, &cfg.window);
+        // Portal restore token (Wayland): pre-seed it so OBS restores the
+        // screen session silently instead of showing the picker again. OBS
+        // refreshes the token on every successful Start; the caller reads it
+        // back and persists the newest one.
+        if !cfg.portal_restore_token.trim().is_empty() {
+            if let serde_json::Value::Object(map) = &mut video_settings {
+                map.insert(
+                    "RestoreToken".to_string(),
+                    serde_json::Value::String(cfg.portal_restore_token.clone()),
+                );
+            }
+        }
         Ok(Self {
             encoder_id,
             codec,
@@ -365,6 +389,7 @@ impl ObsProfile {
             base_height: base_h,
             out_width: out_w,
             out_height: out_h,
+            out_source,
             bitrate_kbps: bitrate,
             replay_seconds: seconds,
             replay_mb: replay_mb(bitrate, seconds),
@@ -696,10 +721,6 @@ pub fn render_websocket_config(port: u16, password: &str) -> String {
     .unwrap_or_else(|_| "{}".into())
 }
 
-/// One obsws URL argument for obs-cmd (`obsws://127.0.0.1:port/password`).
-pub fn websocket_url(port: u16, password: &str) -> String {
-    format!("obsws://127.0.0.1:{port}/{password}")
-}
 
 /// Write every generated file for one start. Returns the profile dir.
 pub fn write_obs_config(
@@ -720,15 +741,33 @@ pub fn write_obs_config(
         std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
     };
     let uuids = SourceUuids::generate();
+    // Preserve the portal RestoreToken OBS saved in the previous collection:
+    // it refreshes the single-use token on every successful Start, so losing
+    // it (force-kill before the DB read-back) would show the picker again.
+    let collection_path = scenes_dir.join(format!("{OBS_COLLECTION}.json"));
+    let mut profile = p.clone();
+    let has_token = profile
+        .video_settings
+        .get("RestoreToken")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if !has_token {
+        if let Some(token) = existing_restore_token(&collection_path) {
+            if let serde_json::Value::Object(map) = &mut profile.video_settings {
+                map.insert(
+                    "RestoreToken".to_string(),
+                    serde_json::Value::String(token),
+                );
+            }
+        }
+    }
     write(profile_dir.join("basic.ini"), render_basic_ini(p))?;
     write(
         profile_dir.join("recordEncoder.json"),
         render_record_encoder_json(p),
     )?;
-    write(
-        scenes_dir.join(format!("{OBS_COLLECTION}.json")),
-        render_collection(p, &uuids),
-    )?;
+    write(collection_path, render_collection(&profile, &uuids))?;
     write(conf.join("global.ini"), render_global_ini())?;
     write(conf.join("user.ini"), render_user_ini(tray_enabled))?;
     write(
@@ -777,44 +816,32 @@ pub fn read_obs_log_tail(root: &Path) -> Vec<String> {
     tail
 }
 
-// ---------------------------------------------------------------------------
-// obs-cmd wrapper
-// ---------------------------------------------------------------------------
-
-/// Parsed output helpers (pure; unit tested).
-pub fn parse_replay_status(out: &str) -> Option<bool> {
-    if out.contains("Replay Buffer is running") {
-        Some(true)
-    } else if out.contains("Replay Buffer is not running") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-pub fn parse_saved_replay(out: &str) -> Option<String> {
-    out.lines()
-        .find_map(|l| l.trim().strip_prefix("Saved replay: "))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-pub fn parse_last_replay(out: &str) -> Option<String> {
-    out.lines()
-        .find_map(|l| l.trim().strip_prefix("Last replay path: "))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// `obs-cmd scene current` -> `Current scene: <name>` (program scene).
-pub fn parse_current_scene(out: &str) -> Option<String> {
-    out.lines()
-        .find_map(|l| l.trim().strip_prefix("Current scene: "))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+/// Portal `RestoreToken` saved by OBS in our own scene collection file.
+/// OBS refreshes the single-use token on every successful screencast Start and
+/// persists it into the source settings; reading it back here keeps restores
+/// silent even after a force-kill that skipped the live read-back.
+pub fn existing_restore_token(collection_path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(collection_path).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+    doc.get("sources")?
+        .as_array()?
+        .iter()
+        .find_map(|s| {
+            let id = s.get("id")?.as_str()?;
+            if id == "pipewire-desktop-capture-source" || id == "pipewire-screen-capture-source" {
+                s.get("settings")?
+                    .get("RestoreToken")?
+                    .as_str()
+                    .map(|t| t.to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|t| !t.is_empty())
 }
 
 /// Recursive directory copy used to stage the writable portable OBS runtime.
+#[allow(dead_code)] // used by the Windows backend + staging tests
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst).map_err(|e| format!("cannot create {}: {e}", dst.display()))?;
     let entries =
@@ -848,6 +875,7 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 
 /// Fingerprint of the OBS build the runtime copy was staged from: canonical
 /// exe size + mtime. A newer bundled OBS re-stages the copy.
+#[allow(dead_code)] // used by the Windows backend + staging tests
 pub fn obs_build_fingerprint(exe: &Path) -> String {
     let canonical = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
     let meta = std::fs::metadata(exe).ok();
@@ -861,12 +889,14 @@ pub fn obs_build_fingerprint(exe: &Path) -> String {
 }
 
 /// Does the existing runtime marker match the bundled OBS fingerprint?
+#[allow(dead_code)] // used by the Windows backend + staging tests
 pub fn marker_matches(marker: &Path, fingerprint: &str) -> bool {
     std::fs::read_to_string(marker)
         .map(|s| s == fingerprint)
         .unwrap_or(false)
 }
 
+#[allow(dead_code)] // used by the Windows backend + staging tests
 pub fn write_marker(marker: &Path, fingerprint: &str) -> Result<(), String> {
     if let Some(parent) = marker.parent() {
         std::fs::create_dir_all(parent)
@@ -876,150 +906,14 @@ pub fn write_marker(marker: &Path, fingerprint: &str) -> Result<(), String> {
         .map_err(|e| format!("cannot write {}: {e}", marker.display()))
 }
 
-/// The bundled obs-cmd CLI bound to OUR private obs-websocket.
-#[derive(Debug, Clone)]
-pub struct Obscmd {
-    pub bin: PathBuf,
-    pub url: String,
-}
-
-impl Obscmd {
-    pub fn new(bin: PathBuf, port: u16, password: &str) -> Self {
-        Self {
-            bin,
-            url: websocket_url(port, password),
-        }
+/// PNG width/height from the IHDR chunk (no image-crate dependency).
+pub fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return None;
     }
-
-    /// Run one obs-cmd command with a hard timeout; returns combined output.
-    pub async fn run(
-        &self,
-        args: &[&str],
-        platform: &dyn ObsPlatform,
-        timeout: Duration,
-    ) -> Result<String, String> {
-        let mut cmd = Command::new(&self.bin);
-        cmd.arg("--websocket")
-            .arg(&self.url)
-            .args(args)
-            .kill_on_drop(true);
-        platform.configure(&mut cmd);
-        let out = tokio::time::timeout(timeout, cmd.output())
-            .await
-            .map_err(|_| format!("obs-cmd {} timed out", args.join(" ")))?
-            .map_err(|e| format!("cannot run obs-cmd: {e}"))?;
-        let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-        text.push_str(&String::from_utf8_lossy(&out.stderr));
-        if !out.status.success() {
-            let last = text
-                .lines()
-                .rev()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("no output")
-                .trim()
-                .to_string();
-            return Err(format!("obs-cmd {} failed: {last}", args.join(" ")));
-        }
-        Ok(text)
-    }
-
-    pub async fn replay_start(&self, platform: &dyn ObsPlatform) -> Result<(), String> {
-        self.run(&["replay", "start"], platform, Duration::from_secs(15))
-            .await
-            .map(|_| ())
-    }
-
-    pub async fn replay_stop(&self, platform: &dyn ObsPlatform) -> Result<(), String> {
-        self.run(&["replay", "stop"], platform, Duration::from_secs(15))
-            .await
-            .map(|_| ())
-    }
-
-    pub async fn replay_status(&self, platform: &dyn ObsPlatform) -> Result<bool, String> {
-        let out = self
-            .run(&["replay", "status"], platform, Duration::from_secs(15))
-            .await?;
-        parse_replay_status(&out).ok_or_else(|| "cannot parse replay status".to_string())
-    }
-
-    /// Save the buffer and return the written file path. obs-cmd itself polls
-    /// OBS until a new path appears, so a success here means the file is on
-    /// disk (still verify existence at the caller for extra safety).
-    pub async fn replay_save(&self, platform: &dyn ObsPlatform) -> Result<PathBuf, String> {
-        let out = self
-            .run(&["replay", "save"], platform, Duration::from_secs(45))
-            .await?;
-        if let Some(p) = parse_saved_replay(&out) {
-            return Ok(PathBuf::from(p));
-        }
-        let out = self
-            .run(
-                &["replay", "last-replay"],
-                platform,
-                Duration::from_secs(15),
-            )
-            .await?;
-        parse_last_replay(&out)
-            .map(PathBuf::from)
-            .ok_or_else(|| "obs-cmd saved the replay but reported no path".to_string())
-    }
-
-    /// Live mute/unmute of a generated audio source (obs-cmd `audio`).
-    pub async fn audio_mute(
-        &self,
-        source: &str,
-        muted: bool,
-        platform: &dyn ObsPlatform,
-    ) -> Result<(), String> {
-        let verb = if muted { "mute" } else { "unmute" };
-        self.run(&["audio", verb, source], platform, Duration::from_secs(15))
-            .await
-            .map(|_| ())
-    }
-
-    /// Active program scene (`obs-cmd scene current`). Used to prove the
-    /// generated scene is really live (a mis-resolved scene records black).
-    pub async fn current_scene(&self, platform: &dyn ObsPlatform) -> Result<String, String> {
-        let out = self
-            .run(&["scene", "current"], platform, Duration::from_secs(15))
-            .await?;
-        parse_current_scene(&out).ok_or_else(|| "cannot parse current scene".to_string())
-    }
-
-    /// Live gain of a generated audio source
-    /// (`obs-cmd input volume --set <mul> <source>`).
-    pub async fn input_volume(
-        &self,
-        source: &str,
-        percent: u32,
-        platform: &dyn ObsPlatform,
-    ) -> Result<(), String> {
-        let mul = volume_mul(percent);
-        let set = format!("{mul:.4}");
-        let args = input_volume_args(source, &set);
-        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        self.run(&refs, platform, Duration::from_secs(15))
-            .await
-            .map(|_| ())
-    }
-}
-
-/// OBS volume multiplier for a 0-200 % gain (1.0 = unity). Values above 1.0
-/// are valid OBS multipliers (boost up to 2x); whether a given obs-cmd
-/// build accepts >1.0 is probed live at runtime with a restart fallback.
-pub fn volume_mul(percent: u32) -> f64 {
-    (percent.clamp(0, 200) as f64) / 100.0
-}
-
-/// Pure arg builder for `obs-cmd input volume` (unit tested).
-pub fn input_volume_args(source: &str, set: &str) -> Vec<String> {
-    vec![
-        "input".to_string(),
-        "volume".to_string(),
-        "--set".to_string(),
-        set.to_string(),
-        source.to_string(),
-    ]
+    let w = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 /// Generated audio source name for a mixer track.
@@ -1046,7 +940,7 @@ const CONFIG_GUARD_TIMEOUT: Duration = Duration::from_secs(12);
 pub struct ObsEngine {
     platform: Box<dyn ObsPlatform>,
     child: Option<Child>,
-    obscmd: Option<Obscmd>,
+    obsws: Option<Obsws>,
     profile: Option<ObsProfile>,
     config_root: PathBuf,
     error: Option<String>,
@@ -1057,17 +951,17 @@ impl ObsEngine {
         Self {
             platform,
             child: None,
-            obscmd: None,
+            obsws: None,
             profile: None,
             config_root: PathBuf::new(),
             error: None,
         }
     }
 
-    fn obscmd(&self) -> Result<&Obscmd, String> {
-        self.obscmd
+    fn obsws(&self) -> Result<&Obsws, String> {
+        self.obsws
             .as_ref()
-            .ok_or_else(|| "obs-cmd not initialized".to_string())
+            .ok_or_else(|| "obs-websocket not connected".to_string())
     }
 
     /// Abort a failed start: stop what we spawned and enrich the message with
@@ -1107,6 +1001,70 @@ impl ObsEngine {
             marker.display()
         ))
     }
+    /// Portal restore token OBS persisted on the capture source, if any.
+    /// OBS refreshes it on every successful Start (single-use tokens), so the
+    /// caller persists the newest one after each start.
+    pub async fn read_restore_token(&self) -> Option<String> {
+        let obsws = self.obsws.as_ref()?;
+        let settings = obsws.input_settings(VIDEO_SOURCE_NAME).await.ok()?;
+        settings
+            .get("RestoreToken")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Learn the real captured size (the portal decides it, not our profile)
+    /// and resize canvas/output when it differs. Returns the size on success.
+    pub async fn detect_and_apply_source_size(&mut self) -> Option<(u32, u32)> {
+        let (old_bw, old_bh, old_out_h, out_source) = {
+            let p = self.profile.as_ref()?;
+            (p.base_width, p.base_height, p.out_height, p.out_source)
+        };
+        let shot = std::env::temp_dir().join(format!("moonclip-source-{}.png", std::process::id()));
+        let obsws = self.obsws.as_ref()?;
+        // Wait until the portal stream is really producing frames before
+        // probing (an inactive source has no size yet).
+        if !obsws.source_active(VIDEO_SOURCE_NAME).await.unwrap_or(false) {
+            return None;
+        }
+        obsws.save_screenshot(VIDEO_SOURCE_NAME, &shot).await.ok()?;
+        let bytes = std::fs::read(&shot).ok()?;
+        let _ = std::fs::remove_file(&shot);
+        let (w, h) = png_dimensions(&bytes)?;
+        let (bw, bh) = (even(w), even(h));
+        if bw == old_bw && bh == old_bh {
+            return Some((bw, bh));
+        }
+        let out_h = if out_source {
+            bh
+        } else {
+            even(old_out_h.min(bh))
+        };
+        let out_w = scaled_width(bw, bh, out_h);
+        let res = self
+            .obsws
+            .as_ref()?
+            .set_video_settings(bw, bh, out_w, out_h)
+            .await;
+        match res {
+            Ok(()) => {
+                if let Some(p) = self.profile.as_mut() {
+                    p.base_width = bw;
+                    p.base_height = bh;
+                    p.out_width = out_w;
+                    p.out_height = out_h;
+                }
+                eprintln!("[moonclip] obs canvas learned: {bw}x{bh} (output {out_w}x{out_h})");
+                Some((bw, bh))
+            }
+            Err(e) => {
+                eprintln!("[moonclip] obs canvas resize failed: {e}");
+                None
+            }
+        }
+    }
+
 }
 
 impl CaptureEngine for ObsEngine {
@@ -1119,15 +1077,13 @@ impl CaptureEngine for ObsEngine {
             .obs_bin
             .clone()
             .ok_or_else(|| "embedded OBS binary not resolved".to_string())?;
-        let obscmd_bin = config
-            .obscmd_bin
-            .clone()
-            .ok_or_else(|| "embedded obs-cmd binary not resolved".to_string())?;
         let profile = ObsProfile::from_config(&config, self.platform.as_ref())?;
 
-        // 1. Prepare a WRITABLE PORTABLE copy of the embedded OBS. OBS then
-        //    writes its config inside that copy by construction; the user's
-        //    %APPDATA%/obs-studio (or ~/.config/obs-studio) is untouchable.
+        // 1. Prepare the isolated runtime. Windows stages a WRITABLE PORTABLE
+        //    copy (OBS writes its config inside it); Linux launches the
+        //    relocatable build with XDG_CONFIG_HOME redirected. Either way the
+        //    user's %APPDATA%/obs-studio (or ~/.config/obs-studio) is
+        //    untouchable.
         let rt = self.platform.prepare_runtime(&obs_bin)?;
         self.config_root = rt.config_root.clone();
         eprintln!(
@@ -1162,7 +1118,7 @@ impl CaptureEngine for ObsEngine {
         if let Some(dir) = self.platform.working_dir(&rt.bin) {
             cmd.current_dir(dir);
         }
-        for (k, v) in self.platform.obs_launch_env() {
+        for (k, v) in self.platform.obs_launch_env(&self.config_root) {
             cmd.env(k, v);
         }
         self.platform.configure(&mut cmd);
@@ -1190,14 +1146,9 @@ impl CaptureEngine for ObsEngine {
             });
         }
 
-        // 5. Wait for the private websocket, then start the replay buffer.
-        let obscmd = Obscmd::new(
-            obscmd_bin,
-            profile.websocket_port,
-            &profile.websocket_password,
-        );
+        // 6. Wait for the private obs-websocket, then start the replay buffer.
         let deadline = std::time::Instant::now() + OBS_BOOT_TIMEOUT;
-        let mut up = false;
+        let mut ws: Option<Obsws> = None;
         while std::time::Instant::now() < deadline {
             if let Some(child) = self.child.as_mut() {
                 if let Ok(Some(status)) = child.try_wait() {
@@ -1209,23 +1160,28 @@ impl CaptureEngine for ObsEngine {
                     ));
                 }
             }
-            if obscmd.replay_status(self.platform.as_ref()).await.is_ok() {
-                up = true;
+            if let Ok(client) =
+                Obsws::connect(profile.websocket_port, &profile.websocket_password).await
+            {
+                ws = Some(client);
                 break;
             }
             tokio::time::sleep(OBS_BOOT_POLL).await;
         }
-        if !up {
-            self.stop_buffer().await.ok();
-            return Err("embedded OBS websocket did not come up within 45 s".into());
-        }
+        let ws = match ws {
+            Some(ws) => ws,
+            None => {
+                self.stop_buffer().await.ok();
+                return Err("embedded OBS websocket did not come up within 45 s".into());
+            }
+        };
 
         // Start the replay buffer. One retry absorbs a transient state while
         // OBS finishes initializing its outputs.
-        let mut start_res = obscmd.replay_start(self.platform.as_ref()).await;
+        let mut start_res = ws.replay_start().await;
         if start_res.is_err() {
             tokio::time::sleep(Duration::from_millis(1500)).await;
-            start_res = obscmd.replay_start(self.platform.as_ref()).await;
+            start_res = ws.replay_start().await;
         }
         if let Err(e) = start_res {
             return Err(self.fail_start(e).await);
@@ -1235,7 +1191,7 @@ impl CaptureEngine for ObsEngine {
         let mut active = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(6);
         while std::time::Instant::now() < deadline {
-            if let Ok(true) = obscmd.replay_status(self.platform.as_ref()).await {
+            if let Ok(true) = ws.replay_status().await {
                 active = true;
                 break;
             }
@@ -1253,7 +1209,7 @@ impl CaptureEngine for ObsEngine {
         // Verify OBS is really rendering OUR scene: a scene/program mismatch
         // records all-black with no other error (name collisions, canvas
         // assignment). Refuse to run rather than save black clips.
-        match obscmd.current_scene(self.platform.as_ref()).await {
+        match ws.current_scene_name().await {
             Ok(scene) if scene == SCENE_NAME => {}
             Ok(other) => {
                 return Err(self
@@ -1278,7 +1234,7 @@ impl CaptureEngine for ObsEngine {
             if profile.single_track { "Mix" } else { "Mix+Game+Mic" }
         );
         self.profile = Some(profile);
-        self.obscmd = Some(obscmd);
+        self.obsws = Some(ws);
         Ok(())
     }
 
@@ -1286,8 +1242,8 @@ impl CaptureEngine for ObsEngine {
         if self.child.is_none() {
             return Err("recorder not running".into());
         }
-        let obscmd = self.obscmd()?;
-        let path = obscmd.replay_save(self.platform.as_ref()).await?;
+        let obsws = self.obsws()?;
+        let path = obsws.replay_save().await?;
         if !path.exists() {
             return Err(format!(
                 "OBS reported a saved replay that is not on disk: {}",
@@ -1298,11 +1254,15 @@ impl CaptureEngine for ObsEngine {
     }
 
     async fn stop_buffer(&mut self) -> Result<(), String> {
-        if let Some(obscmd) = self.obscmd.take() {
+        if let Some(obsws) = self.obsws.take() {
             // Best effort: stop the buffer before killing OBS.
-            let _ = obscmd.replay_stop(self.platform.as_ref()).await;
+            let _ = obsws.replay_stop().await;
         }
         if let Some(mut child) = self.child.take() {
+            if let Some(pid) = child.id() {
+                // Drop any window-management hooks we installed for it.
+                self.platform.unconceal_window(pid);
+            }
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
@@ -1338,18 +1298,14 @@ impl CaptureEngine for ObsEngine {
             "mic" => MIC_SOURCE_NAME,
             other => return Err(format!("unknown track '{other}'")),
         };
-        let obscmd = self.obscmd()?;
-        obscmd
-            .audio_mute(source, muted, self.platform.as_ref())
-            .await
+        let obsws = self.obsws()?;
+        obsws.set_input_muted(source, muted).await
     }
 
     async fn set_volume(&mut self, track: &str, percent: u32) -> Result<(), String> {
         let source = volume_source(track).ok_or_else(|| format!("unknown track '{track}'"))?;
-        let obscmd = self.obscmd()?;
-        obscmd
-            .input_volume(source, percent, self.platform.as_ref())
-            .await
+        let obsws = self.obsws()?;
+        obsws.set_input_volume(source, percent).await
     }
 }
 
@@ -1433,10 +1389,10 @@ mod tests {
             vendor: "nvidia".into(),
             base_width: 2560,
             base_height: 1440,
+            portal_restore_token: String::new(),
             custom_encoder: None,
             custom_video: None,
             obs_bin: Some(PathBuf::from("obs64.exe")),
-            obscmd_bin: Some(PathBuf::from("obs-cmd.exe")),
             websocket_port: 4456,
             websocket_password: "abc123".into(),
         }
@@ -1608,15 +1564,6 @@ mod tests {
         assert_eq!(volume_source("game"), Some(GAME_SOURCE_NAME));
         assert_eq!(volume_source("mic"), Some(MIC_SOURCE_NAME));
         assert_eq!(volume_source("mix"), None);
-        assert!((volume_mul(0) - 0.0).abs() < 1e-9);
-        assert!((volume_mul(100) - 1.0).abs() < 1e-9);
-        assert!((volume_mul(200) - 2.0).abs() < 1e-9);
-        assert!((volume_mul(999) - 2.0).abs() < 1e-9);
-        let args = input_volume_args("MoonClip Game Audio", "0.7500");
-        assert_eq!(
-            args,
-            vec!["input", "volume", "--set", "0.7500", "MoonClip Game Audio"]
-        );
     }
 
     #[test]
@@ -1693,42 +1640,26 @@ mod tests {
         assert_eq!(v["server_port"], 4456);
         assert_eq!(v["auth_required"], true);
         assert_eq!(v["server_password"], "deck");
-        assert_eq!(websocket_url(4456, "deck"), "obsws://127.0.0.1:4456/deck");
     }
 
     #[test]
-    fn parsers_handle_obs_cmd_output() {
-        assert_eq!(
-            parse_replay_status("Replay Buffer is running\n"),
-            Some(true)
-        );
-        assert_eq!(
-            parse_replay_status("Replay Buffer is not running\n"),
-            Some(false)
-        );
-        assert_eq!(parse_replay_status("garbage"), None);
-        assert_eq!(
-            parse_saved_replay("Saving replay buffer...\nSaved replay: C:\\clips\\Replay 1.mp4\n"),
-            Some("C:\\clips\\Replay 1.mp4".to_string())
-        );
-        assert_eq!(
-            parse_last_replay("Last replay path: /home/u/Videos/Replay.mp4"),
-            Some("/home/u/Videos/Replay.mp4".to_string())
-        );
-        assert_eq!(parse_saved_replay(""), None);
-    }
-
-    #[test]
-    fn current_scene_parser() {
-        assert_eq!(
-            parse_current_scene("Current scene: MoonClip Capture\n"),
-            Some(SCENE_NAME.to_string())
-        );
-        assert_eq!(
-            parse_current_scene("Executing: Get current scene\nCurrent scene: X\n"),
-            Some("X".to_string())
-        );
-        assert_eq!(parse_current_scene("garbage"), None);
+    fn existing_restore_token_reads_collection() {
+        let dir = std::env::temp_dir().join(format!("moonclip-token-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("MoonClip.json");
+        std::fs::write(
+            &file,
+            r#"{"sources":[{"id":"scene","settings":{}},{"id":"pipewire-desktop-capture-source","settings":{"RestoreToken":"tok123"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(existing_restore_token(&file), Some("tok123".to_string()));
+        std::fs::write(
+            &file,
+            r#"{"sources":[{"id":"pipewire-desktop-capture-source","settings":{}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(existing_restore_token(&file), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

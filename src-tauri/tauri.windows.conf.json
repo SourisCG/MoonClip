@@ -3,8 +3,7 @@
     "resources": [
       "icons/tray-icon.png",
       "binaries/x86_64-pc-windows-msvc/ffmpeg-x86_64-pc-windows-msvc.exe",
-      "binaries/x86_64-pc-windows-msvc/obs",
-      "binaries/x86_64-pc-windows-msvc/obs-cmd.exe"
+      "binaries/x86_64-pc-windows-msvc/obs"
     ]
   }
 }

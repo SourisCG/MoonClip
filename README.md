@@ -112,8 +112,10 @@ pnpm build
 Linux local install (fully embedded: OBS + obs-cmd + static ffmpeg in the same package):
 
 ```bash
-pnpm tauri:build:linux   # RPM with sidecars under /usr/lib/MoonClip/binaries/
-pnpm app:install         # replace install + taskbar association
+bash build-aux/build-obs.sh    # compile the pinned OBS once (cached, ~15 min)
+bash build-aux/fetch-ffmpeg.sh # pinned static ffmpeg sidecar
+pnpm tauri:build:linux         # RPM with sidecars under /usr/lib/MoonClip/binaries/
+pnpm app:install               # replace install + taskbar association
 ```
 
 > Windows SmartScreen (early builds): app is unsigned OSS yet. Click `More info → Run anyway`. Builds are auditable via GitHub Actions. Signing via Store/MSIX comes after Phase 7.

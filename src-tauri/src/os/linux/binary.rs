@@ -1,8 +1,8 @@
-//! Linux backend binary resolution: the embedded OBS Studio distribution and
-//! the obs-cmd CLI. Bundled sidecar first (installer layout), dev staging
-//! second. System OBS is a last-resort fallback: it is still launched with
-//! `--config-dir` + `--multi`, so the user's own config is never touched
-//! (enforced by the config guard in the engine).
+//! Linux backend binary resolution: the embedded OBS Studio distribution.
+//! Bundled sidecar first (installer layout), dev staging second. System OBS is
+//! a last-resort fallback: it is still launched with `XDG_CONFIG_HOME`
+//! redirected, so the user's own config is never touched (enforced by the
+//! config guard in the engine).
 
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -10,8 +10,6 @@ use tauri::AppHandle;
 /// Relative path of the OBS binary inside the bundled sidecar directory
 /// (portable layout: `bin/obs`, `lib/`, `share/obs`).
 pub const OBS_REL: &str = "obs/bin/obs";
-/// Relative path of the obs-cmd binary inside the bundled sidecar directory.
-pub const OBSCMD_REL: &str = "obs-cmd";
 
 pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     if let Ok(path) = std::env::var("MOONCLIP_OBS_BIN") {
@@ -38,25 +36,7 @@ pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     }
     Err(
         "embedded OBS not found (expected binaries/<triple>/obs/bin/obs) and no \
-         system `obs` in PATH. Run build-aux/fetch-obs.sh or install OBS."
-            .into(),
-    )
-}
-
-pub fn resolve_obscmd(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
-    if let Ok(path) = std::env::var("MOONCLIP_OBSCMD_BIN") {
-        let p = PathBuf::from(&path);
-        if p.exists() {
-            return Ok((p, "env"));
-        }
-        return Err(format!("MOONCLIP_OBSCMD_BIN points nowhere: {path}"));
-    }
-    if let Some(found) = crate::sidecar::search_bundled(OBSCMD_REL, app) {
-        return Ok(found);
-    }
-    Err(
-        "embedded obs-cmd not found (expected binaries/<triple>/obs-cmd). \
-         Run build-aux/fetch-obs.sh or reinstall MoonClip."
+         system `obs` in PATH. Run build-aux/build-obs.sh or install OBS."
             .into(),
     )
 }

@@ -293,6 +293,7 @@ pub fn run() {
             commands::secret_delete,
             commands::start_buffer,
             commands::stop_buffer,
+            commands::clear_portal_token,
             commands::engine_status,
             commands::save_clip_now,
             commands::audio_levels,

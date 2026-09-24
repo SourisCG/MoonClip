@@ -182,7 +182,7 @@ impl ObsPlatform for WindowsPlatform {
     }
 
     fn configure(&self, cmd: &mut Command) {
-        // CREATE_NO_WINDOW: never flash a console for OBS/obs-cmd children.
+        // CREATE_NO_WINDOW: never flash a console for the OBS child.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }

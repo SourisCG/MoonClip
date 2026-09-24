@@ -20,6 +20,20 @@ pub fn backend_name() -> &'static str {
     "obs"
 }
 
+/// Free physical memory in MB (`MemAvailable`), used by the settings UI to
+/// color the buffer-size warning.
+pub fn memory_free_mb() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kb = text
+        .lines()
+        .find_map(|l| l.strip_prefix("MemAvailable:"))?
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    Some(kb / 1024)
+}
+
 /// WebKitGTK crashes at first paint on Wayland (Gdk `Error 71`) unless the
 /// DMA-BUF renderer is disabled. Cargo dev runs get this from
 /// `.cargo/config.toml`; packaged builds have no such injection, so apply it

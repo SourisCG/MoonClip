@@ -349,6 +349,12 @@ impl DbState {
             "setup_done",
             "capture_max_fps",
             "faststart",
+            "capture_window",
+            "obs_ws_port",
+            "obs_ws_password",
+            "obs_restore_token",
+            "obs_source_width",
+            "obs_source_height",
         ];
         if !ALLOWED.contains(&key) {
             return Err(format!("unknown setting: {key}"));

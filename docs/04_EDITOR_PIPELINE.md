@@ -30,7 +30,7 @@ const ClipEditor = lazy(() => import('./components/editor/ClipEditor'));
 
 ## 3. Backend: `editor/ffmpeg.rs` (sidecar CLI, no libav linking)
 
-Sidecar binary per arch in `src-tauri/binaries/` (`ffmpeg-x86_64-pc-windows-msvc.exe`, `ffmpeg-x86_64-unknown-linux-gnu`). Static builds: BtbN (Win), johnvansickle musl (Linux). Keeps LGPL/GPL boundary at process level.
+Sidecar binary per arch in `src-tauri/binaries/` (`ffmpeg-x86_64-pc-windows-msvc.exe`, `ffmpeg-x86_64-unknown-linux-gnu`). Static builds: BtbN `win64-gpl` / `linux64-gpl`. Keeps LGPL/GPL boundary at process level.
 
 Commands:
 

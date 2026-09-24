@@ -3,8 +3,9 @@
 //! Mirrors the OBS model: uniform interface, per-OS files behind it.
 //!
 //! MoonClip V3 engine: both platforms drive the embedded, fully isolated OBS
-//! Studio (portable config dir + obs-websocket + obs-cmd). The trait below is
-//! the only surface shared code (commands.rs) sees.
+//! Studio (portable config dir + obs-websocket controlled in-process through
+//! the `obws` crate). The trait below is the only surface shared code
+//! (commands.rs) sees.
 
 use std::path::PathBuf;
 
@@ -73,14 +74,15 @@ pub struct CaptureConfig {
     /// the output resolution equals the base.
     pub base_width: u32,
     pub base_height: u32,
+    /// Portal ScreenCast restore token (Wayland): pre-seeded into the capture
+    /// source so OBS restores the screen session without the picker dialog.
+    pub portal_restore_token: String,
     /// Custom encoder selection (video_mode=custom). None = ladder recipe.
     pub custom_encoder: Option<CustomEncoder>,
     /// Custom [Video] tab (video_mode=custom). None = ladder video.
     pub custom_video: Option<CustomVideo>,
     /// Resolved embedded OBS binary (None = resolve via bundle/PATH).
     pub obs_bin: Option<PathBuf>,
-    /// Resolved embedded obs-cmd binary.
-    pub obscmd_bin: Option<PathBuf>,
     /// obs-websocket port for MoonClip's private OBS instance.
     pub websocket_port: u16,
     /// obs-websocket password (hex, generated once and persisted).

@@ -26,14 +26,14 @@ Minimum supported Windows version: **Windows 10 version 1903 (build 18362)+**
 this floor so the installer refuses older builds instead of installing a
 build whose capture backend cannot initialize.
 
-Sidecars in `src-tauri/binaries/`: `obs/` + `obs-cmd.exe` (OBS 32.2.2 +
-obs-cmd 1.0.2, pinned) and `ffmpeg-x86_64-pc-windows-msvc.exe` (static BtbN
+Sidecars in `src-tauri/binaries/`: `obs/` (OBS 32.2.2, pinned) and
+`ffmpeg-x86_64-pc-windows-msvc.exe` (static BtbN
 `win64-gpl`). They ship via `bundle.resources` (raw binaries; the shell-plugin
 sidecar API is line-events only and cannot carry them), added through a
 **per-OS config overlay**, never in the base `tauri.conf.json` so Linux
 bundles never carry the `.exe` and vice versa.
 The Linux overlay exists today:
-`pnpm tauri:build:linux` bundles `binaries/x86_64-unknown-linux-gnu/{obs,obs-cmd,ffmpeg-*}` into
+`pnpm tauri:build:linux` bundles `binaries/x86_64-unknown-linux-gnu/{obs,ffmpeg-*}` into
 `/usr/lib/MoonClip/`, so the RPM is mostly self-contained (unpacked Linux OBS
 still uses distro Qt/PipeWire libs; see `docs/THIRD_PARTY.md`);
 `pnpm app:install` replaces the install and the KDE/Wayland desktop alias.
@@ -41,8 +41,10 @@ Full ship matrix (user installs nothing extra) is defined in
 `docs/THIRD_PARTY.md`.
 Windows agent: MSVC toolchain + `pnpm install` (pnpm via corepack/npm);
 `host_triple()` in `sidecar.rs` already emits `x86_64-pc-windows-msvc`.
-Fetch pins via `build-aux/fetch-obs.ps1` / `fetch-ffmpeg.ps1`
-(`fetch-obs.sh` / `fetch-ffmpeg.sh` on Linux).
+Fetch/build pins via `build-aux/fetch-obs.ps1` + `fetch-ffmpeg.ps1`
+(Windows) and `build-aux/build-obs.sh` + `fetch-ffmpeg.sh` (Linux; OBS is
+compiled from the pinned source tag because there is no portable Linux
+tarball).
 
 ## 2. GitHub Actions (`/.github/workflows/release.yml`, Phase 7)
 

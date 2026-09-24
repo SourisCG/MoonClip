@@ -3,7 +3,7 @@
 Read this first, then `SPEC.md`, then `01_ARCHITECTURE.md` (rule 6 is law),
 then `02_CAPTURE_ENGINE.md` (the whole V3 engine). V3 (2026-09-18) replaced
 BOTH old engines (GSR on Linux, ffmpeg `gfxcapture` on Windows) with one shared
-engine: the embedded, isolated OBS Studio driven by the bundled `obs-cmd`.
+engine: the embedded, isolated OBS Studio driven in-process over obs-websocket (`obws`).
 
 ## 1. How to work here
 
@@ -12,7 +12,7 @@ engine: the embedded, isolated OBS Studio driven by the bundled `obs-cmd`.
   `cargo check --target x86_64-pc-windows-msvc`, `cargo test`,
   `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`.
 - Sidecars first: `pwsh build-aux/fetch-ffmpeg.ps1` (editor) and
-  `pwsh build-aux/fetch-obs.ps1` (OBS 32.2.2 + obs-cmd 1.0.2, pinned).
+  `pwsh build-aux/fetch-obs.ps1` (OBS 32.2.2, pinned).
 - Minimum supported OS: **Windows 10 version 1903 (build 18362) or later**
   (WGC floor; the installer targets 1903+).
 - Package manager is **pnpm** (never npm). Commits: small, conventional
@@ -45,14 +45,13 @@ engine: the embedded, isolated OBS Studio driven by the bundled `obs-cmd`.
             -> hide window (conceal_window watcher; no tray: user.ini
                SysTrayEnabled=false) -> config guard (root/obs-studio must
                appear, else abort)
-            -> wait obs-cmd `replay status` (private websocket)
-            -> obs-cmd `replay start`
-F9         -> obs-cmd replay save -> "Saved replay: <path>" -> DB index
+            -> connect obs-websocket + `replay start`
+F9         -> obs-websocket replay save -> poll `last-replay` -> DB index
 ```
 
 - `root` = `%LOCALAPPDATA%\MoonClip\obs` — NEVER `%APPDATA%\obs-studio`.
 - Websocket: `127.0.0.1:4456` (setting `obs_ws_port`) + generated password
-  (`obs_ws_password`). obs-cmd is the only client.
+  (`obs_ws_password`). MoonClip's in-process `obws` client is the only client.
 - Encoder mapping (Windows, `os/windows/obs.rs`): NVENC
   `obs_nvenc_{h264,hevc,av1}_tex`, AMF `h264_texture_amf` / `h265_texture_amf`
   / `av1_texture_amf`, QSV `obs_qsv11_v2` / `obs_qsv11_hevc` /
@@ -68,12 +67,13 @@ F9         -> obs-cmd replay save -> "Saved replay: <path>" -> DB index
 
 | File | Responsibility |
 |---|---|
-| `obs.rs` | shared engine: profile/scene writers, obs-cmd wrapper + parsers, `ObsEngine`, config guard, log tail, tests |
+| `obs.rs` | shared engine: profile/scene writers, `ObsEngine`, config guard, log tail, tests |
+| `obsws.rs` | obs-websocket v5 client (`obws`): replay/scene/source/video/input operations |
 | `windows/obs.rs` | platform binding: portable-copy staging + marker, launch args, encoder ids, DXGI display source, orphan sweep |
-| `windows/binary.rs` | resolve bundled `obs/bin/64bit/obs64.exe` + `obs-cmd.exe` (env override) |
+| `windows/binary.rs` | resolve bundled `obs/bin/64bit/obs64.exe` (env override) |
 | `windows/video.rs` | DXGI vendor, GDI monitor list (index + primary), ffmpeg-probed codec offer |
 | `windows/devices.rs` | WASAPI endpoint enumeration + magic-default mapping |
-| `linux/*` | mirrors (pactl devices, sysfs vendor, portal sources, portable copy, /proc orphan sweep, system-`obs` + `--config-dir` fallback) |
+| `linux/*` | mirrors (pactl devices, sysfs vendor, portal sources + RestoreToken, XDG_CONFIG_HOME isolation, KWin concealment, /proc orphan sweep) |
 | `api.rs` | `CaptureConfig` + `CaptureEngine` trait (frozen surface) |
 | `mod.rs` | per-OS selection + `new_engine()`, `resolve_obs`, `resolve_obscmd`, `obs_config_root`, `memory_free_mb` |
 
@@ -86,8 +86,8 @@ F9         -> obs-cmd replay save -> "Saved replay: <path>" -> DB index
   track 1 only.
 - Gains (0-200 %) are written into the scene (`volume`); changing them
   restarts the buffer once with a notice. Mutes apply live via
-  `obs-cmd audio mute/unmute "MoonClip Game Audio"|"MoonClip Mic"`.
-- `audio_peaks` returns `null` (obs-cmd has no meter API); the UI hides meters.
+  `SetInputMute` over obs-websocket for `"MoonClip Game Audio"|"MoonClip Mic"`.
+- `audio_peaks` returns `null` (meters not wired yet); the UI hides meters.
 - Devices: `list_audio_devices` still enumerates via WASAPI.
 
 ## 5. Quality ladder and custom mode
@@ -122,7 +122,8 @@ F9         -> obs-cmd replay save -> "Saved replay: <path>" -> DB index
 
 ## 7. Save path
 
-1. `do_save_clip` → engine `obs-cmd replay save` (45 s timeout).
+1. `do_save_clip` → engine obs-websocket `replay save` + poll `last-replay`
+   until the new path appears (45 s).
 2. Same-second dedupe (`stem_2`, `stem_3`, …), size stat.
 3. Duration probe + thumbnail in parallel (bundled FFmpeg).
 4. SQLite insert (relative file name), ding, `moonclip://clip-saved`.
@@ -156,12 +157,12 @@ F9         -> obs-cmd replay save -> "Saved replay: <path>" -> DB index
 
 ## 10. Packaging
 
-- `src-tauri/tauri.windows.conf.json` bundles `obs/`, `obs-cmd.exe` and the
-  FFmpeg sidecar as resources; `pnpm tauri:build:windows` produces NSIS + MSI.
+- `src-tauri/tauri.windows.conf.json` bundles `obs/` and the FFmpeg sidecar
+  as resources; `pnpm tauri:build:windows` produces NSIS + MSI.
 - `build-aux/fetch-obs.ps1` pins OBS `32.2.2` (`OBS-Studio-32.2.2-Windows-x64.zip`,
-  sha256 verified) and obs-cmd `v1.0.2` (sha256 verified), extracts the
-  portable layout (the script never executes OBS; runtime validation happens
-  through MoonClip's portable copy).
+  sha256 verified) and extracts the portable layout (the script never executes
+  OBS; runtime validation happens through MoonClip's portable copy). Control is
+  in-process over obs-websocket (`obws`), so no obs-cmd binary ships.
 - SmartScreen applies to unsigned builds (see `08_CI_CD_DISTRIBUTION.md`).
 
 ## 11. Checklist before pushing

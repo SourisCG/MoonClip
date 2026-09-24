@@ -8,7 +8,7 @@ component shipped inside MoonClip installers and what the GPL requires for each.
 - **What:** the official OBS Studio distribution, shipped as an **isolated,
   embedded copy** used only by MoonClip. Replay-buffer capture + encode + mux
   are owned by this child process; MoonClip writes its profile/scene and drives
-  it through its private obs-websocket with the bundled `obs-cmd`.
+  it through its private obs-websocket from the app itself (`obws` crate).
 - **Upstream:** https://github.com/obsproject/obs-studio
 - **License:** GPL-2.0-or-later for OBS itself. Compatible: MoonClip as a
   whole is GPL-3.0-only; OBS is a separate process (CLI/IPC boundary), it is
@@ -18,24 +18,28 @@ component shipped inside MoonClip installers and what the GPL requires for each.
     (`sha256:4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1`,
     ~188 MB). Staged at `src-tauri/binaries/x86_64-pc-windows-msvc/obs/`
     with the portable layout `bin/64bit/obs64.exe` + `data/` + `obs-plugins/`.
-  - Linux: release `32.2.2`, asset `OBS-Studio-32.2.2-Ubuntu-24.04-x86_64.deb`
-    (`sha256:b6557ca2059287210332accc94c267094050489cffffc5c832e746e3a418dab0`,
-    ~134 MB). `build-aux/fetch-obs.sh` unpacks it into
-    `binaries/x86_64-unknown-linux-gnu/obs/` (best effort: OS/Qt/pipewire
-    shared libraries still come from the distro). If the unpacked build does
-    not run, MoonClip falls back to a system `obs` binary and STILL isolates it
-    with `--config-dir` + `--multi` + the generated `MoonClip` profile (the
-    config guard aborts if the system build ignores the flag).
-  - Bump the pin by updating `build-aux/fetch-obs.ps1` / `.sh` +
-    `docs/THIRD_PARTY.md`.
+  - Linux: release `32.2.2` **built from source** (OBS publishes no portable
+    Linux tarball; the Ubuntu `.deb` depends on Ubuntu sonames). `build-aux/build-obs.sh`
+    clones the pinned tag with submodules, builds with a minimal plugin set
+    (`-DENABLE_RELOCATABLE=ON`, browser/VLC/VST/scripting/AJA/decklink/WebRTC
+    off) against the distro's Qt6/FFmpeg/PipeWire, and stages a relocatable
+    tree (`bin/obs` + `obs-ffmpeg-mux` + `obs-nvenc-test`, `lib64/obs-plugins`,
+    `share/obs`) at `binaries/x86_64-unknown-linux-gnu/obs/` with RUNPATH
+    `$ORIGIN/../lib64`. The compiled-in install prefix is neutral
+    (`/nonexistent/moonclip-obs`) so OBS never scans a second plugin path.
+    Build cache: `~/.cache/MoonClip/obs-build` (ninja resumes).
+  - Bump the pin by updating `build-aux/fetch-obs.ps1` (Windows) /
+    `build-aux/build-obs.sh` (Linux) + `docs/THIRD_PARTY.md`.
 - **Isolation guarantees (why the user's OBS is never touched):**
   - **Windows:** OBS Studio ignores `--config-dir` (verified live: it logged
     "Portable mode: false" and wrote to `%APPDATA%\obs-studio`). MoonClip
     therefore stages its own writable copy of the embedded OBS under
     `%LOCALAPPDATA%\MoonClip\obs`, writes `portable_mode.txt` and launches it
     with `--portable`. OBS writes `config/` inside that copy by construction.
-    Linux copies the unpacked prefix to `~/.local/share/MoonClip/obs` the same
-    way (system-`obs` fallback uses `--config-dir` + the guard).
+  - **Linux:** the embedded build is relocatable and runs with
+    `XDG_CONFIG_HOME=~/.local/share/MoonClip/obs/config`, so OBS writes its
+    whole config/log tree there; `~/.config/obs-studio` is never touched.
+    A system-`obs` fallback (dev) gets the same env treatment.
   - Common flags: `--multi`, `--profile MoonClip`, `--collection MoonClip`,
     `--minimize-to-tray`, `--disable-shutdown-check`, `--disable-updater`,
     `--only-bundled-plugins`.
@@ -48,24 +52,6 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   capture source (`monitor_capture`/`window_capture` via DXGI/WGC on Windows,
   PipeWire portal on Linux). `game_capture` (the hooking source) is forbidden
   and asserted in tests. Audio comes from WASAPI loopback / PulseAudio.
-
-## obs-cmd (replay-control CLI)
-
-- **What:** `obs-cmd` — a small CLI that controls OBS through obs-websocket v5.
-  MoonClip uses it for `replay start/stop/save/status/last-replay` and
-  `audio mute/unmute`.
-- **Upstream:** https://github.com/grigio/obs-cmd
-- **License:** MIT (see upstream `LICENSE`).
-- **Pinned release:** `v1.0.2` (commit `ca09cdb0c8c0bcbaeabd0ba7da971b89d27700b0`)
-  - Windows asset `obs-cmd-x64-windows.tar.gz`
-    (`sha256:5cfc474f15e851d5323d94a705212c6d1f181a02bd23cfacfb7e7900613c9001`)
-  - Linux asset `obs-cmd-x64-linux.tar.gz`
-    (`sha256:b7e022a80bf75d8c82b9549e977f36c439ccd2711ffde776cae16874d28cd4cf`)
-  - v1.0.2 is required: it verifies the replay buffer is active before saving
-    and polls `GetLastReplayBufferReplay` until the file is flushed (issue
-    #103), which is what makes the `Saved replay: <path>` contract reliable.
-- **Ship model:** `binaries/<triple>/obs-cmd[.exe]` via the shared sidecar
-  resolver; the Tauri resource overlays bundle it on both OSes.
 
 ## FFmpeg (editor pipeline + thumbnails/probes)
 
@@ -99,6 +85,13 @@ component shipped inside MoonClip installers and what the GPL requires for each.
 
 ## Removed components
 
+- **obs-cmd:** removed (2026-09-23). Its latest release (v1.0.2) ships
+  `input settings`, `input volume`, `input mute` and `audio mute` as stubs
+  that only print "experimental" and never talk to OBS (portal token
+  read-back, live gains/mutes were silently dead). MoonClip now talks
+  obs-websocket v5 directly through the `obws` crate (MIT/Apache-2.0, Rust
+  dependency, not a shipped binary): same protocol, plus the replay flush
+  polling (obs-cmd issue #103) reimplemented in-process.
 - **gpu-screen-recorder (GSR):** replaced by the embedded OBS engine in V3
   (2026-09-18). No GSR binary is bundled or resolved anymore; the
   `game_capture`-free OBS scene is the anti-cheat-safe capture path on both

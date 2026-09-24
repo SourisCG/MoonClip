@@ -1,17 +1,18 @@
-# 02 — Capture Engine (embedded OBS + obs-cmd)
+# 02 — Capture Engine (embedded OBS + obs-websocket)
 
 ## 1. Concept
 
 A clip app is a rolling RAM replay buffer, not a recorder. MoonClip V3 owns no
-encoder of its own: it ships an **isolated OBS Studio** and a bundle of
-`obs-cmd`, and drives the OBS replay buffer:
+encoder of its own: it ships an **isolated OBS Studio** and controls
+it in-process over obs-websocket, driving the OBS replay buffer:
 
 ```
 Settings (SQLite) -> Rust writes basic.ini + MoonClip scene collection
-                  -> stages a writable PORTABLE copy of the embedded OBS
-                     (portable_mode.txt) and launches it
-                  -> obs-cmd replay start      (buffer rolls in OBS RAM)
-F9                -> obs-cmd replay save       ("Saved replay: <path>")
+                     (Wayland: portal RestoreToken pre-seeded if known)
+                  -> launches the embedded OBS, config fully isolated
+                     (Windows: portable copy; Linux: XDG_CONFIG_HOME)
+                  -> obs-websocket replay start (buffer rolls in OBS RAM)
+F9                -> obs-websocket replay save (poll last-replay for the new path)
                   -> thumbnail + duration probe + SQLite index (unchanged)
 ```
 
@@ -20,22 +21,24 @@ resolution is the resolution the user picked; scaling is GPU-side inside OBS).
 
 ## 2. Isolation (the user's OBS is never touched, on either OS)
 
-- **Own config dir:** Windows `%LOCALAPPDATA%\MoonClip\obs`; Linux
-  `~/.local/share/MoonClip/obs`. The embedded OBS is staged there as a
-  writable portable copy with a `portable_mode.txt`, so OBS itself writes
-  `<copy>/config/obs-studio/...` — `%APPDATA%\obs-studio` /
-  `~/.config/obs-studio` are never read or written (this replaces the earlier
-  `--config-dir` attempt, which OBS on Windows ignored). A marker file
-  re-stages the copy when the bundled build changes.
+- **Own config dir:** Windows stages a writable portable copy under
+  `%LOCALAPPDATA%\MoonClip\obs` (with `portable_mode.txt`, re-staged by a build
+  marker) and launches it with `--portable`. Linux is relocatable
+  (RUNPATH `$ORIGIN/../lib64`) and is launched with
+  `XDG_CONFIG_HOME=~/.local/share/MoonClip/obs/config`, so OBS writes its
+  whole `obs-studio/` tree (config, logs, plugin config) there. Either way,
+  `%APPDATA%\obs-studio` / `~/.config/obs-studio` are never read or written
+  (verified live on both OSes).
 - **Own identity:** generated profile `MoonClip`, collection `MoonClip`, scene
   `MoonClip Capture`, audio sources `MoonClip Game Audio` / `MoonClip Mic`.
 - **Coexistence:** `--multi` lets our OBS run next to the user's OBS.
-- **Private websocket:** `127.0.0.1:<obs_ws_port>` (default 4456) with a
-  generated password persisted in SQLite (`obs_ws_password`); obs-websocket is
-  configured inside OUR config dir only.
+- **Private websocket:** `127.0.0.1:<obs_ws_port>` (default 4456, distinct
+  from OBS's 4455) with a generated password persisted in SQLite
+  (`obs_ws_password`); obs-websocket is configured inside OUR config dir only.
 - **Guards:** `os/obs.rs` kills the child if it does not create
-  `<config_root>/obs-studio` within 12 s (i.e. portable mode was not honored);
-  on Linux a system `obs` fallback uses `--config-dir` with the same guard.
+  `<config_root>/obs-studio` within 12 s (i.e. the config redirect was not
+  honored). On Linux a system `obs` fallback (dev) uses the exact same
+  `XDG_CONFIG_HOME` treatment.
 - **Orphans:** force-killed sessions leave OBS children; `kill_orphans()`
   sweeps processes whose image path is OUR bundled binary and whose parent is
   gone. The user's own OBS path never matches.
@@ -47,8 +50,37 @@ resolution is the resolution the user picked; scaling is GPU-side inside OBS).
   under MoonClip as a background child instead of a second "OBS Studio"
   app, and can never be confused with (or touch) the user's own OBS.
   Error dialogs keep their own titles and stay visible for diagnosis.
+- **Invisible engine (Linux):** on KDE Plasma, `conceal_window` loads a
+  temporary KWin script (DBus `/Scripting`) that matches our exact child PID
+  and sets `skipTaskbar/skipPager/noBorder/opacity=0` (the user's OBS never
+  matches); the tray icon is disabled in that case. Other desktops keep
+  `--minimize-to-tray` + the OBS tray icon as fallback (Wayland has no global
+  window control).
 - **Repair:** `repair_obs_config` stops the buffer and deletes ONLY the
   MoonClip-owned config root (regenerated on next start).
+
+## 2b. Wayland portal (Medal-style, picker exactly once)
+
+- OBS's PipeWire source requests `persist_mode=2` and stores the returned
+  single-use `RestoreToken` in the source settings on every successful Start
+  (verified in OBS `screencast-portal.c`). MoonClip pre-seeds that token into
+  the generated collection from the `obs_restore_token` setting, and reads the
+  refreshed token back after each start with
+  `GetInputSettings` over obs-websocket, persisting the newest one.
+  Result: the system picker appears **once**; later starts restore silently.
+- **First run:** the SetupWizard test step shows the picker (hint text). The
+  start path waits for a real stream (screenshot probe) before reporting
+  success; if the dialog is cancelled, the start fails loudly and the engine
+  stops instead of recording black.
+- **Change screen** (Settings → Video → "Cambiar pantalla…") clears the token
+  and learned canvas (`clear_portal_token`) and restarts the buffer, so the
+  picker appears exactly once more.
+- **Canvas learning:** the portal decides the captured size, not our profile.
+  After start, MoonClip saves a source screenshot (`SaveSourceScreenshot`),
+  parses the PNG size and calls `SetVideoSettings` when the canvas
+  differs; the learned size is persisted (`obs_source_width/height`) and used
+  as the base resolution on the next start (fixes the old 1080p fallback and
+  rotated/portrait monitors).
 
 ## 3. Anti-cheat (hard rule, ~0 hook risk)
 
@@ -58,7 +90,7 @@ generated scene NEVER uses OBS's `game_capture`; only compositor-level sources:
 
 | OS | Source id | Method |
 |---|---|---|
-| Windows | `monitor_capture` | DXGI Desktop Duplication (index-based, `method: 1`) |
+| Windows | `monitor_capture` | WGC display capture (`method: 2`, `force_sdr`, cursor) |
 | Windows (opt-in) | `window_capture` | WGC window capture (`method: 2`) |
 | Linux | `pipewire-desktop-capture-source` | XDG portal (Wayland/X11) |
 | Linux (opt-in) | `pipewire-window-capture-source` | XDG portal window picker |
@@ -107,23 +139,33 @@ stays: Track 1 `Master Mix [Game+Voice]`, Track 2 `Game/Desktop`,
 Track 3 `Microphone`.
 
 Live behaviour:
-- **Mute** applies in live through `obs-cmd audio mute|unmute <source>`.
-- **Gain** lives in the scene: changing it restarts the buffer once with a
-  visible notice (`set_track_gain` → `restart_if_running`).
-- **Peaks/meters:** not exposed by obs-cmd → `audio_peaks` returns `null`
-  (the UI hides the meters; no fake data).
+- **Mute** applies live through `SetInputMute` (obs-websocket).
+- **Gain** applies live through `SetInputVolume` (0-200 % → multiplier); a
+  failed live apply falls back to a single buffer restart.
+- **Peaks/meters:** obs-websocket exposes `InputVolumeMeters` events, not
+  subscribed yet (obws `events` feature) → `audio_peaks` returns `null` (the
+  UI hides the meters; no fake data).
 
-## 6. obs-cmd contract
+## 6. obs-websocket contract
 
-`os/obs.rs::Obscmd` builds `obs-cmd --websocket obsws://127.0.0.1:<port>/<pw>`
-and parses:
-- `replay status` → `Replay Buffer is running` / `... is not running`
-- `replay save` → `Saved replay: <path>` (v1.0.2 polls until flush); fallback
-  `replay last-replay` → `Last replay path: <path>`
-- `audio mute|unmute <source>` → exit status only
+`os/obsws.rs` wraps the `obws` client against OUR private websocket
+(`127.0.0.1:<obs_ws_port>`, generated password) and exposes:
+- `replay_buffer().start()/stop()/status()`
+- `replay_buffer().save()` + `last_replay()` polling until the new path
+  appears (the flush-race fix obs-cmd carried for issue #103, now in-process;
+  45 s timeout)
+- `scenes().current_program_scene()` (scene-live proof)
+- `sources().active()` + `save_screenshot()` (portal stream proof + canvas
+  learning)
+- `config().set_video_settings()` (canvas/output resize)
+- `inputs().settings()/set_volume()/set_muted()` (portal token, live gains)
 
-All calls are timeout-bounded; failures surface the last output line. Save
-still validates the path exists on disk before indexing it.
+All calls are timeout-bounded; failures surface the error text. Save still
+validates the path exists on disk before indexing it.
+
+> The previous `obs-cmd` CLI was removed: its latest release (v1.0.2) ships
+> `input settings`, `input volume` and `input mute` as stubs that only print
+> "experimental" and never talk to OBS.
 
 ## 7. Quality ladder and custom mode
 
@@ -152,8 +194,8 @@ still validates the path exists on disk before indexing it.
 
 ## 8. Save path
 
-1. `save_clip` → `obs-cmd replay save` (45 s timeout), parse the path, verify
-   it exists.
+1. `save_clip` → obs-websocket `replay_buffer().save()`, then poll
+   `last_replay()` until the new path appears (45 s), verify it exists.
 2. Same-second dedupe renames to `stem_2.mp4`, `stem_3.mp4`… (existing).
 3. Duration probe + thumbnail in parallel via the bundled FFmpeg.
 4. Insert into SQLite (relative name), ding, `moonclip://clip-saved`.
@@ -179,7 +221,7 @@ or the test fails. This is the proof that OBS really applied the settings.
 ## 10. Live mixer (volume without restart)
 
 `set_track_gain` persists the 0-200 % gain and applies it live through
-`obs-cmd input volume --set <mul> <source>` while the buffer runs (trait
+`SetInputVolume` (obs-websocket) while the buffer runs (trait
 `CaptureEngine::set_volume`); only a failed live apply falls back to the
 single-restart path. The generated scene still carries the persisted gain,
 so the next start renders it even without a running buffer. Mixer errors
@@ -213,4 +255,4 @@ platform bits. Selection happens only in `os/mod.rs` (zero-`cfg` elsewhere).
 - [ ] Hardware test reports a valid clip at the suggested preset; Custom "Probar 10 s" proves codec/resolution/fps.
 - [ ] `cargo test`, `cargo clippy -D warnings`, `pnpm build`, zero-`cfg` grep.
 - [ ] Windows: BO7/CS2/Vanguard in-game pass (owner).
-- [ ] Linux: portal picker once, then clip with 3 tracks (owner).
+- [ ] Linux: portal picker once, then clip with 3 tracks; restart shows no picker; "Change screen" re-prompts once; OBS hidden on KDE (owner).
