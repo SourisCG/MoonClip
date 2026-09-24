@@ -127,6 +127,12 @@ pub fn match_device_id(stored: &str, devices: &[AudioDevice], render: bool) -> S
     if magic {
         return "default".to_string();
     }
+    // No enumeration available: trust the stored id (OBS's pulse source takes
+    // the name as-is). Only fall back to `default` when we have a real list
+    // and the stored value matches nothing in it.
+    if devices.is_empty() {
+        return t.to_string();
+    }
     let kind = if render { "desktop" } else { "mic" };
     if let Some(d) = devices.iter().find(|d| d.id == t && d.kind == kind) {
         return d.id.clone();
