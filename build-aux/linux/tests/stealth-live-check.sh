@@ -75,6 +75,23 @@ else
   echo "OK  no upstream-named unix socket owned by the engine"
 fi
 
+# Pulse/PipeWire client identity: every audio client owned by the engine must
+# carry a neutral application name/icon (patched in step 3.4).
+if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
+  clients="$(pactl list clients 2>/dev/null || true)"
+  hits=0
+  for pid in $pids; do
+    block="$(printf '%s\n' "$clients" | awk -v RS='Client #' -v pid="$pid" \
+      '$0 ~ ("application.process.id = \"" pid "\"") { print }')"
+    if printf '%s\n' "$block" | grep -qi 'obs'; then
+      echo "FAIL engine pulse client (pid $pid) leaks upstream identity"
+      hits=1
+      fail=1
+    fi
+  done
+  [ "$hits" -eq 0 ] && echo "OK  engine pulse clients carry no upstream identity"
+fi
+
 # Portal identity: Qt's registry warning ("Connection already associated with
 # an application ID") must be gone thanks to QT_NO_XDG_DESKTOP_PORTAL.
 cfg_root="${XDG_DATA_HOME:-$HOME/.local/share}/MoonClip/obs/config"

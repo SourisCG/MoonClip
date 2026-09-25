@@ -1,0 +1,48 @@
+diff --git a/libobs/audio-monitoring/pulse/pulseaudio-wrapper.c b/libobs/audio-monitoring/pulse/pulseaudio-wrapper.c
+index 53ec702..199cae4 100644
+--- a/libobs/audio-monitoring/pulse/pulseaudio-wrapper.c
++++ b/libobs/audio-monitoring/pulse/pulseaudio-wrapper.c
+@@ -120,8 +120,8 @@ static pa_proplist *pulseaudio_properties()
+ {
+ 	pa_proplist *p = pa_proplist_new();
+ 
+-	pa_proplist_sets(p, PA_PROP_APPLICATION_NAME, "OBS");
+-	pa_proplist_sets(p, PA_PROP_APPLICATION_ICON_NAME, "obs");
++	pa_proplist_sets(p, PA_PROP_APPLICATION_NAME, "MoonClip");
++	pa_proplist_sets(p, PA_PROP_APPLICATION_ICON_NAME, "moonclip");
+ 	pa_proplist_sets(p, PA_PROP_MEDIA_ROLE, "production");
+ 
+ 	return p;
+@@ -136,7 +136,7 @@ static void pulseaudio_init_context()
+ 
+ 	pa_proplist *p = pulseaudio_properties();
+ 	pulseaudio_context =
+-		pa_context_new_with_proplist(pa_threaded_mainloop_get_api(pulseaudio_mainloop), "OBS-Monitor", p);
++		pa_context_new_with_proplist(pa_threaded_mainloop_get_api(pulseaudio_mainloop), "MoonClip Monitor", p);
+ 
+ 	pa_context_set_state_callback(pulseaudio_context, pulseaudio_context_state_changed, NULL);
+ 
+diff --git a/plugins/linux-pulseaudio/pulse-wrapper.c b/plugins/linux-pulseaudio/pulse-wrapper.c
+index ff383e6..8df4043 100644
+--- a/plugins/linux-pulseaudio/pulse-wrapper.c
++++ b/plugins/linux-pulseaudio/pulse-wrapper.c
+@@ -51,8 +51,8 @@ static pa_proplist *pulse_properties()
+ {
+ 	pa_proplist *p = pa_proplist_new();
+ 
+-	pa_proplist_sets(p, PA_PROP_APPLICATION_NAME, "OBS");
+-	pa_proplist_sets(p, PA_PROP_APPLICATION_ICON_NAME, "obs");
++	pa_proplist_sets(p, PA_PROP_APPLICATION_NAME, "MoonClip");
++	pa_proplist_sets(p, PA_PROP_APPLICATION_ICON_NAME, "moonclip");
+ 	pa_proplist_sets(p, PA_PROP_MEDIA_ROLE, "production");
+ 
+ 	return p;
+@@ -66,7 +66,7 @@ static void pulse_init_context()
+ 	pulse_lock();
+ 
+ 	pa_proplist *p = pulse_properties();
+-	pulse_context = pa_context_new_with_proplist(pa_threaded_mainloop_get_api(pulse_mainloop), "OBS", p);
++	pulse_context = pa_context_new_with_proplist(pa_threaded_mainloop_get_api(pulse_mainloop), "MoonClip", p);
+ 
+ 	pa_context_set_state_callback(pulse_context, pulse_context_state_changed, NULL);
+ 
