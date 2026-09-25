@@ -1,0 +1,118 @@
+diff --git a/cmake/linux/defaults.cmake b/cmake/linux/defaults.cmake
+index b6a0061..686a59b 100644
+--- a/cmake/linux/defaults.cmake
++++ b/cmake/linux/defaults.cmake
+@@ -25,14 +25,14 @@ set(OBS_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/rundir")
+ set(OBS_EXECUTABLE_DESTINATION "${CMAKE_INSTALL_BINDIR}")
+ set(OBS_INCLUDE_DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/obs")
+ set(OBS_LIBRARY_DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+-set(OBS_PLUGIN_DESTINATION "${CMAKE_INSTALL_LIBDIR}/obs-plugins")
+-set(OBS_SCRIPT_PLUGIN_DESTINATION "${CMAKE_INSTALL_LIBDIR}/obs-scripting")
+-set(OBS_DATA_DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/obs")
++set(OBS_PLUGIN_DESTINATION "${CMAKE_INSTALL_LIBDIR}/engine-plugins")
++set(OBS_SCRIPT_PLUGIN_DESTINATION "${CMAKE_INSTALL_LIBDIR}/engine-scripting")
++set(OBS_DATA_DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/engine")
+ set(OBS_CMAKE_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake")
+ 
+ # Set additional paths used by OBS for self-discovery
+-set(OBS_PLUGIN_PATH "${CMAKE_INSTALL_LIBDIR}/obs-plugins")
+-set(OBS_SCRIPT_PLUGIN_PATH "${CMAKE_INSTALL_LIBDIR}/obs-scripting")
++set(OBS_PLUGIN_PATH "${CMAKE_INSTALL_LIBDIR}/engine-plugins")
++set(OBS_SCRIPT_PLUGIN_PATH "${CMAKE_INSTALL_LIBDIR}/engine-scripting")
+ set(OBS_DATA_PATH "${OBS_DATA_DESTINATION}")
+ set(OBS_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
+ 
+diff --git a/cmake/linux/helpers.cmake b/cmake/linux/helpers.cmake
+index 494586d..cf1fdd0 100644
+--- a/cmake/linux/helpers.cmake
++++ b/cmake/linux/helpers.cmake
+@@ -41,7 +41,7 @@ function(set_target_properties_obs target)
+       add_dependencies(${target} ${obs_executables} ${obs_modules})
+ 
+       target_add_resource(${target} "${CMAKE_CURRENT_SOURCE_DIR}/../AUTHORS"
+-                          "${OBS_DATA_DESTINATION}/obs-studio/authors"
++                          "${OBS_DATA_DESTINATION}/moonclip-engine/authors"
+       )
+     elseif(target STREQUAL browser-helper)
+       set_property(GLOBAL APPEND PROPERTY _OBS_EXECUTABLES ${target})
+@@ -238,9 +238,9 @@ function(target_install_resources target)
+ 
+     get_property(obs_module_list GLOBAL PROPERTY OBS_MODULES_ENABLED)
+     if(target IN_LIST obs_module_list)
+-      set(target_destination "${OBS_DATA_DESTINATION}/obs-plugins/${target}")
+-    elseif(target STREQUAL obs)
+-      set(target_destination "${OBS_DATA_DESTINATION}/obs-studio")
++      set(target_destination "${OBS_DATA_DESTINATION}/engine-plugins/${target}")
++    elseif(target STREQUAL obs OR target STREQUAL obs-studio)
++      set(target_destination "${OBS_DATA_DESTINATION}/moonclip-engine")
+     else()
+       set(target_destination "${OBS_DATA_DESTINATION}/${target}")
+     endif()
+@@ -271,9 +271,9 @@ function(target_add_resource target resource)
+   if(ARGN)
+     set(target_destination "${ARGN}")
+   elseif(${target} IN_LIST obs_module_list)
+-    set(target_destination "${OBS_DATA_DESTINATION}/obs-plugins/${target}")
+-  elseif(target STREQUAL obs)
+-    set(target_destination "${OBS_DATA_DESTINATION}/obs-studio")
++    set(target_destination "${OBS_DATA_DESTINATION}/engine-plugins/${target}")
++  elseif(target STREQUAL obs OR target STREQUAL obs-studio)
++    set(target_destination "${OBS_DATA_DESTINATION}/moonclip-engine")
+   else()
+     set(target_destination "${OBS_DATA_DESTINATION}/${target}")
+   endif()
+diff --git a/libobs/obs-nix.c b/libobs/obs-nix.c
+index 65cd125..707241e 100644
+--- a/libobs/obs-nix.c
++++ b/libobs/obs-nix.c
+@@ -50,15 +50,15 @@ const char *get_module_extension(void)
+ #define FLATPAK_PLUGIN_PATH "/app/plugins"
+ 
+ static const char *module_bin[] = {
+-	"../../obs-plugins/64bit",
++	"../../engine-plugins/64bit",
+ 	OBS_INSTALL_PREFIX "/" OBS_PLUGIN_DESTINATION,
+ 	FLATPAK_PLUGIN_PATH "/" OBS_PLUGIN_DESTINATION,
+ };
+ 
+ static const char *module_data[] = {
+-	OBS_DATA_PATH "/obs-plugins/%module%",
+-	OBS_INSTALL_DATA_PATH "/obs-plugins/%module%",
+-	FLATPAK_PLUGIN_PATH "/share/obs/obs-plugins/%module%",
++	OBS_DATA_PATH "/engine-plugins/%module%",
++	OBS_INSTALL_DATA_PATH "/engine-plugins/%module%",
++	FLATPAK_PLUGIN_PATH "/share/obs/engine-plugins/%module%",
+ };
+ 
+ static const int module_patterns_size = sizeof(module_bin) / sizeof(module_bin[0]);
+@@ -68,7 +68,7 @@ static const struct obs_nix_hotkeys_vtable *hotkeys_vtable = NULL;
+ void add_default_module_paths(void)
+ {
+ 	char *module_bin_path = os_get_executable_path_ptr("../" OBS_PLUGIN_PATH);
+-	char *module_data_path = os_get_executable_path_ptr("../" OBS_DATA_PATH "/obs-plugins/%module%");
++	char *module_data_path = os_get_executable_path_ptr("../" OBS_DATA_PATH "/engine-plugins/%module%");
+ 
+ 	if (module_bin_path && module_data_path) {
+ 		char *abs_module_bin_path = os_get_abs_path_ptr(module_bin_path);
+@@ -99,10 +99,10 @@ char *find_libobs_data_file(const char *file)
+ 	struct dstr output;
+ 	dstr_init(&output);
+ 
+-	if (check_path(file, OBS_DATA_PATH "/libobs/", &output))
++	if (check_path(file, OBS_DATA_PATH "/core/", &output))
+ 		return output.array;
+ 
+-	char *relative_data_path = os_get_executable_path_ptr("../" OBS_DATA_PATH "/libobs/");
++	char *relative_data_path = os_get_executable_path_ptr("../" OBS_DATA_PATH "/core/");
+ 	if (relative_data_path) {
+ 		bool found = check_path(file, relative_data_path, &output);
+ 
+@@ -114,7 +114,7 @@ char *find_libobs_data_file(const char *file)
+ 	}
+ 
+ 	if (OBS_INSTALL_PREFIX[0] != 0) {
+-		if (check_path(file, OBS_INSTALL_DATA_PATH "/libobs/", &output))
++		if (check_path(file, OBS_INSTALL_DATA_PATH "/core/", &output))
+ 			return output.array;
+ 	}
+ 

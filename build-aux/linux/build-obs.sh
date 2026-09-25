@@ -129,19 +129,33 @@ mkdir -p "$OUT/bin" "$OUT/$LIBDIR" "$OUT/share"
 # moonclip-nvenc-test (NVENC capability probe launched by obs-nvenc).
 cp -a "$PREFIX/bin/." "$OUT/bin/"
 cp -a "$PREFIX/$LIBDIR/." "$OUT/$LIBDIR/"
-if [ -d "$PREFIX/share/obs" ]; then
-  cp -a "$PREFIX/share/obs" "$OUT/share/obs"
+# CMake package configs are build-time only: they would leak upstream names
+# into the shipped bundle for no runtime benefit.
+rm -rf "$OUT/$LIBDIR/cmake"
+# libobs data (effects): the upstream install rule hardcodes share/obs/libobs
+# while the patched runtime looks under share/engine/core.
+for cand in "$PREFIX/share/engine/libobs" "$PREFIX/share/obs/libobs"; do
+  if [ -d "$cand" ]; then
+    mkdir -p "$PREFIX/share/engine"
+    mv "$cand" "$PREFIX/share/engine/core"
+    break
+  fi
+done
+if [ -d "$PREFIX/share/engine" ]; then
+  cp -a "$PREFIX/share/engine" "$OUT/share/engine"
 fi
-[ -d "$PREFIX/share/libobs" ] && cp -a "$PREFIX/share/libobs" "$OUT/share/libobs"
 
 echo "==> verifying (isolated config, never touches ~/.config/obs-studio)"
 XDG_CONFIG_HOME="$(mktemp -d)" "$OBS_BIN" --version | head -1
-ls "$OUT/$LIBDIR/obs-plugins" | grep -E 'linux-pipewire|linux-pulseaudio|linux-capture|obs-ffmpeg|obs-nvenc|obs-x264|obs-websocket' || {
+ls "$OUT/$LIBDIR/engine-plugins" | grep -E 'linux-pipewire|linux-pulseaudio|linux-capture|obs-ffmpeg|obs-nvenc|obs-x264|obs-websocket' || {
   echo "warning: expected plugins not found, listing:" >&2
-  ls "$OUT/$LIBDIR/obs-plugins" >&2
+  ls "$OUT/$LIBDIR/engine-plugins" >&2
 }
 for b in moonclip-engine moonclip-mux moonclip-nvenc-test; do
   [ -x "$OUT/bin/$b" ] || { echo "error: missing patched binary $b" >&2; exit 1; }
+done
+for d in "$LIBDIR/engine-plugins" share/engine/moonclip-engine share/engine/engine-plugins share/engine/core; do
+  [ -e "$OUT/$d" ] || { echo "error: missing patched data dir $d" >&2; exit 1; }
 done
 echo "patch=$PATCH_REV" > "$OUT/.moonclip-staged"
 echo "OK: $OUT"

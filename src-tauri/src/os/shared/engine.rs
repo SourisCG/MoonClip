@@ -119,6 +119,12 @@ pub trait ObsPlatform: Send + Sync {
     fn sys_tray_enabled(&self) -> bool {
         true
     }
+    /// Name of the engine's config tree inside `config_root`. The upstream
+    /// build writes `obs-studio/`; the patched Linux build uses a neutral
+    /// name (the Windows prebuilt keeps `obs-studio` until it is rebuilt).
+    fn engine_config_dir(&self) -> &'static str {
+        "obs-studio"
+    }
     /// Kill leftover MoonClip OBS processes from a force-killed session.
     /// MUST only match our exact bundled binary path; never the user's OBS.
     fn kill_orphans(&self, obs_bin: &Path);
@@ -725,10 +731,11 @@ pub fn render_websocket_config(port: u16, password: &str) -> String {
 /// Write every generated file for one start. Returns the profile dir.
 pub fn write_obs_config(
     root: &Path,
+    config_dir: &str,
     p: &ObsProfile,
     tray_enabled: bool,
 ) -> Result<PathBuf, String> {
-    let conf = root.join("obs-studio");
+    let conf = root.join(config_dir);
     let profile_dir = conf.join("basic").join("profiles").join(OBS_PROFILE);
     let scenes_dir = conf.join("basic").join("scenes");
     let ws_dir = conf.join("plugin_config").join("obs-websocket");
@@ -787,9 +794,9 @@ pub fn reset_obs_config(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Bounded tail of the newest OBS log inside OUR config dir (diagnostics).
-pub fn read_obs_log_tail(root: &Path) -> Vec<String> {
-    let logs = root.join("obs-studio").join("logs");
+/// Bounded tail of the newest engine log inside OUR config dir (diagnostics).
+pub fn read_obs_log_tail(root: &Path, config_dir: &str) -> Vec<String> {
+    let logs = root.join(config_dir).join("logs");
     let Ok(entries) = std::fs::read_dir(&logs) else {
         return vec![];
     };
@@ -970,7 +977,7 @@ impl ObsEngine {
     async fn fail_start(&mut self, msg: String) -> String {
         self.error = Some(msg.clone());
         self.stop_buffer().await.ok();
-        let tail = read_obs_log_tail(&self.config_root);
+        let tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
         let hint = tail
             .iter()
             .rev()
@@ -988,7 +995,7 @@ impl ObsEngine {
     /// Wait until OUR config dir exists, proving OBS is using the portable
     /// copy's config (never the user's OBS config).
     async fn wait_for_config_guard(&self) -> Result<(), String> {
-        let marker = self.config_root.join("obs-studio");
+        let marker = self.config_root.join(self.platform.engine_config_dir());
         let deadline = std::time::Instant::now() + CONFIG_GUARD_TIMEOUT;
         while std::time::Instant::now() < deadline {
             if marker.exists() {
@@ -1097,6 +1104,7 @@ impl CaptureEngine for ObsEngine {
         // The tray flag comes from the platform (Windows runs traceless).
         write_obs_config(
             &self.config_root,
+            self.platform.engine_config_dir(),
             &profile,
             self.platform.sys_tray_enabled(),
         )?;
@@ -1139,7 +1147,7 @@ impl CaptureEngine for ObsEngine {
         // 5. Safety guard: if OBS writes outside our config, abort immediately.
         if let Err(e) = self.wait_for_config_guard().await {
             self.stop_buffer().await.ok();
-            let tail = read_obs_log_tail(&self.config_root);
+            let tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
             return Err(match tail.last() {
                 Some(l) => format!("{e} | last log: {l}"),
                 None => e,
@@ -1153,7 +1161,7 @@ impl CaptureEngine for ObsEngine {
             if let Some(child) = self.child.as_mut() {
                 if let Ok(Some(status)) = child.try_wait() {
                     self.child = None;
-                    let tail = read_obs_log_tail(&self.config_root);
+                    let tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
                     return Err(format!(
                         "embedded OBS exited during startup ({status}){}",
                         tail.last().map(|l| format!(": {l}")).unwrap_or_default()
@@ -1285,7 +1293,7 @@ impl CaptureEngine for ObsEngine {
     }
 
     fn log_tail(&self) -> Vec<String> {
-        let mut tail = read_obs_log_tail(&self.config_root);
+        let mut tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
         if let Some(err) = &self.error {
             tail.push(format!("moonclip: {err}"));
         }

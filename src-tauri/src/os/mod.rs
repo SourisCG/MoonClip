@@ -69,6 +69,21 @@ pub fn obs_config_root() -> Result<PathBuf, String> {
     linux::engine::config_root()
 }
 
+/// Name of the engine's config tree inside `obs_config_root` (the patched
+/// Linux build is neutral; the Windows prebuilt keeps `obs-studio`).
+#[cfg(target_os = "linux")]
+pub fn engine_config_dir() -> &'static str {
+    linux::engine::CONFIG_DIR_NAME
+}
+#[cfg(target_os = "windows")]
+pub fn engine_config_dir() -> &'static str {
+    windows::engine::CONFIG_DIR_NAME
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn engine_config_dir() -> &'static str {
+    linux::engine::CONFIG_DIR_NAME
+}
+
 /// Encoder ids compiled into this platform's OBS build (Custom picker).
 #[cfg(target_os = "linux")]
 pub fn encoder_catalog() -> &'static [shared::encoder_options::EncoderEntry] {

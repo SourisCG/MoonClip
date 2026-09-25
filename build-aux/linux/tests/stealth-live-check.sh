@@ -92,10 +92,31 @@ if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
   [ "$hits" -eq 0 ] && echo "OK  engine pulse clients carry no upstream identity"
 fi
 
+# On-disk layout: nothing under the engine data root may be named after the
+# upstream product (patched config tree + bundle dirs in step 3.5). Plugin
+# module names (obs-ffmpeg.so, plugin_config/obs-websocket, ...) are the
+# accepted residual until a deep library/plugin rename happens.
+data_root="${XDG_DATA_HOME:-$HOME/.local/share}/MoonClip"
+if [ -d "$data_root" ]; then
+  all_leaks="$(find "$data_root" -iname '*obs*' 2>/dev/null || true)"
+  leaked="$(printf '%s\n' "$all_leaks" | grep -vE '/(engine-plugins|obs-plugins)/obs-|/plugin_config/obs-' | grep -v '^$' | head -5)"
+  residual="$(printf '%s\n' "$all_leaks" | grep -E '/(engine-plugins|obs-plugins)/obs-|/plugin_config/obs-' | head -1)"
+  if [ -n "$residual" ]; then
+    echo "INFO upstream plugin module names remain (accepted residual)"
+  fi
+  if [ -n "$leaked" ]; then
+    echo "FAIL on-disk data still leaks upstream names:"
+    printf '%s\n' "$leaked"
+    fail=1
+  else
+    echo "OK  no upstream-named files under $data_root"
+  fi
+fi
+
 # Portal identity: Qt's registry warning ("Connection already associated with
 # an application ID") must be gone thanks to QT_NO_XDG_DESKTOP_PORTAL.
-cfg_root="${XDG_DATA_HOME:-$HOME/.local/share}/MoonClip/obs/config"
-log="$(ls -t "$cfg_root"/obs-studio/logs/*.txt 2>/dev/null | head -1 || true)"
+cfg_root="${XDG_DATA_HOME:-$HOME/.local/share}/MoonClip/engine/config"
+log="$(ls -t "$cfg_root"/moonclip-engine/logs/*.txt 2>/dev/null | head -1 || true)"
 if [ -n "$log" ]; then
   if grep -q 'Could not register app ID' "$log"; then
     echo "FAIL portal app-id warning present in $(basename "$log")"

@@ -78,6 +78,10 @@ impl WindowsPlatform {
     }
 }
 
+/// Config tree name the Windows prebuilt writes (until it is rebuilt from
+/// source with the same identity patches as Linux).
+pub const CONFIG_DIR_NAME: &str = "obs-studio";
+
 /// MoonClip-owned OBS runtime root: `%LOCALAPPDATA%\MoonClip\obs`. The
 /// portable copy lives here (binary + `config/obs-studio`).
 pub fn runtime_root() -> Result<PathBuf, String> {

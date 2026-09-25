@@ -55,8 +55,8 @@ async def request(ws, request_type, request_id, **kwargs):
 
 async def save(timeout):
     settings = read_settings()
-    port = int(settings.get("obs_ws_port", "4456"))
-    password = settings.get("obs_ws_password", "")
+    port = int(settings.get("engine_ws_port", "4456"))
+    password = settings.get("engine_ws_password", "")
     import websockets  # noqa: PLC0415
 
     async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:

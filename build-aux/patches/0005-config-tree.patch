@@ -1,0 +1,506 @@
+diff --git a/frontend/OBSApp.cpp b/frontend/OBSApp.cpp
+index 0d6d0e2..c8aecb4 100644
+--- a/frontend/OBSApp.cpp
++++ b/frontend/OBSApp.cpp
+@@ -409,21 +409,21 @@ static bool MakeUserDirs()
+ {
+ 	char path[512];
+ 
+-	if (GetAppConfigPath(path, sizeof(path), "obs-studio/basic") <= 0) {
++	if (GetAppConfigPath(path, sizeof(path), "moonclip-engine/basic") <= 0) {
+ 		return false;
+ 	}
+ 	if (!do_mkdir(path)) {
+ 		return false;
+ 	}
+ 
+-	if (GetAppConfigPath(path, sizeof(path), "obs-studio/logs") <= 0) {
++	if (GetAppConfigPath(path, sizeof(path), "moonclip-engine/logs") <= 0) {
+ 		return false;
+ 	}
+ 	if (!do_mkdir(path)) {
+ 		return false;
+ 	}
+ 
+-	if (GetAppConfigPath(path, sizeof(path), "obs-studio/profiler_data") <= 0) {
++	if (GetAppConfigPath(path, sizeof(path), "moonclip-engine/profiler_data") <= 0) {
+ 		return false;
+ 	}
+ 	if (!do_mkdir(path)) {
+@@ -431,7 +431,7 @@ static bool MakeUserDirs()
+ 	}
+ 
+ #ifdef _WIN32
+-	if (GetAppConfigPath(path, sizeof(path), "obs-studio/crashes") <= 0) {
++	if (GetAppConfigPath(path, sizeof(path), "moonclip-engine/crashes") <= 0) {
+ 		return false;
+ 	}
+ 	if (!do_mkdir(path)) {
+@@ -439,14 +439,14 @@ static bool MakeUserDirs()
+ 	}
+ #endif
+ 
+-	if (GetAppConfigPath(path, sizeof(path), "obs-studio/updates") <= 0) {
++	if (GetAppConfigPath(path, sizeof(path), "moonclip-engine/updates") <= 0) {
+ 		return false;
+ 	}
+ 	if (!do_mkdir(path)) {
+ 		return false;
+ 	}
+ 
+-	if (GetAppConfigPath(path, sizeof(path), "obs-studio/plugin_config") <= 0) {
++	if (GetAppConfigPath(path, sizeof(path), "moonclip-engine/plugin_config") <= 0) {
+ 		return false;
+ 	}
+ 	if (!do_mkdir(path)) {
+@@ -456,9 +456,9 @@ static bool MakeUserDirs()
+ 	return true;
+ }
+ 
+-constexpr std::string_view OBSProfileSubDirectory = "obs-studio/basic/profiles";
+-constexpr std::string_view OBSScenesSubDirectory = "obs-studio/basic/scenes";
+-constexpr std::string_view OBSPluginManagerSubDirectory = "obs-studio/plugin_manager";
++constexpr std::string_view OBSProfileSubDirectory = "moonclip-engine/basic/profiles";
++constexpr std::string_view OBSScenesSubDirectory = "moonclip-engine/basic/scenes";
++constexpr std::string_view OBSPluginManagerSubDirectory = "moonclip-engine/plugin_manager";
+ 
+ static bool MakeUserProfileDirs()
+ {
+@@ -539,7 +539,7 @@ bool OBSApp::InitGlobalConfig()
+ {
+ 	char path[512];
+ 
+-	int len = GetAppConfigPath(path, sizeof(path), "obs-studio/global.ini");
++	int len = GetAppConfigPath(path, sizeof(path), "moonclip-engine/global.ini");
+ 	if (len <= 0) {
+ 		return false;
+ 	}
+@@ -611,7 +611,7 @@ bool OBSApp::InitGlobalConfig()
+ 
+ bool OBSApp::InitUserConfig(std::filesystem::path &userConfigLocation, uint32_t lastVersion)
+ {
+-	const std::string userConfigFile = userConfigLocation.u8string() + "/obs-studio/user.ini";
++	const std::string userConfigFile = userConfigLocation.u8string() + "/moonclip-engine/user.ini";
+ 
+ 	int errorCode = userConfig.Open(userConfigFile.c_str(), CONFIG_OPEN_ALWAYS);
+ 
+@@ -671,8 +671,8 @@ void OBSApp::MigrateLegacySettings(const uint32_t lastVersion)
+ 	}
+ }
+ 
+-static constexpr string_view OBSGlobalIniPath = "/obs-studio/global.ini";
+-static constexpr string_view OBSUserIniPath = "/obs-studio/user.ini";
++static constexpr string_view OBSGlobalIniPath = "/moonclip-engine/global.ini";
++static constexpr string_view OBSUserIniPath = "/moonclip-engine/user.ini";
+ 
+ bool OBSApp::MigrateGlobalSettings()
+ {
+@@ -834,7 +834,7 @@ bool LoadBranchesFile(vector<UpdateBranch> &out)
+ 	string error;
+ 	string branchesText;
+ 
+-	BPtr<char> branchesFilePath = GetAppConfigPathPtr("obs-studio/updates/branches.json");
++	BPtr<char> branchesFilePath = GetAppConfigPathPtr("moonclip-engine/updates/branches.json");
+ 
+ 	QFile branchesFile(branchesFilePath.Get());
+ 	if (!branchesFile.open(QIODevice::ReadOnly)) {
+@@ -972,7 +972,7 @@ static void move_basic_to_profiles(void)
+ {
+ 	char path[512];
+ 
+-	if (GetAppConfigPath(path, 512, "obs-studio/basic") <= 0) {
++	if (GetAppConfigPath(path, 512, "moonclip-engine/basic") <= 0) {
+ 		return;
+ 	}
+ 
+@@ -983,7 +983,7 @@ static void move_basic_to_profiles(void)
+ 	}
+ 
+ 	const std::filesystem::path profilesPath =
+-		App()->userProfilesLocation / std::filesystem::u8path("obs-studio/basic/profiles");
++		App()->userProfilesLocation / std::filesystem::u8path("moonclip-engine/basic/profiles");
+ 
+ 	if (std::filesystem::exists(profilesPath)) {
+ 		return;
+@@ -1036,7 +1036,7 @@ static void move_basic_to_scene_collections(void)
+ {
+ 	char path[512];
+ 
+-	if (GetAppConfigPath(path, 512, "obs-studio/basic") <= 0) {
++	if (GetAppConfigPath(path, 512, "moonclip-engine/basic") <= 0) {
+ 		return;
+ 	}
+ 
+@@ -1047,7 +1047,7 @@ static void move_basic_to_scene_collections(void)
+ 	}
+ 
+ 	const std::filesystem::path sceneCollectionPath =
+-		App()->userScenesLocation / std::filesystem::u8path("obs-studio/basic/scenes");
++		App()->userScenesLocation / std::filesystem::u8path("moonclip-engine/basic/scenes");
+ 
+ 	if (std::filesystem::exists(sceneCollectionPath)) {
+ 		return;
+@@ -1171,7 +1171,7 @@ static bool StartupOBS(const char *locale, profiler_name_store_t *store)
+ {
+ 	char path[512];
+ 
+-	if (GetAppConfigPath(path, sizeof(path), "obs-studio/plugin_config") <= 0) {
++	if (GetAppConfigPath(path, sizeof(path), "moonclip-engine/plugin_config") <= 0) {
+ 		return false;
+ 	}
+ 
+@@ -1421,14 +1421,14 @@ void OBSApp::uploadLastAppLog() const
+ {
+ 	OBSBasic *basicWindow = static_cast<OBSBasic *>(GetMainWindow());
+ 
+-	basicWindow->UploadLog("obs-studio/logs", GetLastLog(), OBS::LogFileType::LastAppLog);
++	basicWindow->UploadLog("moonclip-engine/logs", GetLastLog(), OBS::LogFileType::LastAppLog);
+ }
+ 
+ void OBSApp::uploadCurrentAppLog() const
+ {
+ 	OBSBasic *basicWindow = static_cast<OBSBasic *>(GetMainWindow());
+ 
+-	basicWindow->UploadLog("obs-studio/logs", GetCurrentLog(), OBS::LogFileType::CurrentAppLog);
++	basicWindow->UploadLog("moonclip-engine/logs", GetCurrentLog(), OBS::LogFileType::CurrentAppLog);
+ }
+ 
+ void OBSApp::uploadLastCrashLog()
+diff --git a/frontend/OBSApp_Themes.cpp b/frontend/OBSApp_Themes.cpp
+index 653c529..45e0ed3 100644
+--- a/frontend/OBSApp_Themes.cpp
++++ b/frontend/OBSApp_Themes.cpp
+@@ -477,7 +477,7 @@ void OBSApp::FindThemes()
+ 	}
+ 
+ 	{
+-		const std::string themeDir = App()->userConfigLocation.u8string() + "/obs-studio/themes";
++		const std::string themeDir = App()->userConfigLocation.u8string() + "/moonclip-engine/themes";
+ 
+ 		QDirIterator it(QString::fromStdString(themeDir), filters, QDir::Files);
+ 
+@@ -995,7 +995,7 @@ bool OBSApp::SetTheme(const QString &name)
+ 
+ #ifdef _DEBUG
+ 	/* Write resulting QSS to file in config dir "themes" folder. */
+-	string filename("obs-studio/themes/");
++	string filename("moonclip-engine/themes/");
+ 	filename += theme->id.toStdString();
+ 	filename += ".out";
+ 
+@@ -1064,7 +1064,7 @@ bool OBSApp::InitTheme()
+ 	}
+ 
+ 	char userDir[512];
+-	if (GetAppConfigPath(userDir, sizeof(userDir), "obs-studio/themes")) {
++	if (GetAppConfigPath(userDir, sizeof(userDir), "moonclip-engine/themes")) {
+ 		auto configSearchDir = filesystem::u8path(userDir);
+ 		QDir::addSearchPath("theme", absolute(configSearchDir));
+ 	}
+diff --git a/frontend/dialogs/OBSAbout.cpp b/frontend/dialogs/OBSAbout.cpp
+index 9660008..31cc666 100644
+--- a/frontend/dialogs/OBSAbout.cpp
++++ b/frontend/dialogs/OBSAbout.cpp
+@@ -128,7 +128,7 @@ void OBSAbout::ShowAbout()
+ void OBSAbout::ShowAuthors()
+ {
+ 	std::string path;
+-	QString error = QTStr("About.Error").arg("https://github.com/obsproject/obs-studio/blob/master/AUTHORS");
++	QString error = QTStr("About.Error").arg("https://github.com/obsproject/moonclip-engine/blob/master/AUTHORS");
+ 
+ #ifdef __APPLE__
+ 	if (!GetDataFilePath("AUTHORS", path)) {
+@@ -154,7 +154,7 @@ void OBSAbout::ShowAuthors()
+ void OBSAbout::ShowLicense()
+ {
+ 	std::string path;
+-	QString error = QTStr("About.Error").arg("https://github.com/obsproject/obs-studio/blob/master/COPYING");
++	QString error = QTStr("About.Error").arg("https://github.com/obsproject/moonclip-engine/blob/master/COPYING");
+ 
+ 	if (!GetDataFilePath("license/gplv2.txt", path)) {
+ 		ui->textBrowser->setPlainText(error);
+diff --git a/frontend/dialogs/OBSLogViewer.cpp b/frontend/dialogs/OBSLogViewer.cpp
+index 74b3e58..82dd5c1 100644
+--- a/frontend/dialogs/OBSLogViewer.cpp
++++ b/frontend/dialogs/OBSLogViewer.cpp
+@@ -48,7 +48,7 @@ void OBSLogViewer::InitLog()
+ 	char logDir[512];
+ 	std::string path;
+ 
+-	if (GetAppConfigPath(logDir, sizeof(logDir), "obs-studio/logs")) {
++	if (GetAppConfigPath(logDir, sizeof(logDir), "moonclip-engine/logs")) {
+ 		path += logDir;
+ 		path += "/";
+ 		path += App()->GetCurrentLog();
+@@ -115,7 +115,7 @@ void OBSLogViewer::AddLine(int type, const QString &str)
+ void OBSLogViewer::on_openButton_clicked()
+ {
+ 	char logDir[512];
+-	if (GetAppConfigPath(logDir, sizeof(logDir), "obs-studio/logs") <= 0) {
++	if (GetAppConfigPath(logDir, sizeof(logDir), "moonclip-engine/logs") <= 0) {
+ 		return;
+ 	}
+ 
+diff --git a/frontend/importer/OBSImporter.cpp b/frontend/importer/OBSImporter.cpp
+index 4a90722..2955563 100644
+--- a/frontend/importer/OBSImporter.cpp
++++ b/frontend/importer/OBSImporter.cpp
+@@ -165,7 +165,7 @@ bool GetUnusedName(std::string &name)
+ 	return true;
+ }
+ 
+-constexpr std::string_view OBSSceneCollectionPath = "obs-studio/basic/scenes/";
++constexpr std::string_view OBSSceneCollectionPath = "moonclip-engine/basic/scenes/";
+ 
+ void OBSImporter::importCollections()
+ {
+diff --git a/frontend/obs-main.cpp b/frontend/obs-main.cpp
+index df0ec63..7b8eb9e 100644
+--- a/frontend/obs-main.cpp
++++ b/frontend/obs-main.cpp
+@@ -393,10 +393,10 @@ static void create_log_file(fstream &logFile)
+ {
+ 	stringstream dst;
+ 
+-	get_last_log(false, "obs-studio/logs", lastLogFile);
++	get_last_log(false, "moonclip-engine/logs", lastLogFile);
+ 
+ 	currentLogFile = GenerateTimeDateFilename("txt");
+-	dst << "obs-studio/logs/" << currentLogFile.c_str();
++	dst << "moonclip-engine/logs/" << currentLogFile.c_str();
+ 
+ 	BPtr<char> path(GetAppConfigPathPtr(dst.str().c_str()));
+ 
+@@ -409,7 +409,7 @@ static void create_log_file(fstream &logFile)
+ #endif
+ 
+ 	if (logFile.is_open()) {
+-		delete_oldest_file(false, "obs-studio/logs");
++		delete_oldest_file(false, "moonclip-engine/logs");
+ 		base_set_log_handler(do_log, &logFile);
+ 	} else {
+ 		blog(LOG_ERROR, "Failed to open log file");
+@@ -451,7 +451,7 @@ static void SaveProfilerData(const ProfilerSnapshot &snap)
+ 
+ #define LITERAL_SIZE(x) x, (sizeof(x) - 1)
+ 	ostringstream dst;
+-	dst.write(LITERAL_SIZE("obs-studio/profiler_data/"));
++	dst.write(LITERAL_SIZE("moonclip-engine/profiler_data/"));
+ 	dst.write(currentLogFile.c_str(), pos);
+ 	dst.write(LITERAL_SIZE(".csv.gz"));
+ #undef LITERAL_SIZE
+@@ -542,7 +542,7 @@ static int run_program(fstream &logFile, int argc, char *argv[])
+ 		bool created_log = false;
+ 
+ 		program.AppInit();
+-		delete_oldest_file(false, "obs-studio/profiler_data");
++		delete_oldest_file(false, "moonclip-engine/profiler_data");
+ 
+ 		OBSTranslator translator;
+ 		program.installTranslator(&translator);
+@@ -724,7 +724,7 @@ static void main_crash_handler(const char *format, va_list args, void * /* param
+ 	vsnprintf(text, MAX_CRASH_REPORT_SIZE, format, args);
+ 	text[MAX_CRASH_REPORT_SIZE - 1] = 0;
+ 
+-	string crashFilePath = "obs-studio/crashes";
++	string crashFilePath = "moonclip-engine/crashes";
+ 
+ 	delete_oldest_file(true, crashFilePath.c_str());
+ 
+diff --git a/frontend/plugin-manager/PluginManager.cpp b/frontend/plugin-manager/PluginManager.cpp
+index 5cd351d..4584b8c 100644
+--- a/frontend/plugin-manager/PluginManager.cpp
++++ b/frontend/plugin-manager/PluginManager.cpp
+@@ -62,7 +62,7 @@ void addModuleToPluginManagerImpl(void *param, obs_module_t *newModule)
+ 	}
+ }
+ 
+-constexpr std::string_view OBSPluginManagerPath = "obs-studio/plugin_manager";
++constexpr std::string_view OBSPluginManagerPath = "moonclip-engine/plugin_manager";
+ constexpr std::string_view OBSPluginManagerModulesFile = "modules.json";
+ 
+ void PluginManager::preLoad()
+diff --git a/frontend/utility/CrashHandler.cpp b/frontend/utility/CrashHandler.cpp
+index 15b780f..db7bf74 100644
+--- a/frontend/utility/CrashHandler.cpp
++++ b/frontend/utility/CrashHandler.cpp
+@@ -33,7 +33,7 @@ using CrashLogUpdateResult = OBS::CrashHandler::CrashLogUpdateResult;
+ 
+ namespace {
+ 
+-constexpr std::string_view crashSentinelPath = "obs-studio/.sentinel";
++constexpr std::string_view crashSentinelPath = "moonclip-engine/.sentinel";
+ constexpr std::string_view crashSentinelPrefix = "run_";
+ constexpr std::string_view crashUploadURL = "https://obsproject.com/logs/upload";
+ 
+diff --git a/frontend/utility/CrashHandler_Windows.cpp b/frontend/utility/CrashHandler_Windows.cpp
+index 119b0c4..6d57a0b 100644
+--- a/frontend/utility/CrashHandler_Windows.cpp
++++ b/frontend/utility/CrashHandler_Windows.cpp
+@@ -74,7 +74,7 @@ std::filesystem::path CrashHandler::findLastCrashLog() const
+ 
+ std::filesystem::path CrashHandler::getCrashLogDirectory() const
+ {
+-	BPtr crashLogDirectory = GetAppConfigPathPtr("obs-studio/crashes");
++	BPtr crashLogDirectory = GetAppConfigPathPtr("moonclip-engine/crashes");
+ 
+ 	std::string crashLogDirectoryString = crashLogDirectory.Get();
+ 
+diff --git a/frontend/utility/MacUpdateThread.cpp b/frontend/utility/MacUpdateThread.cpp
+index 3af5b8d..c5726b3 100644
+--- a/frontend/utility/MacUpdateThread.cpp
++++ b/frontend/utility/MacUpdateThread.cpp
+@@ -55,7 +55,7 @@ try {
+ 	/* ----------------------------------- *
+ 	 * get branches from server            */
+ 
+-	if (FetchAndVerifyFile("branches", "obs-studio/updates/branches.json", MAC_BRANCHES_URL, &text)) {
++	if (FetchAndVerifyFile("branches", "moonclip-engine/updates/branches.json", MAC_BRANCHES_URL, &text)) {
+ 		App()->SetBranchData(text);
+ 	}
+ 
+diff --git a/frontend/utility/WhatsNewInfoThread.cpp b/frontend/utility/WhatsNewInfoThread.cpp
+index 058b87d..39a5cc1 100644
+--- a/frontend/utility/WhatsNewInfoThread.cpp
++++ b/frontend/utility/WhatsNewInfoThread.cpp
+@@ -288,7 +288,7 @@ void WhatsNewInfoThread::run()
+ try {
+ 	std::string text;
+ 
+-	if (FetchAndVerifyFile("whatsnew", "obs-studio/updates/whatsnew.json", WHATSNEW_URL, &text)) {
++	if (FetchAndVerifyFile("whatsnew", "moonclip-engine/updates/whatsnew.json", WHATSNEW_URL, &text)) {
+ 		emit Result(text);
+ 	}
+ } catch (std::string &text) {
+diff --git a/frontend/utility/platform-windows.cpp b/frontend/utility/platform-windows.cpp
+index 1cb1ef0..a17810a 100644
+--- a/frontend/utility/platform-windows.cpp
++++ b/frontend/utility/platform-windows.cpp
+@@ -50,11 +50,11 @@ static inline bool check_path(const char *data, const char *path, string &output
+ 
+ bool GetDataFilePath(const char *data, string &output)
+ {
+-	if (check_path(data, "data/obs-studio/", output)) {
++	if (check_path(data, "data/moonclip-engine/", output)) {
+ 		return true;
+ 	}
+ 
+-	return check_path(data, OBS_DATA_PATH "/obs-studio/", output);
++	return check_path(data, OBS_DATA_PATH "/moonclip-engine/", output);
+ }
+ 
+ string GetDefaultVideoSavePath()
+diff --git a/frontend/utility/platform-x11.cpp b/frontend/utility/platform-x11.cpp
+index 8c96573..071a0bb 100644
+--- a/frontend/utility/platform-x11.cpp
++++ b/frontend/utility/platform-x11.cpp
+@@ -191,7 +191,7 @@ static inline bool check_path(const char *data, const char *path, string &output
+ 	return (access(output.c_str(), R_OK) == 0);
+ }
+ 
+-#define INSTALL_DATA_PATH OBS_INSTALL_PREFIX "/" OBS_DATA_PATH "/obs-studio/"
++#define INSTALL_DATA_PATH OBS_INSTALL_PREFIX "/" OBS_DATA_PATH "/moonclip-engine/"
+ 
+ bool GetDataFilePath(const char *data, string &output)
+ {
+@@ -202,7 +202,7 @@ bool GetDataFilePath(const char *data, string &output)
+ 		}
+ 	}
+ 
+-	char *relative_data_path = os_get_executable_path_ptr("../" OBS_DATA_PATH "/obs-studio/");
++	char *relative_data_path = os_get_executable_path_ptr("../" OBS_DATA_PATH "/moonclip-engine/");
+ 
+ 	if (relative_data_path) {
+ 		bool result = check_path(data, relative_data_path, output);
+@@ -213,7 +213,7 @@ bool GetDataFilePath(const char *data, string &output)
+ 		}
+ 	}
+ 
+-	if (check_path(data, OBS_DATA_PATH "/obs-studio/", output)) {
++	if (check_path(data, OBS_DATA_PATH "/moonclip-engine/", output)) {
+ 		return true;
+ 	}
+ 
+diff --git a/frontend/widgets/OBSBasic.cpp b/frontend/widgets/OBSBasic.cpp
+index b6f5445..bbc159c 100644
+--- a/frontend/widgets/OBSBasic.cpp
++++ b/frontend/widgets/OBSBasic.cpp
+@@ -146,11 +146,11 @@ static void AddExtraModulePaths()
+ 
+ 	char base_module_dir[512];
+ #if defined(_WIN32)
+-	int ret = GetProgramDataPath(base_module_dir, sizeof(base_module_dir), "obs-studio/plugins/%module%");
++	int ret = GetProgramDataPath(base_module_dir, sizeof(base_module_dir), "moonclip-engine/plugins/%module%");
+ #elif defined(__APPLE__)
+-	int ret = GetAppConfigPath(base_module_dir, sizeof(base_module_dir), "obs-studio/plugins/%module%.plugin");
++	int ret = GetAppConfigPath(base_module_dir, sizeof(base_module_dir), "moonclip-engine/plugins/%module%.plugin");
+ #else
+-	int ret = GetAppConfigPath(base_module_dir, sizeof(base_module_dir), "obs-studio/plugins/%module%");
++	int ret = GetAppConfigPath(base_module_dir, sizeof(base_module_dir), "moonclip-engine/plugins/%module%");
+ #endif
+ 
+ 	if (ret <= 0) {
+@@ -165,13 +165,13 @@ static void AddExtraModulePaths()
+ #ifndef __aarch64__
+ 	/* Legacy System Library Search Path */
+ 	char system_legacy_module_dir[PATH_MAX];
+-	GetProgramDataPath(system_legacy_module_dir, sizeof(system_legacy_module_dir), "obs-studio/plugins/%module%");
++	GetProgramDataPath(system_legacy_module_dir, sizeof(system_legacy_module_dir), "moonclip-engine/plugins/%module%");
+ 	std::string path_system_legacy = system_legacy_module_dir;
+ 	obs_add_module_path((path_system_legacy + "/bin").c_str(), (path_system_legacy + "/data").c_str());
+ 
+ 	/* Legacy User Application Support Search Path */
+ 	char user_legacy_module_dir[PATH_MAX];
+-	GetAppConfigPath(user_legacy_module_dir, sizeof(user_legacy_module_dir), "obs-studio/plugins/%module%");
++	GetAppConfigPath(user_legacy_module_dir, sizeof(user_legacy_module_dir), "moonclip-engine/plugins/%module%");
+ 	std::string path_user_legacy = user_legacy_module_dir;
+ 	obs_add_module_path((path_user_legacy + "/bin").c_str(), (path_user_legacy + "/data").c_str());
+ #endif
+diff --git a/frontend/widgets/OBSBasic_MainControls.cpp b/frontend/widgets/OBSBasic_MainControls.cpp
+index 40b3aef..b908362 100644
+--- a/frontend/widgets/OBSBasic_MainControls.cpp
++++ b/frontend/widgets/OBSBasic_MainControls.cpp
+@@ -313,7 +313,7 @@ void OBSBasic::UploadLog(const char *subdir, const char *file, const LogUploadTy
+ void OBSBasic::on_actionShowLogs_triggered()
+ {
+ 	char logDir[512];
+-	if (GetAppConfigPath(logDir, sizeof(logDir), "obs-studio/logs") <= 0) {
++	if (GetAppConfigPath(logDir, sizeof(logDir), "moonclip-engine/logs") <= 0) {
+ 		return;
+ 	}
+ 
+@@ -457,7 +457,7 @@ void OBSBasic::on_actionShowWhatsNew_triggered()
+ 
+ void OBSBasic::on_actionReleaseNotes_triggered()
+ {
+-	QString addr("https://github.com/obsproject/obs-studio/releases");
++	QString addr("https://github.com/obsproject/moonclip-engine/releases");
+ 	QUrl url(QString("%1/%2").arg(addr, obs_get_version_string()), QUrl::TolerantMode);
+ 	QDesktopServices::openUrl(url);
+ }
+diff --git a/frontend/widgets/OBSBasic_Profiles.cpp b/frontend/widgets/OBSBasic_Profiles.cpp
+index 836be77..3b6bf38 100644
+--- a/frontend/widgets/OBSBasic_Profiles.cpp
++++ b/frontend/widgets/OBSBasic_Profiles.cpp
+@@ -29,7 +29,7 @@
+ 
+ // MARK: Constant Expressions
+ 
+-constexpr std::string_view OBSProfilePath = "/obs-studio/basic/profiles/";
++constexpr std::string_view OBSProfilePath = "/moonclip-engine/basic/profiles/";
+ constexpr std::string_view OBSProfileSettingsFile = "basic.ini";
+ 
+ // MARK: Forward Declarations
+diff --git a/frontend/widgets/OBSBasic_SceneCollections.cpp b/frontend/widgets/OBSBasic_SceneCollections.cpp
+index fbbcc37..9f42bb5 100644
+--- a/frontend/widgets/OBSBasic_SceneCollections.cpp
++++ b/frontend/widgets/OBSBasic_SceneCollections.cpp
+@@ -42,7 +42,7 @@ using SceneCollection = OBS::SceneCollection;
+ 
+ // MARK: Constant Expressions
+ 
+-static constexpr std::string_view SceneCollectionPath = "/obs-studio/basic/scenes/";
++static constexpr std::string_view SceneCollectionPath = "/moonclip-engine/basic/scenes/";
+ 
+ namespace DataKeys {
+ static constexpr std::string_view AbsoluteCoordinates = "AbsoluteCoordinates";

@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, CustomApp, RegisterAppInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -18,6 +18,7 @@ const MIGRATION_005: &str = include_str!("../../migrations/005_fps.sql");
 const MIGRATION_006: &str = include_str!("../../migrations/006_monitor.sql");
 const MIGRATION_007: &str = include_str!("../../migrations/007_obs.sql");
 const MIGRATION_008: &str = include_str!("../../migrations/008_custom_video.sql");
+const MIGRATION_009: &str = include_str!("../../migrations/009_engine_keys.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -60,6 +61,10 @@ impl DbState {
             if version < 8 {
                 conn.execute_batch(MIGRATION_008)
                     .map_err(|e| format!("migration 008 failed: {e}"))?;
+            }
+            if version < 9 {
+                conn.execute_batch(MIGRATION_009)
+                    .map_err(|e| format!("migration 009 failed: {e}"))?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
@@ -350,11 +355,11 @@ impl DbState {
             "capture_max_fps",
             "faststart",
             "capture_window",
-            "obs_ws_port",
-            "obs_ws_password",
-            "obs_restore_token",
-            "obs_source_width",
-            "obs_source_height",
+            "engine_ws_port",
+            "engine_ws_password",
+            "engine_restore_token",
+            "engine_source_width",
+            "engine_source_height",
         ];
         if !ALLOWED.contains(&key) {
             return Err(format!("unknown setting: {key}"));
@@ -482,5 +487,48 @@ impl DbState {
             return Err("app not found".into());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_009_renames_engine_keys() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO settings VALUES
+               ('obs_ws_port','4456'),
+               ('obs_restore_token','tok'),
+               ('engine_source_width','1920');",
+        )
+        .unwrap();
+        conn.execute_batch(MIGRATION_009).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT key FROM settings ORDER BY key")
+            .unwrap();
+        let keys: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            keys,
+            vec![
+                "engine_restore_token",
+                "engine_source_width",
+                "engine_ws_port"
+            ]
+        );
+        let port: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'engine_ws_port'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(port, "4456");
     }
 }

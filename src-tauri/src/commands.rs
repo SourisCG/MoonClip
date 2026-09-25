@@ -308,15 +308,15 @@ pub(crate) async fn build_capture_config(
     }
 
     // Private obs-websocket: dedicated port + generated password (persisted).
-    let port: u16 = setting_str(&db, "obs_ws_port", "4456")
+    let port: u16 = setting_str(&db, "engine_ws_port", "4456")
         .parse()
         .unwrap_or(4456)
         .clamp(1024, 65535);
-    let mut password = setting_str(&db, "obs_ws_password", "");
+    let mut password = setting_str(&db, "engine_ws_password", "");
     if password.len() < 16 {
         password =
             uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
-        let _ = db.set_setting("obs_ws_password", &password);
+        let _ = db.set_setting("engine_ws_password", &password);
     }
 
     let (obs_bin, _) = resolve_obs(app)?;
@@ -364,7 +364,7 @@ pub(crate) async fn build_capture_config(
         vendor: video::vendor().await,
         base_width,
         base_height,
-        portal_restore_token: setting_str(&db, "obs_restore_token", ""),
+        portal_restore_token: setting_str(&db, "engine_restore_token", ""),
         custom_encoder,
         custom_video,
         obs_bin: Some(obs_bin),
@@ -432,12 +432,12 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     };
     if let Some(token) = engine.read_restore_token().await {
         let db = app.state::<DbState>();
-        let _ = db.set_setting("obs_restore_token", &token);
+        let _ = db.set_setting("engine_restore_token", &token);
     }
     {
         let db = app.state::<DbState>();
-        let _ = db.set_setting("obs_source_width", &src_w.to_string());
-        let _ = db.set_setting("obs_source_height", &src_h.to_string());
+        let _ = db.set_setting("engine_source_width", &src_w.to_string());
+        let _ = db.set_setting("engine_source_height", &src_h.to_string());
     }
     let tracks = engine.tracks_linked();
     {
@@ -830,16 +830,16 @@ pub async fn clear_portal_token(app: AppHandle) -> Result<EngineStatus, String> 
     }
     {
         let db = app.state::<DbState>();
-        db.set_setting("obs_restore_token", "")?;
-        db.set_setting("obs_source_width", "")?;
-        db.set_setting("obs_source_height", "")?;
+        db.set_setting("engine_restore_token", "")?;
+        db.set_setting("engine_source_width", "")?;
+        db.set_setting("engine_source_height", "")?;
     }
     // The generated collection carries the last RestoreToken OBS saved and
     // `write_obs_config` merges it back, so it must be dropped too or the next
     // start would restore silently and the picker would never appear.
     if let Ok(root) = os::obs_config_root() {
         let collection = root
-            .join("obs-studio")
+            .join(os::engine_config_dir())
             .join("basic")
             .join("scenes")
             .join(format!("{}.json", obs::OBS_COLLECTION));
@@ -1258,7 +1258,7 @@ pub struct ObsInfo {
 #[tauri::command]
 pub async fn obs_info(app: AppHandle) -> Result<ObsInfo, String> {
     let db = app.state::<DbState>();
-    let port = setting_str(&db, "obs_ws_port", "4456")
+    let port = setting_str(&db, "engine_ws_port", "4456")
         .parse()
         .unwrap_or(4456);
     let config_root = os::obs_config_root().unwrap_or_default();
@@ -1292,7 +1292,7 @@ pub async fn obs_info(app: AppHandle) -> Result<ObsInfo, String> {
         collection: obs::OBS_COLLECTION.to_string(),
         websocket_port: port,
         source,
-        log_tail: obs::read_obs_log_tail(&config_root),
+        log_tail: obs::read_obs_log_tail(&config_root, os::engine_config_dir()),
     })
 }
 
@@ -1661,7 +1661,7 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         current_height,
         current_fps,
         current_monitor,
-        portal_ready: !setting_str(&db, "obs_restore_token", "").is_empty(),
+        portal_ready: !setting_str(&db, "engine_restore_token", "").is_empty(),
         buffer_height: current_height,
         transcoding: false,
         max_source_height,

@@ -1,13 +1,13 @@
 //! Linux platform binding for the shared embedded-OBS engine.
 //!
-//! Isolation strategy: OBS is launched with
-//! `XDG_CONFIG_HOME=<MoonClip data dir>/obs/config`, so OBS writes its whole
-//! `obs-studio/` tree (config, logs, plugin config) there. The user's own
+//! Isolation strategy: the engine is launched with
+//! `XDG_CONFIG_HOME=<MoonClip data dir>/engine/config`, so it writes its whole
+//! config tree (config, logs, plugin config) there. The user's own
 //! `~/.config/obs-studio` is never read or written, and both apps can run at
 //! the same time (`--multi`, private websocket port).
 //!
-//! The bundled OBS is relocatable (RUNPATH `$ORIGIN/../lib64`), so no copy is
-//! needed; a system `obs` fallback (dev) gets the exact same env treatment.
+//! The bundled engine is relocatable (RUNPATH `$ORIGIN/../lib64`), so no copy
+//! is needed; a `MOONCLIP_OBS_BIN` override (dev) gets the same env treatment.
 //!
 //! Anti-cheat: the only capture source generated is PipeWire portal screen
 //! capture (compositor-level). `game_capture` (process hooking) is never used.
@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 use crate::os::shared::encoder_options::{catalog_linux, EncoderEntry};
 use crate::os::shared::engine::{ObsEngine, ObsPlatform, ObsRuntime};
 
+/// Neutral name of the engine config tree inside `config_root` (the patched
+/// build writes `moonclip-engine/` instead of the upstream `obs-studio/`).
+pub const CONFIG_DIR_NAME: &str = "moonclip-engine";
+
 /// Encoder ids compiled into the pinned Linux OBS build (Custom picker).
 pub fn encoder_catalog() -> &'static [EncoderEntry] {
     catalog_linux()
@@ -24,26 +28,44 @@ pub fn encoder_catalog() -> &'static [EncoderEntry] {
 
 pub struct LinuxPlatform;
 
-/// MoonClip-owned OBS config root: `~/.local/share/MoonClip/obs/config`.
-/// Exported to the child as `XDG_CONFIG_HOME`, so OBS writes
-/// `<root>/obs-studio/...` there (config, logs, plugin config).
+/// MoonClip-owned engine config root: `~/.local/share/MoonClip/engine/config`.
+/// Exported to the child as `XDG_CONFIG_HOME`, so the engine writes
+/// `<root>/moonclip-engine/...` there (config, logs, plugin config).
 pub fn config_root() -> Result<PathBuf, String> {
     dirs::data_local_dir()
-        .map(|d| d.join("MoonClip").join("obs").join("config"))
+        .map(|d| d.join("MoonClip").join("engine").join("config"))
         .ok_or_else(|| "cannot resolve XDG data dir".to_string())
 }
 
 impl ObsPlatform for LinuxPlatform {
     fn prepare_runtime(&self, bundled_bin: &Path) -> Result<ObsRuntime, String> {
         // No copy: the embedded build is relocatable and every write is
-        // redirected with XDG_CONFIG_HOME (see obs_launch_env). A system OBS
-        // (dev fallback) is isolated exactly the same way.
+        // redirected with XDG_CONFIG_HOME (see obs_launch_env).
+        let root = config_root()?;
+        // One-time: drop pre-rename trees. Config is regenerated from the DB
+        // on every start (the portal token lives in the DB), so this is
+        // lossless and keeps the upstream name off disk.
+        if let Some(data_root) = root.parent().and_then(|p| p.parent()) {
+            let legacy = data_root.join("obs");
+            if legacy.exists() {
+                let _ = std::fs::remove_dir_all(&legacy);
+            }
+        }
+        let stale_tree = root.join("obs-studio");
+        if stale_tree.exists() {
+            let _ = std::fs::remove_dir_all(&stale_tree);
+        }
         Ok(ObsRuntime {
             bin: bundled_bin.to_path_buf(),
-            config_root: config_root()?,
+            config_root: root,
             extra_args: vec![],
             portable: false,
         })
+    }
+
+    /// Neutral config tree name (patched build).
+    fn engine_config_dir(&self) -> &'static str {
+        CONFIG_DIR_NAME
     }
 
     fn obs_launch_env(&self, config_root: &Path) -> Vec<(String, String)> {
@@ -484,14 +506,21 @@ mod tests {
         let root = config_root().unwrap();
         let s = root.to_string_lossy();
         assert!(s.contains("MoonClip"), "{s}");
-        assert!(s.ends_with("obs/config"), "{s}");
+        assert!(s.ends_with("engine/config"), "{s}");
+        assert!(!s.to_lowercase().contains("obs"), "{s}");
         assert!(!s.ends_with(".config/obs-studio"), "{s}");
+    }
+
+    #[test]
+    fn config_dir_name_is_neutral() {
+        assert!(!CONFIG_DIR_NAME.to_lowercase().contains("obs"), "{CONFIG_DIR_NAME}");
+        assert_eq!(p().engine_config_dir(), CONFIG_DIR_NAME);
     }
 
     #[test]
     fn launch_args_do_not_force_config_dir() {
         let args = p().obs_launch_args(
-            Path::new("/home/u/.local/share/MoonClip/obs/config"),
+            Path::new("/home/u/.local/share/MoonClip/engine/config"),
             "MoonClip",
             "MoonClip",
         );
@@ -514,13 +543,13 @@ mod tests {
     fn launch_env_isolates_config() {
         let rt = p().prepare_runtime(Path::new("/usr/bin/obs")).unwrap();
         assert!(rt.extra_args.is_empty(), "{:?}", rt.extra_args);
-        let env = p().obs_launch_env(Path::new("/home/u/.local/share/MoonClip/obs/config"));
+        let env = p().obs_launch_env(Path::new("/home/u/.local/share/MoonClip/engine/config"));
         assert_eq!(
             env,
             vec![
                 (
                     "XDG_CONFIG_HOME".to_string(),
-                    "/home/u/.local/share/MoonClip/obs/config".to_string()
+                    "/home/u/.local/share/MoonClip/engine/config".to_string()
                 ),
                 ("QT_NO_XDG_DESKTOP_PORTAL".to_string(), "1".to_string()),
             ]
