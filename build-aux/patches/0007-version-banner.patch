@@ -1,0 +1,13 @@
+diff --git a/frontend/obs-main.cpp b/frontend/obs-main.cpp
+index df0ec63..1e46995 100644
+--- a/frontend/obs-main.cpp
++++ b/frontend/obs-main.cpp
+@@ -1057,7 +1057,7 @@ int main(int argc, char *argv[])
+ 			exit(0);
+ 
+ 		} else if (arg_is(argv[i], "--version", "-V")) {
+-			std::cout << "OBS Studio - " << App()->GetVersionString(false) << "\n";
++			std::cout << "MoonClip Engine - " << App()->GetVersionString(false) << "\n";
+ 			exit(0);
+ 		}
+ 	}

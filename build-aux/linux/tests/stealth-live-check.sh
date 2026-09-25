@@ -58,6 +58,21 @@ check_pid() {
 for pid in $pids; do check_pid "$pid" engine; done
 for pid in $mux; do check_pid "$pid" mux; done
 
+# Version banner: `--version` must not name the upstream product.
+engine_bin="$ROOT/src-tauri/binaries/$TRIPLE/engine/bin/moonclip-engine"
+if [ -x "$engine_bin" ]; then
+  ver="$(XDG_CONFIG_HOME="$(mktemp -d)" "$engine_bin" --version 2>&1 | head -1 || true)"
+  case "$ver" in
+    *[Oo][Bb][Ss]*)
+      echo "FAIL engine --version leaks upstream name: $ver"
+      fail=1
+      ;;
+    *)
+      echo "OK  engine --version: $ver"
+      ;;
+  esac
+fi
+
 # Abstract unix sockets: the upstream single-instance fingerprint lived at
 # @/com/obsproject with the owning PID embedded in its name; our build must
 # never register it (patch 0002).

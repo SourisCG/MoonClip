@@ -794,34 +794,6 @@ pub fn reset_obs_config(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Bounded tail of the newest engine log inside OUR config dir (diagnostics).
-pub fn read_obs_log_tail(root: &Path, config_dir: &str) -> Vec<String> {
-    let logs = root.join(config_dir).join("logs");
-    let Ok(entries) = std::fs::read_dir(&logs) else {
-        return vec![];
-    };
-    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("txt") {
-            continue;
-        }
-        if let Ok(modified) = e.metadata().and_then(|m| m.modified()) {
-            if newest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
-                newest = Some((modified, p));
-            }
-        }
-    }
-    let Some((_, path)) = newest else {
-        return vec![];
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return vec![];
-    };
-    let mut tail: Vec<String> = text.lines().rev().take(40).map(|s| s.to_string()).collect();
-    tail.reverse();
-    tail
-}
 
 /// Portal `RestoreToken` saved by OBS in our own scene collection file.
 /// OBS refreshes the single-use token on every successful screencast Start and
@@ -951,6 +923,7 @@ pub struct ObsEngine {
     profile: Option<ObsProfile>,
     config_root: PathBuf,
     error: Option<String>,
+    events: std::sync::Mutex<std::collections::VecDeque<String>>,
 }
 
 impl ObsEngine {
@@ -962,6 +935,18 @@ impl ObsEngine {
             profile: None,
             config_root: PathBuf::new(),
             error: None,
+            events: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        }
+    }
+
+    /// Bounded engine activity ring shown in Settings -> Engine (diagnostics
+    /// from MoonClip itself; the upstream engine log is never surfaced).
+    fn push_event(&self, msg: impl Into<String>) {
+        if let Ok(mut q) = self.events.lock() {
+            while q.len() >= 200 {
+                q.pop_front();
+            }
+            q.push_back(msg.into());
         }
     }
 
@@ -971,25 +956,13 @@ impl ObsEngine {
             .ok_or_else(|| "obs-websocket not connected".to_string())
     }
 
-    /// Abort a failed start: stop what we spawned and enrich the message with
-    /// the last interesting OBS log line (the QMessageBox reason is not
-    /// written to the log, but encoder/output errors are).
+    /// Abort a failed start: stop what we spawned and record the reason in
+    /// the engine activity ring.
     async fn fail_start(&mut self, msg: String) -> String {
+        self.push_event(format!("error: {msg}"));
         self.error = Some(msg.clone());
         self.stop_buffer().await.ok();
-        let tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
-        let hint = tail
-            .iter()
-            .rev()
-            .find(|line| {
-                let l = line.to_lowercase();
-                l.contains("error") || l.contains("failed") || l.contains("warning")
-            })
-            .cloned();
-        match hint {
-            Some(l) => format!("{msg} | OBS: {l}"),
-            None => msg,
-        }
+        msg
     }
 
     /// Wait until OUR config dir exists, proving OBS is using the portable
@@ -1004,7 +977,7 @@ impl ObsEngine {
             tokio::time::sleep(OBS_BOOT_POLL).await;
         }
         Err(format!(
-            "OBS did not create its isolated config ({}); refusing to run so the user's OBS config is never touched",
+            "capture engine did not create its isolated config ({}); refusing to run so external config is never touched",
             marker.display()
         ))
     }
@@ -1062,11 +1035,12 @@ impl ObsEngine {
                     p.out_width = out_w;
                     p.out_height = out_h;
                 }
-                eprintln!("[moonclip] obs canvas learned: {bw}x{bh} (output {out_w}x{out_h})");
+                eprintln!("[moonclip] engine canvas learned: {bw}x{bh} (output {out_w}x{out_h})");
+                self.push_event(format!("source {bw}x{bh} (output {out_w}x{out_h})"));
                 Some((bw, bh))
             }
             Err(e) => {
-                eprintln!("[moonclip] obs canvas resize failed: {e}");
+                eprintln!("[moonclip] engine canvas resize failed: {e}");
                 None
             }
         }
@@ -1083,7 +1057,7 @@ impl CaptureEngine for ObsEngine {
         let obs_bin = config
             .obs_bin
             .clone()
-            .ok_or_else(|| "embedded OBS binary not resolved".to_string())?;
+            .ok_or_else(|| "capture engine binary not resolved".to_string())?;
         let profile = ObsProfile::from_config(&config, self.platform.as_ref())?;
 
         // 1. Prepare the isolated runtime. Windows stages a WRITABLE PORTABLE
@@ -1094,7 +1068,7 @@ impl CaptureEngine for ObsEngine {
         let rt = self.platform.prepare_runtime(&obs_bin)?;
         self.config_root = rt.config_root.clone();
         eprintln!(
-            "[moonclip] obs runtime: {} (portable={}, config={})",
+            "[moonclip] engine runtime: {} (portable={}, config={})",
             rt.bin.display(),
             rt.portable,
             rt.config_root.display()
@@ -1147,11 +1121,8 @@ impl CaptureEngine for ObsEngine {
         // 5. Safety guard: if OBS writes outside our config, abort immediately.
         if let Err(e) = self.wait_for_config_guard().await {
             self.stop_buffer().await.ok();
-            let tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
-            return Err(match tail.last() {
-                Some(l) => format!("{e} | last log: {l}"),
-                None => e,
-            });
+            self.push_event(format!("error: {e}"));
+            return Err(e);
         }
 
         // 6. Wait for the private obs-websocket, then start the replay buffer.
@@ -1161,11 +1132,9 @@ impl CaptureEngine for ObsEngine {
             if let Some(child) = self.child.as_mut() {
                 if let Ok(Some(status)) = child.try_wait() {
                     self.child = None;
-                    let tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
-                    return Err(format!(
-                        "embedded OBS exited during startup ({status}){}",
-                        tail.last().map(|l| format!(": {l}")).unwrap_or_default()
-                    ));
+                    let msg = format!("capture engine exited during startup ({status})");
+                    self.push_event(format!("error: {msg}"));
+                    return Err(msg);
                 }
             }
             if let Ok(client) =
@@ -1180,7 +1149,7 @@ impl CaptureEngine for ObsEngine {
             Some(ws) => ws,
             None => {
                 self.stop_buffer().await.ok();
-                return Err("embedded OBS websocket did not come up within 45 s".into());
+                return Err("engine control channel did not come up within 45 s".into());
             }
         };
 
@@ -1230,7 +1199,7 @@ impl CaptureEngine for ObsEngine {
         }
 
         eprintln!(
-            "[moonclip] obs: buffer started ({}x{}@{} {} {}kbps, replay {}s/{}MB, tracks {}, audio {})",
+            "[moonclip] engine: buffer active ({}x{}@{} {} {}kbps, replay {}s/{}MB, tracks {}, audio {})",
             profile.out_width,
             profile.out_height,
             profile.fps,
@@ -1241,6 +1210,16 @@ impl CaptureEngine for ObsEngine {
             profile.tracks_linked(),
             if profile.single_track { "Mix" } else { "Mix+Game+Mic" }
         );
+        self.push_event(format!(
+            "buffer active ({}x{}@{} {} {}kbps, replay {}s, tracks {})",
+            profile.out_width,
+            profile.out_height,
+            profile.fps,
+            profile.encoder_id,
+            profile.bitrate_kbps,
+            profile.replay_seconds,
+            profile.tracks_linked(),
+        ));
         self.profile = Some(profile);
         self.obsws = Some(ws);
         Ok(())
@@ -1275,6 +1254,7 @@ impl CaptureEngine for ObsEngine {
             let _ = child.wait().await;
         }
         self.profile = None;
+        self.push_event("engine stopped");
         Ok(())
     }
 
@@ -1292,12 +1272,20 @@ impl CaptureEngine for ObsEngine {
         }
     }
 
-    fn log_tail(&self) -> Vec<String> {
-        let mut tail = read_obs_log_tail(&self.config_root, self.platform.engine_config_dir());
+    fn events_tail(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .events
+            .lock()
+            .map(|q| q.iter().cloned().collect())
+            .unwrap_or_default();
         if let Some(err) = &self.error {
-            tail.push(format!("moonclip: {err}"));
+            out.push(format!("moonclip: {err}"));
         }
-        tail
+        out
+    }
+
+    fn note(&self, msg: &str) {
+        self.push_event(msg);
     }
 
     async fn set_mute(&mut self, track: &str, muted: bool) -> Result<(), String> {
@@ -1586,6 +1574,15 @@ mod tests {
         );
         // A desktop id is not valid for the mic and vice versa.
         assert_eq!(normalize_device_id("default_input", true), "default_input");
+    }
+
+    #[test]
+    fn events_ring_records_notes() {
+        let e = ObsEngine::new(Box::new(FakePlatform));
+        e.note("hello");
+        let tail = e.events_tail();
+        assert_eq!(tail.last().map(String::as_str), Some("hello"));
+        assert!(tail.len() <= 200);
     }
 
     #[test]

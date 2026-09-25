@@ -18,7 +18,7 @@ pub fn new_engine() -> Engine {
 }
 
 pub fn backend_name() -> &'static str {
-    "obs"
+    "engine"
 }
 
 /// Process-level hardening for the recorder host: above-normal CPU class and

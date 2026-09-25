@@ -433,6 +433,7 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     if let Some(token) = engine.read_restore_token().await {
         let db = app.state::<DbState>();
         let _ = db.set_setting("engine_restore_token", &token);
+        engine.note("screen token updated");
     }
     {
         let db = app.state::<DbState>();
@@ -869,7 +870,7 @@ pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
             if engine.check_alive() {
                 (true, Vec::new())
             } else {
-                (false, engine.log_tail())
+                (false, engine.events_tail())
             }
         }
         None => (false, Vec::new()),
@@ -1016,6 +1017,13 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
         t_db.elapsed(),
         size / 1024 / 1024
     );
+    {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        if let Some(eng) = guard.as_ref() {
+            eng.note(&format!("clip saved: {file_name}"));
+        }
+    }
     crate::cue::play_ding();
     let _ = app.emit("moonclip://clip-saved", &clip);
     Ok(clip)
@@ -1240,19 +1248,20 @@ pub async fn set_track_mute(
 /// Embedded OBS status for the Settings UI ("Motor OBS (aislado)").
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ObsInfo {
-    /// OBS binary resolved (bundled or env override).
+    /// Capture engine resolved (bundled or env override).
     pub present: bool,
-    /// `obs --version` output (empty when it cannot be probed).
+    /// Version line reported by the engine binary (empty when it cannot be
+    /// probed).
     pub version: String,
-    /// MoonClip-owned config dir (never the user's OBS config).
+    /// MoonClip-owned config dir (never another app's config).
     pub config_dir: String,
     pub profile: String,
     pub collection: String,
     pub websocket_port: u16,
     /// bundled | env | missing
     pub source: String,
-    /// Last lines of the newest OBS log inside our config dir.
-    pub log_tail: Vec<String>,
+    /// Bounded engine activity tail (MoonClip's own events).
+    pub events_tail: Vec<String>,
 }
 
 #[tauri::command]
@@ -1292,7 +1301,11 @@ pub async fn obs_info(app: AppHandle) -> Result<ObsInfo, String> {
         collection: obs::OBS_COLLECTION.to_string(),
         websocket_port: port,
         source,
-        log_tail: obs::read_obs_log_tail(&config_root, os::engine_config_dir()),
+        events_tail: {
+            let st = app.state::<AppState>();
+            let guard = st.recorder.lock().await;
+            guard.as_ref().map(|e| e.events_tail()).unwrap_or_default()
+        },
     })
 }
 
@@ -1303,7 +1316,7 @@ pub async fn repair_obs_config(app: AppHandle) -> Result<(), String> {
     stop_engine(&app).await?;
     let root = os::obs_config_root()?;
     obs::reset_obs_config(&root)?;
-    eprintln!("[moonclip] obs config reset: {}", root.display());
+    eprintln!("[moonclip] engine config reset: {}", root.display());
     Ok(())
 }
 

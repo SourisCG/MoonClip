@@ -112,7 +112,7 @@ export function ObsEngineSection() {
       </button>
       {showLogs && (
         <pre className="max-h-40 overflow-auto rounded-lg bg-black/50 p-2 font-mono text-[10px] leading-relaxed text-slate-500">
-          {info.log_tail.length > 0 ? info.log_tail.slice(-12).join("\n") : t("obs.no_logs")}
+          {info.events_tail.length > 0 ? info.events_tail.slice(-12).join("\n") : t("obs.no_logs")}
         </pre>
       )}
 

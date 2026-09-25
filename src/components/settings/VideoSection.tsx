@@ -558,7 +558,7 @@ export function VideoSection() {
                   (s.p010_values.length > 0 || s.p010_ints.length > 0);
                 return (
                 <div key={s.key} className={`flex items-center gap-2 ${off ? "opacity-40" : ""}`}>
-                  <label className="flex shrink-0 cursor-pointer items-center gap-1.5" title="Auto = OBS default">
+                  <label className="flex shrink-0 cursor-pointer items-center gap-1.5" title="Auto = engine default">
                     <input
                       type="checkbox"
                       checked={!!autoKeys[s.key] || off}

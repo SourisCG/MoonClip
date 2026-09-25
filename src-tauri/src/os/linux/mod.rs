@@ -17,7 +17,7 @@ pub fn new_engine() -> Engine {
 }
 
 pub fn backend_name() -> &'static str {
-    "obs"
+    "engine"
 }
 
 /// Free physical memory in MB (`MemAvailable`), used by the settings UI to

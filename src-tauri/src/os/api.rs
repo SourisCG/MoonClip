@@ -103,10 +103,14 @@ pub trait CaptureEngine: Send + Sync {
     fn check_alive(&mut self) -> bool {
         true
     }
-    /// Bounded backend log tail (last lines) for diagnostics after a failure.
-    fn log_tail(&self) -> Vec<String> {
+    /// Bounded engine activity tail (last events) for diagnostics and the
+    /// Settings activity panel. Never the upstream engine's own log.
+    fn events_tail(&self) -> Vec<String> {
         vec![]
     }
+    /// Record one diagnostic event in the engine activity ring (no-op for
+    /// backends without a ring).
+    fn note(&self, _msg: &str) {}
     /// Live mute toggle for one capture track ("game" | "mic"). Backends that
     /// cannot apply it live return an error (the setting still persists).
     async fn set_mute(&mut self, _track: &str, _muted: bool) -> Result<(), String> {

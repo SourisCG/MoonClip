@@ -196,7 +196,7 @@ export interface ObsInfo {
   collection: string;
   websocket_port: number;
   source: string;
-  log_tail: string[];
+  events_tail: string[];
 }
 
 /** Mirrors Rust HardwareTestResult. */
