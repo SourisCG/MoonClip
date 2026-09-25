@@ -1,15 +1,17 @@
-//! Backend binary resolution (Windows): the embedded OBS Studio distribution.
-//! Looked up through the shared bundled-sidecar walker (installed resources
-//! first, dev staging second); PATH is only a loud dev fallback and is never
-//! used to launch a user's OBS.
+//! Backend binary resolution (Windows): the embedded capture engine
+//! distribution. Looked up through the shared bundled-sidecar walker
+//! (installed resources first, dev staging second); PATH is never used to
+//! launch anything else (the user's own install is never touched).
 
 use std::path::PathBuf;
 use tauri::AppHandle;
 
-/// Relative path of the OBS binary inside the bundled sidecar directory.
-pub const OBS_REL: &str = "obs/bin/64bit/obs64.exe";
+/// Relative path of the engine binary inside the bundled sidecar directory
+/// (staged by `build-aux/windows/fetch-obs.ps1` from the pinned upstream zip,
+/// renamed so nothing matches the upstream product name).
+pub const OBS_REL: &str = "engine/bin/64bit/moonclip-engine.exe";
 
-/// Resolve the embedded OBS (`obs64.exe`).
+/// Resolve the embedded engine binary.
 pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     if let Ok(path) = std::env::var("MOONCLIP_OBS_BIN") {
         let p = PathBuf::from(&path);
@@ -22,7 +24,7 @@ pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
         return Ok(found);
     }
     Err(
-        "embedded OBS not found (expected binaries/<triple>/obs/bin/64bit/obs64.exe). \
+        "capture engine not found (expected binaries/<triple>/engine/bin/64bit/moonclip-engine.exe). \
          Run build-aux/windows/fetch-obs.ps1 or reinstall MoonClip."
             .into(),
     )

@@ -78,9 +78,34 @@ resolution is the resolution the user picked; scaling is GPU-side inside OBS).
 - **Canvas learning:** the portal decides the captured size, not our profile.
   After start, MoonClip saves a source screenshot (`SaveSourceScreenshot`),
   parses the PNG size and calls `SetVideoSettings` when the canvas
-  differs; the learned size is persisted (`obs_source_width/height`) and used
+  differs; the learned size is persisted (`engine_source_width/height`) and used
   as the base resolution on the next start (fixes the old 1080p fallback and
   rotated/portrait monitors).
+
+## 2c. Identity and isolation (never visible as "OBS")
+
+The engine is a **modified build**: `build-aux/patches/0001..0007` are applied
+by `build-aux/linux/build-obs.sh` (content-hash `PATCH_REV` invalidates the
+staged cache automatically). Every runtime identity is neutral and the
+upstream-wide mechanisms that would leak it are disabled:
+
+| Surface | Result |
+|---|---|
+| Processes / threads | `moonclip-engine`, `moonclip-mux`, `moonclip-nvenc-test`; no `libobs`/`obs` thread names in `ps -L` |
+| Unix sockets | upstream single-instance probe removed: no `@/com/obsproject` in `/proc/net/unix`, so the user's own OBS never warns about a second instance |
+| Window | hidden through KWin (PID-exact script), title `MoonClip ...`, Wayland app_id `dev.souriscg.moonclip` |
+| Portal / KDE | own app id + alias `.desktop` (`Name=MoonClip`); Qt's portal registration disabled (`QT_NO_XDG_DESKTOP_PORTAL`) |
+| Audio | Pulse client `application.name = MoonClip` |
+| Disk | config tree `moonclip-engine/`, bundle `share/engine/{core,engine-plugins,moonclip-engine}`, `lib64/engine-plugins` |
+| Version | `moonclip-engine --version` -> `MoonClip Engine - 32.2.2` |
+
+Verification scripts: `build-aux/linux/tests/verify-engine-bundle.sh` (bundle
+names), `stealth-live-check.sh` (live processes/threads/sockets/pulse/disk/
+version) and `save_replay.py` (obs-websocket save asserting 1 video + 3 audio
+tracks). Accepted residuals until a deeper library/plugin rename: plugin
+module names (`obs-*.so`, module data dirs, `plugin_config/obs-websocket`),
+`libobs*.so` filenames, raw log content on disk, and the Windows prebuilt
+helper executables (`obs-ffmpeg-mux.exe`, `obs-nvenc-test.exe`).
 
 ## 3. Anti-cheat (hard rule, ~0 hook risk)
 

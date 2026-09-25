@@ -27,6 +27,37 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **V3.6 — identity & isolation (2026-09-24)** — the engine is invisible as
+  "OBS" to the user and to other apps (Discord scans `/proc`):
+  - **Reproducible patch set** `build-aux/patches/0001..0007`, applied by
+    `build-aux/linux/build-obs.sh` (content-hash `PATCH_REV` invalidates the
+    staged cache): binaries `moonclip-engine`/`moonclip-mux`/
+    `moonclip-nvenc-test`, window title `MoonClip ...`, libobs thread names
+    scrubbed, upstream single-instance socket removed (the user's OBS no
+    longer warns, no `@/com/obsproject` in `/proc/net/unix`), Wayland app_id
+    `dev.souriscg.moonclip` + Qt portal registration disabled, PulseAudio
+    client `MoonClip`, config tree `moonclip-engine/`, bundle
+    `share/engine/{core,engine-plugins,moonclip-engine}`, version banner
+    `MoonClip Engine - 32.2.2`.
+  - **Disk/DB:** data root `~/.local/share/MoonClip/engine/config`, settings
+    keys `engine_*` (migration 009), legacy trees and in-bundle `lib64/cmake`
+    dropped one-time; no PATH/system-OBS fallback anymore.
+  - **UI:** Settings copy is product-neutral and the activity panel shows
+    MoonClip's own 200-line event ring instead of the raw upstream log.
+  - **Tests:** `build-aux/linux/tests/{verify-engine-bundle.sh,
+    stealth-live-check.sh,save_replay.py}` cover bundle names, live
+    processes/threads/sockets/pulse/disk/version and a real obs-websocket
+    save (1 video + 3 audio tracks); 68 Rust tests + clippy -D warnings +
+    `pnpm build` green.
+  - **Windows (code complete, owner test pending):** fetch script stages
+    `engine/bin/64bit/moonclip-engine.exe`, runtime root
+    `%LOCALAPPDATA%\MoonClip\engine`, legacy roots swept, title matcher
+    updated.
+  - **Accepted residuals** (deeper library/plugin rename tracked for a later
+    phase): plugin module names (`obs-*.so`, module data dirs,
+    `plugin_config/obs-websocket`), `libobs*.so` filenames, raw log content,
+    Windows prebuilt helper exe names.
+
 - **V3.5 — obs-websocket in-process + Linux zero-contact (2026-09-23)**
   - **obs-cmd removed** (both OSes): v1.0.2 (its latest release) ships
     `input settings`, `input volume`, `input mute` and `audio mute` as stubs

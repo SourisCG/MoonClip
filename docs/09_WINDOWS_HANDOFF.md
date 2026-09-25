@@ -12,7 +12,13 @@ engine: the embedded, isolated OBS Studio driven in-process over obs-websocket (
   `cargo check --target x86_64-pc-windows-msvc`, `cargo test`,
   `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`.
 - Sidecars first: `pwsh build-aux/windows/fetch-ffmpeg.ps1` (editor) and
-  `pwsh build-aux/windows/fetch-obs.ps1` (OBS 32.2.2, pinned).
+  `pwsh build-aux/windows/fetch-obs.ps1` (engine 32.2.2, pinned; stages
+  `engine/bin/64bit/moonclip-engine.exe`).
+- Identity: the launcher is renamed and the runtime root is
+  `%LOCALAPPDATA%\MoonClip\engine` (legacy `MoonClip\obs` is swept). The
+  window-title matcher watches for `MoonClip ...`. Residual (prebuilt zip):
+  `obs-ffmpeg-mux.exe`/`obs-nvenc-test.exe` keep their upstream names;
+  rebuild from source is the only way to scrub those.
 - Minimum supported OS: **Windows 10 version 1903 (build 18362) or later**
   (WGC floor; the installer targets 1903+).
 - Package manager is **pnpm** (never npm). Commits: small, conventional

@@ -16,20 +16,29 @@ component shipped inside MoonClip installers and what the GPL requires for each.
 - **Pinned source (CI/dev fetch from this):**
   - Windows: release `32.2.2`, asset `OBS-Studio-32.2.2-Windows-x64.zip`
     (`sha256:4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1`,
-    ~188 MB). Staged at `src-tauri/binaries/x86_64-pc-windows-msvc/obs/`
-    with the portable layout `bin/64bit/obs64.exe` + `data/` + `obs-plugins/`.
+    ~188 MB). Staged at `src-tauri/binaries/x86_64-pc-windows-msvc/engine/`
+    as `bin/64bit/moonclip-engine.exe` + `data/` + `obs-plugins/` (the
+    launcher is renamed by the fetch script; all lookups are
+    directory-relative).
   - Linux: release `32.2.2` **built from source** (OBS publishes no portable
     Linux tarball; the Ubuntu `.deb` depends on Ubuntu sonames). `build-aux/linux/build-obs.sh`
     clones the pinned tag with submodules, builds with a minimal plugin set
     (`-DENABLE_RELOCATABLE=ON`, browser/VLC/VST/scripting/AJA/decklink/WebRTC
     off) against the distro's Qt6/FFmpeg/PipeWire, and stages a relocatable
-    tree (`bin/obs` + `obs-ffmpeg-mux` + `obs-nvenc-test`, `lib64/obs-plugins`,
-    `share/obs`) at `binaries/x86_64-unknown-linux-gnu/obs/` with RUNPATH
+    tree (`bin/moonclip-engine` + `moonclip-mux` + `moonclip-nvenc-test`,
+    `lib64/engine-plugins`, `share/engine/{core,engine-plugins,moonclip-engine}`)
+    at `binaries/x86_64-unknown-linux-gnu/engine/` with RUNPATH
     `$ORIGIN/../lib64`. The compiled-in install prefix is neutral
     (`/nonexistent/moonclip-obs`) so OBS never scans a second plugin path.
     Build cache: `~/.cache/MoonClip/obs-build` (ninja resumes).
   - Bump the pin by updating `build-aux/windows/fetch-obs.ps1` (Windows) /
     `build-aux/linux/build-obs.sh` (Linux) + `docs/THIRD_PARTY.md`.
+  - **MoonClip identity patches:** `build-aux/patches/0001..0007` are applied
+    to the pristine pinned source before building (neutral binary names,
+    window/app id, instance-socket removal, audio client name, config/data
+    dirs, version banner). They are published in this repository, so the
+    shipped binary is reproducible from the pinned tag + published patches
+    (GPL compliance for the modified build).
 - **Isolation guarantees (why the user's OBS is never touched):**
   - **Windows:** OBS Studio ignores `--config-dir` (verified live: it logged
     "Portable mode: false" and wrote to `%APPDATA%\obs-studio`). MoonClip

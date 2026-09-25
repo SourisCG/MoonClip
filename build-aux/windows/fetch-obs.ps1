@@ -1,5 +1,6 @@
-# Fetch the pinned embedded OBS Studio for Windows (MoonClip V3 capture
-# engine). End users never install OBS separately (see docs/THIRD_PARTY.md).
+# Fetch the pinned embedded capture engine for Windows (MoonClip V3).
+# The upstream zip is staged under a neutral binary name; end users never
+# install anything separately (see docs/THIRD_PARTY.md).
 # Control happens over obs-websocket v5 from MoonClip itself (`obws` crate);
 # no obs-cmd CLI is shipped anymore.
 # Usage:  pwsh -File build-aux/windows/fetch-obs.ps1 [-Force]
@@ -16,8 +17,8 @@ $ObsSha     = if ($env:OBS_SHA256)  { $env:OBS_SHA256 }  else { "4d6e40e3ab155f5
 $Triple = "x86_64-pc-windows-msvc"
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $OutDir = Join-Path $Root "src-tauri/binaries/$Triple"
-$ObsRoot = Join-Path $OutDir "obs"
-$ObsExe = Join-Path $ObsRoot "bin/64bit/obs64.exe"
+$ObsRoot = Join-Path $OutDir "engine"
+$ObsExe = Join-Path $ObsRoot "bin/64bit/moonclip-engine.exe"
 
 if ((Test-Path $ObsExe) -and (-not $Force)) {
   Write-Host "OK (cached): $ObsExe"
@@ -51,8 +52,12 @@ try {
     if (Test-Path $ObsRoot) { Remove-Item -Recurse -Force $ObsRoot }
     New-Item -ItemType Directory -Force $ObsRoot | Out-Null
     Copy-Item -Path (Join-Path $SrcRoot "*") -Destination $ObsRoot -Recurse -Force
-    Write-Host "==> verifying OBS build"
-    if (-not (Test-Path $ObsExe)) { throw "OBS layout unexpected after extraction" }
+    # Identity: rename the launcher so Task Manager (and other apps) never
+    # see the upstream product name; all lookups are directory-relative.
+    $RawExe = Join-Path $ObsRoot "bin/64bit/obs64.exe"
+    if (Test-Path $RawExe) { Move-Item -Force $RawExe $ObsExe }
+    Write-Host "==> verifying engine build"
+    if (-not (Test-Path $ObsExe)) { throw "engine layout unexpected after extraction" }
     # NOTE: the script never executes OBS. Runtime validation happens through
     # MoonClip, which launches a writable portable copy (portable_mode.txt) —
     # never the user's own OBS install/config.

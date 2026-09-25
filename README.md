@@ -112,7 +112,7 @@ pnpm build
 Linux local install (fully embedded: OBS engine + static ffmpeg in the same package):
 
 ```bash
-bash build-aux/linux/build-obs.sh    # compile the pinned OBS once (cached, ~15 min)
+bash build-aux/linux/build-obs.sh    # compile the pinned engine once (identity patches applied, cached)
 bash build-aux/linux/fetch-ffmpeg.sh # pinned static ffmpeg sidecar
 pnpm tauri:build:linux         # RPM with sidecars under /usr/lib/MoonClip/binaries/
 pnpm app:install               # replace install + taskbar association

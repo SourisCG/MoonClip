@@ -1,14 +1,14 @@
-//! Windows platform binding for the shared embedded-OBS engine.
+//! Windows platform binding for the shared embedded capture engine.
 //!
-//! Isolation strategy (proven requirement): OBS Studio does NOT honor
+//! Isolation strategy (proven requirement): the upstream engine does NOT
 //! `--config-dir` on Windows (verified: it logged "Portable mode: false" and
 //! wrote to `%APPDATA%\obs-studio`). So MoonClip stages its OWN writable copy
-//! of the embedded OBS under `%LOCALAPPDATA%\MoonClip\obs`, drops a
-//! `portable_mode.txt` at its root and launches it with `--portable`. OBS then
+//! of the embedded engine under `%LOCALAPPDATA%\MoonClip\engine`, drops a
+//! `portable_mode.txt` at its root and launches it with `--portable`. It then
 //! writes its `config/` INSIDE that copy by construction — the user's
 //! `%APPDATA%\obs-studio` is untouchable, not merely avoided.
 //!
-//! `--multi` lets our instance coexist with the user's own OBS.
+//! `--multi` lets our instance coexist with any other install.
 //!
 //! Anti-cheat: the only capture source we generate is `monitor_capture`
 //! (Desktop Duplication / WGC, compositor-level). `game_capture` is never
@@ -25,13 +25,13 @@ use crate::os::shared::engine::{
     ObsPlatform, ObsRuntime,
 };
 
-/// Encoder ids compiled into the pinned Windows OBS build (Custom picker).
+/// Encoder ids compiled into the pinned Windows engine build (Custom picker).
 pub fn encoder_catalog() -> &'static [EncoderEntry] {
     catalog_windows()
 }
 
 pub struct WindowsPlatform {
-    /// Job object handle (raw) created once; OBS children are assigned to it so
+    /// Job object handle (raw) created once; engine children are assigned so
     /// they die when MoonClip does. 0 = creation failed (fall back to Drop).
     job: OnceLock<isize>,
 }
@@ -82,11 +82,11 @@ impl WindowsPlatform {
 /// source with the same identity patches as Linux).
 pub const CONFIG_DIR_NAME: &str = "obs-studio";
 
-/// MoonClip-owned OBS runtime root: `%LOCALAPPDATA%\MoonClip\obs`. The
+/// MoonClip-owned engine runtime root: `%LOCALAPPDATA%\MoonClip\engine`. The
 /// portable copy lives here (binary + `config/obs-studio`).
 pub fn runtime_root() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()
-        .map(|d| d.join("MoonClip").join("obs"))
+        .map(|d| d.join("MoonClip").join("engine"))
         .ok_or_else(|| "cannot resolve %LOCALAPPDATA%".to_string())?;
     Ok(base)
 }
@@ -96,25 +96,36 @@ pub fn config_root() -> Result<PathBuf, String> {
     Ok(runtime_root()?.join("config"))
 }
 
-/// Root of a bundled OBS tree given its `bin/64bit/obs64.exe` path.
+/// Root of a bundled engine tree given its `bin/64bit/<engine>.exe` path.
 fn source_root(obs_bin: &Path) -> Result<PathBuf, String> {
     obs_bin
         .parent()
         .and_then(|p| p.parent())
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())
-        .ok_or_else(|| format!("unexpected OBS layout: {}", obs_bin.display()))
+        .ok_or_else(|| format!("unexpected engine layout: {}", obs_bin.display()))
 }
 
-/// Staged OBS binary name. Renamed from `obs64.exe` so the embedded
-/// instance is unmistakable in Task Manager (and never confused with the
-/// user's own OBS): all OBS path lookups are directory-relative, the name
-/// itself is unused.
-pub const STAGED_OBS_EXE: &str = "moonclip-obs.exe";
+/// Staged engine binary name. Renamed from the upstream `obs64.exe` so
+/// Task Manager shows MoonClip's engine and other apps cannot match it:
+/// all path lookups are directory-relative, the name itself is unused.
+pub const STAGED_OBS_EXE: &str = "moonclip-engine.exe";
 
 /// Stage (once per bundled build) the writable portable copy.
 fn stage_runtime(obs_bin: &Path) -> Result<PathBuf, String> {
     let root = runtime_root()?;
+    // One-time: sweep and drop the pre-rename runtime root
+    // (`%LOCALAPPDATA%\MoonClip\obs`). Config is regenerated from the DB on
+    // every start (the portal token lives in the DB), so it is lossless.
+    if let Some(base) = root.parent() {
+        let legacy_root = base.join("obs");
+        if legacy_root != root && legacy_root.exists() {
+            for name in ["obs64.exe", "moonclip-obs.exe"] {
+                kill_orphan_process(&legacy_root.join("bin").join("64bit").join(name));
+            }
+            let _ = std::fs::remove_dir_all(&legacy_root);
+        }
+    }
     let runtime_bin = root.join("bin").join("64bit").join(STAGED_OBS_EXE);
     let legacy_bin = root.join("bin").join("64bit").join("obs64.exe");
     let fingerprint = obs_build_fingerprint(obs_bin);
@@ -124,28 +135,28 @@ fn stage_runtime(obs_bin: &Path) -> Result<PathBuf, String> {
     }
     let src = source_root(obs_bin)?;
     eprintln!(
-        "[moonclip] staging portable OBS copy: {} -> {}",
+        "[moonclip] staging portable engine copy: {} -> {}",
         src.display(),
         root.display()
     );
     if root.exists() {
         std::fs::remove_dir_all(&root)
-            .map_err(|e| format!("cannot refresh OBS runtime {}: {e}", root.display()))?;
+            .map_err(|e| format!("cannot refresh engine runtime {}: {e}", root.display()))?;
     }
     copy_dir_recursive(&src, &root)?;
     // Rename the staged launcher so Task Manager shows MoonClip's engine,
-    // not a second "OBS Studio".
+    // not a second upstream install.
     if legacy_bin.exists() {
         std::fs::rename(&legacy_bin, &runtime_bin)
-            .map_err(|e| format!("cannot brand staged OBS binary: {e}"))?;
+            .map_err(|e| format!("cannot rename staged engine binary: {e}"))?;
     }
-    // Portable mode marker: OBS writes config/ inside the copy.
+    // Portable mode marker: the engine writes config/ inside the copy.
     std::fs::write(root.join("portable_mode.txt"), b"")
-        .map_err(|e| format!("cannot enable OBS portable mode: {e}"))?;
+        .map_err(|e| format!("cannot enable engine portable mode: {e}"))?;
     write_marker(&marker, &fingerprint)?;
     if !runtime_bin.exists() {
         return Err(format!(
-            "OBS runtime copy incomplete: {} missing",
+            "engine runtime copy incomplete: {} missing",
             runtime_bin.display()
         ));
     }
@@ -169,7 +180,7 @@ impl ObsPlatform for WindowsPlatform {
             profile.into(),
             "--collection".into(),
             collection.into(),
-            // Coexist with the user's own OBS instance.
+            // Coexist with any other install.
             "--multi".into(),
             // NOTE: no `--minimize-to-tray`: with the tray disabled in
             // user.ini that flag is a no-op for hiding, and MoonClip hides
@@ -186,7 +197,7 @@ impl ObsPlatform for WindowsPlatform {
     }
 
     fn configure(&self, cmd: &mut Command) {
-        // CREATE_NO_WINDOW: never flash a console for the OBS child.
+        // CREATE_NO_WINDOW: never flash a console for the engine child.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
@@ -207,7 +218,7 @@ impl ObsPlatform for WindowsPlatform {
             let ok = AssignProcessToJobObject(job, proc).is_ok();
             let _ = CloseHandle(proc);
             if !ok {
-                eprintln!("[moonclip] could not bind OBS to the kill-on-close job");
+                eprintln!("[moonclip] could not bind the engine to the kill-on-close job");
             }
         }
     }
@@ -218,18 +229,20 @@ impl ObsPlatform for WindowsPlatform {
 
     fn sys_tray_enabled(&self) -> bool {
         // No tray icon for the embedded instance: MoonClip hides the
-        // window itself (conceal_window) so the user never sees OBS.
+        // window itself (conceal_window) so the user never sees the engine.
         false
     }
 
     fn kill_orphans(&self, obs_bin: &Path) {
         kill_orphan_process(obs_bin);
-        // One-time sweep of the pre-rename binary name in the same copy
-        // (upgrades from builds that staged `obs64.exe`).
+        // One-time sweep of pre-rename binary names in the same copy
+        // (upgrades from builds that staged `obs64.exe` / `moonclip-obs.exe`).
         if let Some(dir) = obs_bin.parent() {
-            let legacy = dir.join("obs64.exe");
-            if legacy != obs_bin {
-                kill_orphan_process(&legacy);
+            for name in ["obs64.exe", "moonclip-obs.exe"] {
+                let legacy = dir.join(name);
+                if legacy != obs_bin {
+                    kill_orphan_process(&legacy);
+                }
             }
         }
     }
@@ -248,7 +261,7 @@ impl ObsPlatform for WindowsPlatform {
         // (the DXGI method can return all-black when another app duplicates
         // the same output). `force_sdr` tonemaps HDR to our SDR pipeline.
         let id = if monitor.trim().is_empty() {
-            r"\\.\DISPLAY1" // GDI fallback: OBS matches szDevice when the id misses
+            r"\\.\DISPLAY1" // GDI fallback: the engine matches szDevice when the id misses
         } else {
             monitor.trim()
         };
@@ -300,9 +313,9 @@ pub fn new_engine() -> ObsEngine {
 }
 
 /// ~15 s watcher thread polling every 50 ms: only top-level, ownerless,
-/// visible windows whose title starts with "OBS " are hidden — error
+/// visible windows whose title starts with "MoonClip " are hidden — error
 /// dialogs keep their own titles and stay visible for diagnosis. The PID +
-/// image-path guard means a reused PID or the user's own OBS can never be
+/// image-path guard means a reused PID or another app can never be
 /// touched.
 fn watch_and_hide_window(pid: u32, exe: &Path) {
     use std::time::{Duration, Instant};
@@ -347,7 +360,7 @@ fn watch_and_hide_window(pid: u32, exe: &Path) {
         }
     }
 
-    fn is_obs_main_window(hwnd: HWND, pid: u32) -> bool {
+    fn is_engine_main_window(hwnd: HWND, pid: u32) -> bool {
         unsafe {
             if !IsWindowVisible(hwnd).as_bool() {
                 return false;
@@ -363,7 +376,7 @@ fn watch_and_hide_window(pid: u32, exe: &Path) {
                     return false;
                 }
             }
-            title_of(hwnd).starts_with("OBS ")
+            title_of(hwnd).starts_with("MoonClip ")
         }
     }
 
@@ -397,7 +410,7 @@ fn watch_and_hide_window(pid: u32, exe: &Path) {
         }
         unsafe extern "system" fn cb(hwnd: HWND, l: LPARAM) -> BOOL {
             let acc = unsafe { &mut *(l.0 as *mut Acc) };
-            if is_obs_main_window(hwnd, acc.pid) {
+            if is_engine_main_window(hwnd, acc.pid) {
                 acc.out.push(hwnd.0 as isize);
             }
             true.into()
@@ -429,11 +442,11 @@ fn watch_and_hide_window(pid: u32, exe: &Path) {
     });
 }
 
-/// Kill our own leftover OBS processes (force-killed sessions never run Drop).
+/// Kill our own leftover engine processes (force-killed sessions never run Drop).
 ///
 /// A process is ours when its image path matches OUR runtime binary AND its
 /// parent no longer exists. A live parent (running engine, manual test) is
-/// never touched; the user's own OBS path never matches.
+/// never touched; other installs never match.
 fn kill_orphan_process(target: &Path) {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -493,7 +506,7 @@ fn kill_orphan_process(target: &Path) {
                 let killed = TerminateProcess(terminate, 1).is_ok();
                 let _ = CloseHandle(terminate);
                 if killed {
-                    eprintln!("[moonclip] killed orphan OBS pid={pid}");
+                    eprintln!("[moonclip] killed orphan engine pid={pid}");
                 }
             }
         }
