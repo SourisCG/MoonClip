@@ -89,6 +89,11 @@ impl ObsPlatform for LinuxPlatform {
 
     fn kill_orphans(&self, obs_bin: &Path) {
         kill_orphan_process(obs_bin);
+        // Save-time helpers can outlive the engine after a hard kill.
+        if let Some(dir) = obs_bin.parent() {
+            kill_orphan_process(&dir.join("moonclip-mux"));
+            kill_orphan_process(&dir.join("moonclip-nvenc-test"));
+        }
     }
 
     /// Hide the embedded OBS window. KDE Plasma (KWin scripting over DBus)
@@ -360,9 +365,23 @@ fn conceal_with_kwin(pid: u32) -> bool {
     }
 }
 
-/// Kill our own leftover OBS processes (force-killed sessions skip Drop).
-/// Matches `/proc/<pid>/exe` against OUR runtime binary and only when the
-/// parent is gone; the user's own OBS never matches.
+/// True when `exe` (a `/proc/<pid>/exe` link) still refers to `want`, even
+/// after the bundle file was rebuilt in place (the old inode is unlinked and
+/// the link reads `<path> (deleted)`).
+fn same_binary(exe: &Path, want: &Path) -> bool {
+    if exe == want {
+        return true;
+    }
+    if exe.to_string_lossy() == format!("{} (deleted)", want.display()) {
+        return true;
+    }
+    exe.file_name() == want.file_name() && exe.parent() == want.parent()
+}
+
+/// Kill our own leftover engine processes (force-killed sessions skip Drop).
+/// Matches `/proc/<pid>/exe` against OUR runtime binaries; the user's own OBS
+/// never matches. Runs right before a new engine is spawned, so any survivor
+/// is stale by definition: only our own live child (parent == us) is spared.
 fn kill_orphan_process(obs_bin: &Path) {
     let Ok(want) = std::fs::canonicalize(obs_bin) else {
         return;
@@ -391,17 +410,17 @@ fn kill_orphan_process(obs_bin: &Path) {
         if *pid == std::process::id() || *parent == 0 {
             continue;
         }
-        if by_pid.contains_key(parent) {
-            continue; // parent alive: running engine, never touch it
+        if *parent == std::process::id() {
+            continue; // our own live engine: never touch it
         }
-        if exe != &want {
+        if !same_binary(exe, &want) {
             continue;
         }
         let _ = nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(*pid as i32),
             nix::sys::signal::Signal::SIGKILL,
         );
-        eprintln!("[moonclip] killed orphan OBS pid={pid}");
+        eprintln!("[moonclip] killed orphan engine pid={pid}");
     }
 }
 
@@ -411,6 +430,24 @@ mod tests {
 
     fn p() -> LinuxPlatform {
         LinuxPlatform
+    }
+
+    #[test]
+    fn orphan_matcher_handles_rebuilt_binaries() {
+        let dir = Path::new("/bundle/engine/bin");
+        let want = dir.join("moonclip-engine");
+        assert!(same_binary(&want, &want));
+        assert!(same_binary(
+            Path::new("/bundle/engine/bin/moonclip-engine (deleted)"),
+            &want
+        ));
+        assert!(same_binary(
+            Path::new("/bundle/engine/bin/moonclip-engine"),
+            &want
+        ));
+        assert!(!same_binary(Path::new("/usr/bin/obs"), &want));
+        assert!(!same_binary(&dir.join("moonclip-mux"), &want));
+        assert!(!same_binary(Path::new("/other/bin/moonclip-engine"), &want));
     }
 
     #[test]
