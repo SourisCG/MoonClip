@@ -23,8 +23,8 @@ trap 'rm -f "$ALIAS"' EXIT
 cat > "$ALIAS" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=MoonClip (window association)
-Comment=Hidden alias so KDE matches appId dev.souriscg.moonclip
+Name=MoonClip
+Comment=MoonClip window association (KDE/Wayland appId match)
 NoDisplay=true
 Exec=moonclip
 Icon=moonclip

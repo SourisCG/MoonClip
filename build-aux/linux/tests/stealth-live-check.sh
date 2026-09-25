@@ -75,6 +75,19 @@ else
   echo "OK  no upstream-named unix socket owned by the engine"
 fi
 
+# Portal identity: Qt's registry warning ("Connection already associated with
+# an application ID") must be gone thanks to QT_NO_XDG_DESKTOP_PORTAL.
+cfg_root="${XDG_DATA_HOME:-$HOME/.local/share}/MoonClip/obs/config"
+log="$(ls -t "$cfg_root"/obs-studio/logs/*.txt 2>/dev/null | head -1 || true)"
+if [ -n "$log" ]; then
+  if grep -q 'Could not register app ID' "$log"; then
+    echo "FAIL portal app-id warning present in $(basename "$log")"
+    fail=1
+  else
+    echo "OK  no portal app-id warning in the newest engine log"
+  fi
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo "PASS stealth-live-check"
 fi

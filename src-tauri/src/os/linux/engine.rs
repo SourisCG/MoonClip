@@ -47,10 +47,17 @@ impl ObsPlatform for LinuxPlatform {
     }
 
     fn obs_launch_env(&self, config_root: &Path) -> Vec<(String, String)> {
-        vec![(
-            "XDG_CONFIG_HOME".to_string(),
-            config_root.to_string_lossy().to_string(),
-        )]
+        vec![
+            (
+                "XDG_CONFIG_HOME".to_string(),
+                config_root.to_string_lossy().to_string(),
+            ),
+            // Qt's own XDG-portal registration collides with the portal
+            // identity used by OBS's PipeWire client and only logs a warning
+            // ("Connection already associated with an application ID").
+            // Nothing in the headless engine needs Qt portal theming.
+            ("QT_NO_XDG_DESKTOP_PORTAL".to_string(), "1".to_string()),
+        ]
     }
 
     fn obs_launch_args(&self, _config_root: &Path, profile: &str, collection: &str) -> Vec<String> {
@@ -473,10 +480,13 @@ mod tests {
         let env = p().obs_launch_env(Path::new("/home/u/.local/share/MoonClip/obs/config"));
         assert_eq!(
             env,
-            vec![(
-                "XDG_CONFIG_HOME".to_string(),
-                "/home/u/.local/share/MoonClip/obs/config".to_string()
-            )]
+            vec![
+                (
+                    "XDG_CONFIG_HOME".to_string(),
+                    "/home/u/.local/share/MoonClip/obs/config".to_string()
+                ),
+                ("QT_NO_XDG_DESKTOP_PORTAL".to_string(), "1".to_string()),
+            ]
         );
     }
 }
