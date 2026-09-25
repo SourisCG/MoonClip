@@ -5,16 +5,16 @@
 
 pub mod binary;
 pub mod devices;
-pub mod obs;
+pub mod engine;
 pub mod open;
 pub mod paths;
 pub mod video;
 
-pub use super::obs::ObsEngine as Engine;
+pub use super::shared::engine::ObsEngine as Engine;
 
 /// New engine wired to the Windows platform.
 pub fn new_engine() -> Engine {
-    obs::new_engine()
+    engine::new_engine()
 }
 
 pub fn backend_name() -> &'static str {

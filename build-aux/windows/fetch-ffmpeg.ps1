@@ -1,6 +1,6 @@
 # Fetch the pinned BtbN static FFmpeg for Windows (embedded sidecar).
 # End users never install FFmpeg separately (see docs/THIRD_PARTY.md).
-# Usage:  pwsh -File build-aux/fetch-ffmpeg.ps1 [-Force]
+# Usage:  pwsh -File build-aux/windows/fetch-ffmpeg.ps1 [-Force]
 # Env overrides: FFMPEG_TAG, FFMPEG_ASSET, FFMPEG_SHA256
 param([switch]$Force)
 

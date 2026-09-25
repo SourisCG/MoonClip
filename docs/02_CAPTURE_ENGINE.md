@@ -35,7 +35,7 @@ resolution is the resolution the user picked; scaling is GPU-side inside OBS).
 - **Private websocket:** `127.0.0.1:<obs_ws_port>` (default 4456, distinct
   from OBS's 4455) with a generated password persisted in SQLite
   (`obs_ws_password`); obs-websocket is configured inside OUR config dir only.
-- **Guards:** `os/obs.rs` kills the child if it does not create
+- **Guards:** `os/shared/engine.rs` kills the child if it does not create
   `<config_root>/obs-studio` within 12 s (i.e. the config redirect was not
   honored). On Linux a system `obs` fallback (dev) uses the exact same
   `XDG_CONFIG_HOME` treatment.
@@ -98,8 +98,8 @@ generated scene NEVER uses OBS's `game_capture`; only compositor-level sources:
 Audio is loopback/PipeWire (`wasapi_output_capture` + `wasapi_input_capture` /
 `pulse_output_capture` + `pulse_input_capture`) — no in-game hooking. Tests
 assert the forbidden source id never appears in any generated artifact
-(`os/obs.rs::collection_never_uses_game_capture` +
-`os/windows/obs.rs::video_source_never_game_capture`).
+(`os/shared/engine.rs::collection_never_uses_game_capture` +
+`os/windows/engine.rs::video_source_never_game_capture`).
 
 Trade-off (documented): Display capture films the whole monitor (overlays
 included). That is the same OS-level path Xbox Game Bar uses; the residual
@@ -148,7 +148,7 @@ Live behaviour:
 
 ## 6. obs-websocket contract
 
-`os/obsws.rs` wraps the `obws` client against OUR private websocket
+`os/shared/obsws.rs` wraps the `obws` client against OUR private websocket
 (`127.0.0.1:<obs_ws_port>`, generated password) and exposes:
 - `replay_buffer().start()/stop()/status()`
 - `replay_buffer().save()` + `last_replay()` polling until the new path
@@ -173,7 +173,7 @@ validates the path exists on disk before indexing it.
   20/12/8M · 1440p 25/20/15M · 2160p 60/35/25M (h264/hevc/av1).
   `video_quality.rs` exposes `bitrate_kbps`, `recommended_kbps` (Medal
   recommended ranges shown in the UI) and `ring_mb`.
-- Ladder encoder recipe comes from the registry (`os/encoder_options.rs`):
+- Ladder encoder recipe comes from the registry (`os/shared/encoder_options.rs`):
   measured NVENC/x264 recipes on validated families, Auto (CBR + bitrate
   only, OBS decides the rest) on AMD/QSV/VAAPI. GPU vendor auto-detects via
   DXGI; unsupported combos fail loudly at start with the OBS log tail.
@@ -242,8 +242,8 @@ pub trait CaptureEngine: Send + Sync {
 }
 ```
 
-`os/obs.rs` holds the shared implementation (`ObsEngine`) and the
-`ObsPlatform` seam; `os/windows/obs.rs` / `os/linux/obs.rs` provide the
+`os/shared/engine.rs` holds the shared implementation (`ObsEngine`) and the
+`ObsPlatform` seam; `os/windows/engine.rs` / `os/linux/engine.rs` provide the
 platform bits. Selection happens only in `os/mod.rs` (zero-`cfg` elsewhere).
 
 ## 12. Acceptance (V3)

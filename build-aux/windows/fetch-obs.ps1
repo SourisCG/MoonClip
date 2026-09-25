@@ -2,7 +2,7 @@
 # engine). End users never install OBS separately (see docs/THIRD_PARTY.md).
 # Control happens over obs-websocket v5 from MoonClip itself (`obws` crate);
 # no obs-cmd CLI is shipped anymore.
-# Usage:  pwsh -File build-aux/fetch-obs.ps1 [-Force]
+# Usage:  pwsh -File build-aux/windows/fetch-obs.ps1 [-Force]
 # Env overrides: OBS_VERSION, OBS_ASSET, OBS_SHA256
 param([switch]$Force)
 

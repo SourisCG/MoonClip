@@ -23,7 +23,7 @@ pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     }
     Err(
         "embedded OBS not found (expected binaries/<triple>/obs/bin/64bit/obs64.exe). \
-         Run build-aux/fetch-obs.ps1 or reinstall MoonClip."
+         Run build-aux/windows/fetch-obs.ps1 or reinstall MoonClip."
             .into(),
     )
 }

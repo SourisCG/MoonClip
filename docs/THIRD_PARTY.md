@@ -19,7 +19,7 @@ component shipped inside MoonClip installers and what the GPL requires for each.
     ~188 MB). Staged at `src-tauri/binaries/x86_64-pc-windows-msvc/obs/`
     with the portable layout `bin/64bit/obs64.exe` + `data/` + `obs-plugins/`.
   - Linux: release `32.2.2` **built from source** (OBS publishes no portable
-    Linux tarball; the Ubuntu `.deb` depends on Ubuntu sonames). `build-aux/build-obs.sh`
+    Linux tarball; the Ubuntu `.deb` depends on Ubuntu sonames). `build-aux/linux/build-obs.sh`
     clones the pinned tag with submodules, builds with a minimal plugin set
     (`-DENABLE_RELOCATABLE=ON`, browser/VLC/VST/scripting/AJA/decklink/WebRTC
     off) against the distro's Qt6/FFmpeg/PipeWire, and stages a relocatable
@@ -28,8 +28,8 @@ component shipped inside MoonClip installers and what the GPL requires for each.
     `$ORIGIN/../lib64`. The compiled-in install prefix is neutral
     (`/nonexistent/moonclip-obs`) so OBS never scans a second plugin path.
     Build cache: `~/.cache/MoonClip/obs-build` (ninja resumes).
-  - Bump the pin by updating `build-aux/fetch-obs.ps1` (Windows) /
-    `build-aux/build-obs.sh` (Linux) + `docs/THIRD_PARTY.md`.
+  - Bump the pin by updating `build-aux/windows/fetch-obs.ps1` (Windows) /
+    `build-aux/linux/build-obs.sh` (Linux) + `docs/THIRD_PARTY.md`.
 - **Isolation guarantees (why the user's OBS is never touched):**
   - **Windows:** OBS Studio ignores `--config-dir` (verified live: it logged
     "Portable mode: false" and wrote to `%APPDATA%\obs-studio`). MoonClip
@@ -44,7 +44,7 @@ component shipped inside MoonClip installers and what the GPL requires for each.
     `--minimize-to-tray`, `--disable-shutdown-check`, `--disable-updater`,
     `--only-bundled-plugins`.
   - The engine kills the child if it fails to create its isolated config
-    (see `os/obs.rs` config guard). The user's `%APPDATA%\obs-studio`
+    (see `os/shared/engine.rs` config guard). The user's `%APPDATA%\obs-studio`
     / `~/.config/obs-studio` is never read or written.
   - obs-websocket binds `127.0.0.1` on a dedicated port with a generated
     password; only the bundled obs-cmd talks to it.
@@ -63,7 +63,7 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   BtbN `win64-gpl` monthly `autobuild-2026-08-31-13-27`,
   asset `ffmpeg-N-126342-gf88b741dbf-win64-gpl.zip`
   (`sha256:b4da332540eaebc6939181b59e267f163dd57407ef6596f7f3452845921d1d91`,
-  ~163 MB download). Fetched via `build-aux/fetch-ffmpeg.ps1` (verifies
+  ~163 MB download). Fetched via `build-aux/windows/fetch-ffmpeg.ps1` (verifies
   hash + required encoders), staged at
   `src-tauri/binaries/x86_64-pc-windows-msvc/ffmpeg-x86_64-pc-windows-msvc.exe`
   (gitignored). Bump the pin by updating the script defaults.
@@ -71,7 +71,7 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   `autobuild-2026-09-15-13-18`, asset
   `ffmpeg-N-126574-g912208af28-linux64-gpl.tar.xz`
   (`sha256:7c5b4fd54be55970595f3c62b22c8a502587abe61c3e5e37a2cb81630093bad4`,
-  151,537,292 bytes). Fetched via `build-aux/fetch-ffmpeg.sh` (sha256 + size
+  151,537,292 bytes). Fetched via `build-aux/linux/fetch-ffmpeg.sh` (sha256 + size
   + encoders: libx264, h264_nvenc, hevc_nvenc, aac), staged at
   `src-tauri/binaries/x86_64-unknown-linux-gnu/ffmpeg-x86_64-unknown-linux-gnu`.
 - **Ship model:** `tauri.windows.conf.json` (per-OS overlay) bundles the

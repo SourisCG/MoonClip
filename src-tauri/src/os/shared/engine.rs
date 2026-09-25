@@ -28,7 +28,7 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 
 use super::obsws::Obsws;
-use super::{CaptureConfig, CaptureEngine};
+use super::super::{CaptureConfig, CaptureEngine};
 
 // ---------------------------------------------------------------------------
 // Identity constants (generated profile/scene — never the user's)

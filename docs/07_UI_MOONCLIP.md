@@ -51,13 +51,13 @@ Already in `tailwind.config.js` as `colors.moonclip.{void,panel,card,lunar,astra
   close-to-tray and edge/cube resize grips use Tauri window APIs only —
   cross-platform by construction. Never use CSS `app-region` hacks.
 - Icons: window/taskbar set in `tauri.conf.json` (`icons/`, generated from
-  `build-aux/moonclip-icon.svg` as transparent artwork); tray uses
+  `build-aux/common/moonclip-icon.svg` as transparent artwork); tray uses
   `icons/tray-icon.png` loaded explicitly in `lib.rs` (kept as a separate
   asset so tray and taskbar can evolve independently).
-  Master artwork: `build-aux/moonclip-icon.svg`.
+  Master artwork: `build-aux/common/moonclip-icon.svg`.
 - Linux taskbar association needs TWO entries, one per context:
-  - **Dev** (`tauri dev` / `target/debug`): `build-aux/dev.souriscg.moonclip.desktop.template`
-    + `build-aux/install-dev-desktop.sh` (exposed as `pnpm desktop:install`).
+  - **Dev** (`tauri dev` / `target/debug`): `build-aux/common/dev.souriscg.moonclip.desktop.template`
+    + `build-aux/linux/install-dev-desktop.sh` (exposed as `pnpm desktop:install`).
     Wayland matches the window by `appId` (`dev.souriscg.moonclip` via
     `app.enableGTKAppId`) against `StartupWMClass` + the `.desktop` filename —
     without it the taskbar shows the generic Wayland icon while the tray

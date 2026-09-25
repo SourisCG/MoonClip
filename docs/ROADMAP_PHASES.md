@@ -16,7 +16,7 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 
 ## Phase 3 — Capture engine (embedded OBS replay + 3-track audio) — V3
 
-- `CaptureEngine` trait + shared `os/obs.rs` engine: writable portable OBS copy, generated `MoonClip` profile/scene (display sources only, never `game_capture`), private obs-websocket, bundled `obs-cmd` for replay start/stop/save/status; `rodio` ding; tray status.
+- `CaptureEngine` trait + shared `os/shared/engine.rs` engine: writable portable OBS copy, generated `MoonClip` profile/scene (display sources only, never `game_capture`), private obs-websocket, bundled `obs-cmd` for replay start/stop/save/status; `rodio` ding; tray status.
 - Windows: `monitor_capture` (DXGI Desktop Duplication) + WASAPI; Linux: PipeWire portal + PulseAudio.
 - **Accept:** F9 → `.mp4` with 3 audio tracks (Mix first); indexed in DB with thumbnail; the user's own OBS config is never touched.
 

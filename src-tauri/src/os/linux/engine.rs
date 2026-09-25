@@ -14,8 +14,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::super::encoder_options::{catalog_linux, EncoderEntry};
-use super::super::obs::{ObsEngine, ObsPlatform, ObsRuntime};
+use crate::os::shared::encoder_options::{catalog_linux, EncoderEntry};
+use crate::os::shared::engine::{ObsEngine, ObsPlatform, ObsRuntime};
 
 /// Encoder ids compiled into the pinned Linux OBS build (Custom picker).
 pub fn encoder_catalog() -> &'static [EncoderEntry] {
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(id, "pipewire-desktop-capture-source");
         let (id, _) = p().video_source("", "Game");
         assert_eq!(id, "pipewire-window-capture-source");
-        assert_ne!(id, super::super::super::obs::FORBIDDEN_SOURCE_ID);
+        assert_ne!(id, crate::os::shared::engine::FORBIDDEN_SOURCE_ID);
     }
 
     #[test]

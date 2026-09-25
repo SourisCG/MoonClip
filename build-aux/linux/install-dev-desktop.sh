@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE="$ROOT/build-aux/dev.souriscg.moonclip.desktop.template"
+TEMPLATE="$ROOT/build-aux/common/dev.souriscg.moonclip.desktop.template"
 OUT="$HOME/.local/share/applications/dev.souriscg.moonclip.desktop"
 
 echo "==> generating $OUT from $TEMPLATE"

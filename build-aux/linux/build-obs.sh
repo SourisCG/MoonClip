@@ -10,7 +10,7 @@
 # `XDG_CONFIG_HOME=<MoonClip data dir>/obs/config`, so OBS writes its config
 # there and NEVER touches `~/.config/obs-studio` (the user's own OBS).
 #
-# Usage:  bash build-aux/build-obs.sh [--force]
+# Usage:  bash build-aux/linux/build-obs.sh [--force]
 # Env overrides: OBS_VERSION, BUILD_JOBS, OBS_BUILD_DIR
 set -euo pipefail
 

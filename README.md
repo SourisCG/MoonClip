@@ -91,8 +91,8 @@ No pixels ever touch JS. React only sends `{start, end}` to Rust; Rust runs FFmp
 - Windows: 10 version 1903 (build 18362)+ or 11. MSVC toolchain.
 - Sidecars are fetched once into `src-tauri/binaries/`:
   ```powershell
-  pwsh build-aux/fetch-obs.ps1      # OBS 32.2.2 + obs-cmd 1.0.2 (pinned, sha256)
-  pwsh build-aux/fetch-ffmpeg.ps1   # editor/probe FFmpeg (pinned)
+  pwsh build-aux/windows/fetch-obs.ps1      # OBS 32.2.2 (pinned, sha256)
+  pwsh build-aux/windows/fetch-ffmpeg.ps1   # editor/probe FFmpeg (pinned)
   ```
 
 ### Develop
@@ -109,11 +109,11 @@ pnpm build
 # Tauri bundle -> src-tauri/target/release/bundle/
 ```
 
-Linux local install (fully embedded: OBS + obs-cmd + static ffmpeg in the same package):
+Linux local install (fully embedded: OBS engine + static ffmpeg in the same package):
 
 ```bash
-bash build-aux/build-obs.sh    # compile the pinned OBS once (cached, ~15 min)
-bash build-aux/fetch-ffmpeg.sh # pinned static ffmpeg sidecar
+bash build-aux/linux/build-obs.sh    # compile the pinned OBS once (cached, ~15 min)
+bash build-aux/linux/fetch-ffmpeg.sh # pinned static ffmpeg sidecar
 pnpm tauri:build:linux         # RPM with sidecars under /usr/lib/MoonClip/binaries/
 pnpm app:install               # replace install + taskbar association
 ```

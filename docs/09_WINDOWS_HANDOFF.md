@@ -11,8 +11,8 @@ engine: the embedded, isolated OBS Studio driven in-process over obs-websocket (
   Dev loop: `pnpm tauri:dev`. Verify: `pnpm build`,
   `cargo check --target x86_64-pc-windows-msvc`, `cargo test`,
   `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`.
-- Sidecars first: `pwsh build-aux/fetch-ffmpeg.ps1` (editor) and
-  `pwsh build-aux/fetch-obs.ps1` (OBS 32.2.2, pinned).
+- Sidecars first: `pwsh build-aux/windows/fetch-ffmpeg.ps1` (editor) and
+  `pwsh build-aux/windows/fetch-obs.ps1` (OBS 32.2.2, pinned).
 - Minimum supported OS: **Windows 10 version 1903 (build 18362) or later**
   (WGC floor; the installer targets 1903+).
 - Package manager is **pnpm** (never npm). Commits: small, conventional
@@ -30,7 +30,7 @@ engine: the embedded, isolated OBS Studio driven in-process over obs-websocket (
 ## 2. Engine architecture (V3, frozen)
 
 ```
-[settings] -> os/obs.rs::write_obs_config(root, profile)
+[settings] -> os/shared/engine.rs::write_obs_config(root, profile)
                root/obs-studio/basic/profiles/MoonClip/basic.ini
                root/obs-studio/basic/profiles/MoonClip/recordEncoder.json
                root/obs-studio/basic/scenes/MoonClip.json
@@ -52,7 +52,7 @@ F9         -> obs-websocket replay save -> poll `last-replay` -> DB index
 - `root` = `%LOCALAPPDATA%\MoonClip\obs` — NEVER `%APPDATA%\obs-studio`.
 - Websocket: `127.0.0.1:4456` (setting `obs_ws_port`) + generated password
   (`obs_ws_password`). MoonClip's in-process `obws` client is the only client.
-- Encoder mapping (Windows, `os/windows/obs.rs`): NVENC
+- Encoder mapping (Windows, `os/windows/engine.rs`): NVENC
   `obs_nvenc_{h264,hevc,av1}_tex`, AMF `h264_texture_amf` / `h265_texture_amf`
   / `av1_texture_amf`, QSV `obs_qsv11_v2` / `obs_qsv11_hevc` /
   `obs_qsv11_av1`, CPU `obs_x264`.
@@ -69,7 +69,7 @@ F9         -> obs-websocket replay save -> poll `last-replay` -> DB index
 |---|---|
 | `obs.rs` | shared engine: profile/scene writers, `ObsEngine`, config guard, log tail, tests |
 | `obsws.rs` | obs-websocket v5 client (`obws`): replay/scene/source/video/input operations |
-| `windows/obs.rs` | platform binding: portable-copy staging + marker, launch args, encoder ids, DXGI display source, orphan sweep |
+| `windows/engine.rs` | platform binding: portable-copy staging + marker, launch args, encoder ids, DXGI display source, orphan sweep |
 | `windows/binary.rs` | resolve bundled `obs/bin/64bit/obs64.exe` (env override) |
 | `windows/video.rs` | DXGI vendor, GDI monitor list (index + primary), ffmpeg-probed codec offer |
 | `windows/devices.rs` | WASAPI endpoint enumeration + magic-default mapping |
@@ -159,7 +159,7 @@ F9         -> obs-websocket replay save -> poll `last-replay` -> DB index
 
 - `src-tauri/tauri.windows.conf.json` bundles `obs/` and the FFmpeg sidecar
   as resources; `pnpm tauri:build:windows` produces NSIS + MSI.
-- `build-aux/fetch-obs.ps1` pins OBS `32.2.2` (`OBS-Studio-32.2.2-Windows-x64.zip`,
+- `build-aux/windows/fetch-obs.ps1` pins OBS `32.2.2` (`OBS-Studio-32.2.2-Windows-x64.zip`,
   sha256 verified) and extracts the portable layout (the script never executes
   OBS; runtime validation happens through MoonClip's portable copy). Control is
   in-process over obs-websocket (`obws`), so no obs-cmd binary ships.

@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::os::encoder_options as enc;
+use crate::os::shared::encoder_options as enc;
 use crate::os::{
-    self, backend_name, devices, new_engine, obs, resolve_obs, video, AudioDevice,
+    self, backend_name, devices, new_engine, resolve_obs, shared::engine as obs, video, AudioDevice,
     CaptureConfig, CaptureEngine, CustomEncoder, CustomVideo,
 };
 use crate::state::AppState;

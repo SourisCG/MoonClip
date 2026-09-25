@@ -41,8 +41,8 @@ Full ship matrix (user installs nothing extra) is defined in
 `docs/THIRD_PARTY.md`.
 Windows agent: MSVC toolchain + `pnpm install` (pnpm via corepack/npm);
 `host_triple()` in `sidecar.rs` already emits `x86_64-pc-windows-msvc`.
-Fetch/build pins via `build-aux/fetch-obs.ps1` + `fetch-ffmpeg.ps1`
-(Windows) and `build-aux/build-obs.sh` + `fetch-ffmpeg.sh` (Linux; OBS is
+Fetch/build pins via `build-aux/windows/fetch-obs.ps1` + `fetch-ffmpeg.ps1`
+(Windows) and `build-aux/linux/build-obs.sh` + `fetch-ffmpeg.sh` (Linux; OBS is
 compiled from the pinned source tag because there is no portable Linux
 tarball).
 

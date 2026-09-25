@@ -6,9 +6,9 @@ other, and checks that the Master track equals the clamped sample sum of the
 solo stems.
 
 Usage:
-  python build-aux/analyze_interaudio.py <clip.mp4> [--ffmpeg PATH]
+  python build-aux/common/analyze_interaudio.py <clip.mp4> [--ffmpeg PATH]
                                          [--window 5] [--offset 2]
-  python build-aux/analyze_interaudio.py --selftest
+  python build-aux/common/analyze_interaudio.py --selftest
 
 Track layout (1-based ffmpeg indexes): 0 = Master Mix, 1 = Game/Desktop,
 2 = Microphone.

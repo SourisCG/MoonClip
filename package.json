@@ -13,8 +13,8 @@
     "tauri:dev": "tauri dev",
     "tauri:build:linux": "tauri build --bundles rpm --config '{\"bundle\":{\"resources\":[\"icons/tray-icon.png\",\"binaries/x86_64-unknown-linux-gnu/*\",\"binaries/x86_64-unknown-linux-gnu/obs\"]}}'",
     "tauri:build:windows": "tauri build --bundles nsis,msi",
-    "app:install": "bash build-aux/install-local.sh",
-    "desktop:install": "bash build-aux/install-dev-desktop.sh"
+    "app:install": "bash build-aux/linux/install-local.sh",
+    "desktop:install": "bash build-aux/linux/install-dev-desktop.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

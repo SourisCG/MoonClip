@@ -21,7 +21,7 @@
 
 use serde_json::{Map, Value};
 
-use super::api::{CustomEncoder, CustomVideo};
+use crate::os::api::{CustomEncoder, CustomVideo};
 
 /// Encoder family behind one OBS encoder id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

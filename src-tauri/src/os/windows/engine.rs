@@ -19,8 +19,8 @@ use std::sync::OnceLock;
 
 use tokio::process::Command;
 
-use super::super::encoder_options::{catalog_windows, EncoderEntry};
-use super::super::obs::{
+use crate::os::shared::encoder_options::{catalog_windows, EncoderEntry};
+use crate::os::shared::engine::{
     copy_dir_recursive, marker_matches, obs_build_fingerprint, write_marker, ObsEngine,
     ObsPlatform, ObsRuntime,
 };
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(id, "window_capture");
         assert_eq!(settings["window"], "Game");
         assert_ne!(id, "game_capture");
-        assert_ne!(id, super::super::super::obs::FORBIDDEN_SOURCE_ID);
+        assert_ne!(id, crate::os::shared::engine::FORBIDDEN_SOURCE_ID);
     }
 
     #[test]
