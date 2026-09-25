@@ -58,9 +58,9 @@ check_pid() {
 for pid in $pids; do check_pid "$pid" engine; done
 for pid in $mux; do check_pid "$pid" mux; done
 
-# Abstract unix sockets: the upstream single-instance fingerprint lives at
-# @/com/obsproject and embeds the owning PID in its name. Informational until
-# step 3.2 patches it out, then it becomes a hard failure.
+# Abstract unix sockets: the upstream single-instance fingerprint lived at
+# @/com/obsproject with the owning PID embedded in its name; our build must
+# never register it (patch 0002).
 unix_socks="$(grep 'com/obsproject' /proc/net/unix 2>/dev/null || true)"
 hit=0
 for pid in $pids $mux; do
@@ -69,7 +69,8 @@ for pid in $pids $mux; do
   fi
 done
 if [ "$hit" -eq 1 ]; then
-  echo "WARN engine owns an upstream-named unix socket (pending step 3.2)"
+  echo "FAIL engine owns an upstream-named unix socket"
+  fail=1
 else
   echo "OK  no upstream-named unix socket owned by the engine"
 fi

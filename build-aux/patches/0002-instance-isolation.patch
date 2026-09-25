@@ -1,0 +1,57 @@
+diff --git a/frontend/utility/platform-x11.cpp b/frontend/utility/platform-x11.cpp
+index 8c96573..a2180b2 100644
+--- a/frontend/utility/platform-x11.cpp
++++ b/frontend/utility/platform-x11.cpp
+@@ -70,47 +70,11 @@ using std::vector;
+ #ifdef __linux__
+ void CheckIfAlreadyRunning(bool &already_running)
+ {
+-	int uniq = socket(AF_LOCAL, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+-
+-	if (uniq == -1) {
+-		blog(LOG_ERROR, "Failed to check for running instance, socket: %d", errno);
+-		already_running = 0;
+-		return;
+-	}
+-
+-	struct sockaddr_un bindInfo;
+-	memset(&bindInfo, 0, sizeof(sockaddr_un));
+-	bindInfo.sun_family = AF_LOCAL;
+-	auto bindInfoStrlen = snprintf(bindInfo.sun_path + 1, sizeof(bindInfo.sun_path) - 1, "%s %d %s",
+-				       "/com/obsproject", getpid(), App()->GetVersionString().c_str());
+-
+-	int bindErr = bind(uniq, (struct sockaddr *)&bindInfo, sizeof(sa_family_t) + 1 + bindInfoStrlen);
+-	already_running = bindErr == 0 ? 0 : 1;
+-
+-	if (already_running) {
+-		return;
+-	}
+-
+-	FILE *fp = fopen("/proc/net/unix", "re");
+-
+-	if (fp == NULL) {
+-		return;
+-	}
+-
+-	char *line = NULL;
+-	size_t n = 0;
+-	int obsCnt = 0;
+-	while (getdelim(&line, &n, ' ', fp) != EOF) {
+-		line[strcspn(line, "\n")] = '\0';
+-		if (*line == '@') {
+-			if (strstr(line, "@/com/obsproject") != NULL) {
+-				++obsCnt;
+-			}
+-		}
+-	}
+-	already_running = obsCnt == 1 ? 0 : 1;
+-	free(line);
+-	fclose(fp);
++	/* MoonClip: the embedded engine must neither register nor look for the
++	 * upstream single-instance socket ("@/com/obsproject"). That socket is
++	 * a product fingerprint and makes the user's own OBS report "another
++	 * instance is running". MoonClip always launches with --multi. */
++	already_running = false;
+ }
+ #endif
+ #if defined(__FreeBSD__) || defined(__DragonFly__)

@@ -23,13 +23,15 @@ FORCE=0
 
 OBS_VERSION="${OBS_VERSION:-32.2.2}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
-PATCH_REV="2"
 
 TRIPLE="x86_64-unknown-linux-gnu"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$ROOT/src-tauri/binaries/$TRIPLE/engine"
 OBS_BIN="$OUT/bin/moonclip-engine"
-PATCH="$ROOT/build-aux/patches/0001-identity.patch"
+# Identity patches applied in file-name order; the staged cache is keyed by
+# their content hash, so dropping in a new patch always triggers a rebuild.
+PATCHES=("$ROOT"/build-aux/patches/*.patch)
+PATCH_REV="$(cat "${PATCHES[@]}" | sha256sum | cut -c1-12)"
 # Persistent build cache: ninja resumes instead of recompiling after a failed
 # post-build step. `--force` wipes it.
 WORK="${OBS_BUILD_DIR:-$HOME/.cache/MoonClip/obs-build}"
@@ -64,9 +66,12 @@ else
   echo "==> reusing cached source: $SRC"
 fi
 
-echo "==> applying MoonClip identity patch (rev $PATCH_REV)"
+echo "==> applying MoonClip identity patches (rev $PATCH_REV)"
 git -C "$SRC" checkout -- .
-git -C "$SRC" apply "$PATCH"
+for p in "${PATCHES[@]}"; do
+  echo "    $(basename "$p")"
+  git -C "$SRC" apply "$p"
+done
 
 echo "==> configuring (minimal plugin set, distro libs, $BUILD_JOBS jobs)"
 cmake -S "$SRC" -B "$SRC/build" -G Ninja \
