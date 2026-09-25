@@ -14,7 +14,7 @@ $ObsAsset   = if ($env:OBS_ASSET)   { $env:OBS_ASSET }   else { "OBS-Studio-32.2
 $ObsSha     = if ($env:OBS_SHA256)  { $env:OBS_SHA256 }  else { "4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1" }
 
 $Triple = "x86_64-pc-windows-msvc"
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $OutDir = Join-Path $Root "src-tauri/binaries/$Triple"
 $ObsRoot = Join-Path $OutDir "obs"
 $ObsExe = Join-Path $ObsRoot "bin/64bit/obs64.exe"

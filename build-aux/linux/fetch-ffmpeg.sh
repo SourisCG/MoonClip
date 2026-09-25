@@ -15,7 +15,7 @@ BTBN_SIZE=151537292
 
 URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/${BTBN_TAG}/${BTBN_ASSET}"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 OUT_DIR="$ROOT/src-tauri/binaries/$TRIPLE"
 OUT="$OUT_DIR/ffmpeg-$TRIPLE"

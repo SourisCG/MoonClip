@@ -1,15 +1,14 @@
-//! Linux backend binary resolution: the embedded OBS Studio distribution.
-//! Bundled sidecar first (installer layout), dev staging second. System OBS is
-//! a last-resort fallback: it is still launched with `XDG_CONFIG_HOME`
-//! redirected, so the user's own config is never touched (enforced by the
-//! config guard in the engine).
+//! Linux backend binary resolution: the embedded capture engine distribution.
+//! Bundled sidecar first (installer layout), dev staging second. There is NO
+//! PATH/system fallback on purpose: launching the user's own OBS would expose
+//! the real product identity and its single-instance socket.
 
 use std::path::PathBuf;
 use tauri::AppHandle;
 
-/// Relative path of the OBS binary inside the bundled sidecar directory
-/// (portable layout: `bin/obs`, `lib/`, `share/obs`).
-pub const OBS_REL: &str = "obs/bin/obs";
+/// Relative path of the engine binary inside the bundled sidecar directory
+/// (portable layout: `bin/moonclip-engine`, `lib*/`, `share/obs`).
+pub const OBS_REL: &str = "engine/bin/moonclip-engine";
 
 pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     if let Ok(path) = std::env::var("MOONCLIP_OBS_BIN") {
@@ -22,21 +21,23 @@ pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     if let Some(found) = crate::sidecar::search_bundled(OBS_REL, app) {
         return Ok(found);
     }
-    // System OBS (distro package / flatpak wrapper). Still isolated at launch.
-    if let Ok(out) = std::process::Command::new("sh")
-        .args(["-c", "command -v obs"])
-        .output()
-    {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() {
-                return Ok((PathBuf::from(p), "system"));
-            }
-        }
-    }
     Err(
-        "embedded OBS not found (expected binaries/<triple>/obs/bin/obs) and no \
-         system `obs` in PATH. Run build-aux/build-obs.sh or install OBS."
+        "capture engine not found (expected binaries/<triple>/engine/bin/moonclip-engine). \
+         Run build-aux/linux/build-obs.sh or reinstall MoonClip."
             .into(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OBS_REL;
+
+    /// The engine identity must never leak the upstream product name.
+    #[test]
+    fn engine_relative_path_is_neutral() {
+        assert!(
+            !OBS_REL.to_lowercase().contains("obs"),
+            "engine path leaks the upstream name: {OBS_REL}"
+        );
+    }
 }

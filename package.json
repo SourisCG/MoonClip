@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build:linux": "tauri build --bundles rpm --config '{\"bundle\":{\"resources\":[\"icons/tray-icon.png\",\"binaries/x86_64-unknown-linux-gnu/*\",\"binaries/x86_64-unknown-linux-gnu/obs\"]}}'",
+    "tauri:build:linux": "tauri build --bundles rpm --config '{\"bundle\":{\"resources\":[\"icons/tray-icon.png\",\"binaries/x86_64-unknown-linux-gnu/*\",\"binaries/x86_64-unknown-linux-gnu/engine\"]}}'",
     "tauri:build:windows": "tauri build --bundles nsis,msi",
     "app:install": "bash build-aux/linux/install-local.sh",
     "desktop:install": "bash build-aux/linux/install-dev-desktop.sh"

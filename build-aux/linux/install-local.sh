@@ -4,7 +4,7 @@
 # Re-run after each new build:  pnpm tauri:build:linux && pnpm app:install
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RPM="$(ls -t "$ROOT"/src-tauri/target/release/bundle/rpm/*.rpm 2>/dev/null | head -1)"
 
 if [ -z "$RPM" ]; then

@@ -13,7 +13,7 @@ $Asset = if ($env:FFMPEG_ASSET) { $env:FFMPEG_ASSET } else { "ffmpeg-N-126342-gf
 $Sha   = if ($env:FFMPEG_SHA256){ $env:FFMPEG_SHA256 }else { "b4da332540eaebc6939181b59e267f163dd57407ef6596f7f3452845921d1d91" }
 
 $Triple = "x86_64-pc-windows-msvc"
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $OutDir = Join-Path $Root "src-tauri/binaries/$Triple"
 $OutExe = Join-Path $OutDir "ffmpeg-$Triple.exe"
 

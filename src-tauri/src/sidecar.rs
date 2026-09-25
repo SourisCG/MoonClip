@@ -1,5 +1,5 @@
 //! Sidecar path resolution (OS-free): bundled binaries first, system fallback.
-//! Layout: <res|exe>/binaries/<triple>/… (obs/, obs-cmd, ffmpeg-<triple>).
+//! Layout: <res|exe>/binaries/<triple>/… (engine/, ffmpeg-<triple>).
 //! Dev layout: src-tauri/binaries/<triple>/ (walked up from target/debug/<bin>).
 //! OS-specific bits (device lists, binary resolution) live under os/, never here.
 

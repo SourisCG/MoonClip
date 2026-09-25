@@ -12,6 +12,10 @@
 #
 # Usage:  bash build-aux/linux/build-obs.sh [--force]
 # Env overrides: OBS_VERSION, BUILD_JOBS, OBS_BUILD_DIR
+#
+# Identity: a MoonClip patch (build-aux/patches/) renames the engine binaries
+# and scrubs OBS fingerprints; PATCH_REV invalidates the staged cache when the
+# patch set changes.
 set -euo pipefail
 
 FORCE=0
@@ -19,11 +23,13 @@ FORCE=0
 
 OBS_VERSION="${OBS_VERSION:-32.2.2}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
+PATCH_REV="2"
 
 TRIPLE="x86_64-unknown-linux-gnu"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$ROOT/src-tauri/binaries/$TRIPLE/obs"
-OBS_BIN="$OUT/bin/obs"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OUT="$ROOT/src-tauri/binaries/$TRIPLE/engine"
+OBS_BIN="$OUT/bin/moonclip-engine"
+PATCH="$ROOT/build-aux/patches/0001-identity.patch"
 # Persistent build cache: ninja resumes instead of recompiling after a failed
 # post-build step. `--force` wipes it.
 WORK="${OBS_BUILD_DIR:-$HOME/.cache/MoonClip/obs-build}"
@@ -31,7 +37,7 @@ SRC="$WORK/obs-studio"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1" >&2; exit 1; }; }
 
-if [ -f "$OUT/.moonclip-staged" ] && [ "$FORCE" -eq 0 ]; then
+if [ -f "$OUT/.moonclip-staged" ] && [ "$(cat "$OUT/.moonclip-staged")" = "patch=$PATCH_REV" ] && [ "$FORCE" -eq 0 ]; then
   echo "OK (cached): $OBS_BIN"
   XDG_CONFIG_HOME="$(mktemp -d)" "$OBS_BIN" --version | head -1 || true
   exit 0
@@ -58,10 +64,15 @@ else
   echo "==> reusing cached source: $SRC"
 fi
 
+echo "==> applying MoonClip identity patch (rev $PATCH_REV)"
+git -C "$SRC" checkout -- .
+git -C "$SRC" apply "$PATCH"
+
 echo "==> configuring (minimal plugin set, distro libs, $BUILD_JOBS jobs)"
 cmake -S "$SRC" -B "$SRC/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=/nonexistent/moonclip-obs \
+  -DOBS_VERSION_OVERRIDE="$OBS_VERSION" \
   -DENABLE_RELOCATABLE=ON \
   -DENABLE_BROWSER=OFF \
   -DENABLE_AJA=OFF \
@@ -105,10 +116,12 @@ echo "==> staging to $OUT"
 # (RUNPATH is $ORIGIN/../<libdir>).
 LIBDIR="lib"
 [ -d "$PREFIX/lib64" ] && LIBDIR="lib64"
+# Legacy pre-patch bundle dir (upstream binary names).
+rm -rf "$ROOT/src-tauri/binaries/$TRIPLE/obs"
 rm -rf "$OUT"
 mkdir -p "$OUT/bin" "$OUT/$LIBDIR" "$OUT/share"
-# ALL of bin/: obs + obs-ffmpeg-mux (recording mux) + obs-nvenc-test (NVENC
-# capability probe launched by the obs-nvenc plugin).
+# ALL of bin/: moonclip-engine + moonclip-mux (recording mux) +
+# moonclip-nvenc-test (NVENC capability probe launched by obs-nvenc).
 cp -a "$PREFIX/bin/." "$OUT/bin/"
 cp -a "$PREFIX/$LIBDIR/." "$OUT/$LIBDIR/"
 if [ -d "$PREFIX/share/obs" ]; then
@@ -122,5 +135,8 @@ ls "$OUT/$LIBDIR/obs-plugins" | grep -E 'linux-pipewire|linux-pulseaudio|linux-c
   echo "warning: expected plugins not found, listing:" >&2
   ls "$OUT/$LIBDIR/obs-plugins" >&2
 }
-touch "$OUT/.moonclip-staged"
+for b in moonclip-engine moonclip-mux moonclip-nvenc-test; do
+  [ -x "$OUT/bin/$b" ] || { echo "error: missing patched binary $b" >&2; exit 1; }
+done
+echo "patch=$PATCH_REV" > "$OUT/.moonclip-staged"
 echo "OK: $OUT"

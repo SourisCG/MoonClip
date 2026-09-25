@@ -1,0 +1,108 @@
+diff --git a/frontend/CMakeLists.txt b/frontend/CMakeLists.txt
+index f0cde6b..69a6c50 100644
+--- a/frontend/CMakeLists.txt
++++ b/frontend/CMakeLists.txt
+@@ -112,4 +112,4 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "Source Files" FILES ${ta
+ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "Header Files" FILES ${target_hpp_sources})
+ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "Qt Files" FILES ${target_qt_sources})
+ 
+-set_target_properties_obs(obs-studio PROPERTIES FOLDER frontend OUTPUT_NAME "$<IF:$<PLATFORM_ID:Windows>,obs64,obs>")
++set_target_properties_obs(obs-studio PROPERTIES FOLDER frontend OUTPUT_NAME "$<IF:$<PLATFORM_ID:Windows>,obs64,moonclip-engine>")
+diff --git a/frontend/widgets/OBSBasic.cpp b/frontend/widgets/OBSBasic.cpp
+index b6f5445..816ef7a 100644
+--- a/frontend/widgets/OBSBasic.cpp
++++ b/frontend/widgets/OBSBasic.cpp
+@@ -2127,7 +2127,7 @@ void OBSBasic::UpdateTitleBar()
+ 	const char *profile = config_get_string(App()->GetUserConfig(), "Basic", "Profile");
+ 	const char *sceneCollection = config_get_string(App()->GetUserConfig(), "Basic", "SceneCollection");
+ 
+-	name << "OBS ";
++	name << "MoonClip ";
+ 	if (previewProgramMode) {
+ 		name << "Studio ";
+ 	}
+diff --git a/libobs/obs-hotkey.c b/libobs/obs-hotkey.c
+index 0503b30..b14e653 100644
+--- a/libobs/obs-hotkey.c
++++ b/libobs/obs-hotkey.c
+@@ -1158,7 +1158,7 @@ void *obs_hotkey_thread(void *arg)
+ {
+ 	UNUSED_PARAMETER(arg);
+ 
+-	os_set_thread_name("libobs: hotkey thread");
++	os_set_thread_name("hotkey thread");
+ 
+ 	const char *hotkey_thread_name =
+ 		profile_store_name(obs_get_profiler_name_store(), "obs_hotkey_thread(%g" NBSP "ms)", 25.);
+diff --git a/libobs/obs-video-gpu-encode.c b/libobs/obs-video-gpu-encode.c
+index 283c815..2655da8 100644
+--- a/libobs/obs-video-gpu-encode.c
++++ b/libobs/obs-video-gpu-encode.c
+@@ -30,7 +30,7 @@ static void *gpu_encode_thread(void *data)
+ 
+ 	da_init(encoders);
+ 
+-	os_set_thread_name("obs gpu encode thread");
++	os_set_thread_name("gpu encode thread");
+ 	const char *gpu_encode_thread_name = profile_store_name(
+ 		obs_get_profiler_name_store(), "obs_gpu_encode_thread(%g" NBSP "ms)", interval / 1000000.);
+ 	profile_register_root(gpu_encode_thread_name, interval);
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index eca6f83..db5210f 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -1171,7 +1171,7 @@ void *obs_graphics_thread(void *param)
+ 
+ 	obs->video.video_time = os_gettime_ns();
+ 
+-	os_set_thread_name("libobs: graphics thread");
++	os_set_thread_name("graphics thread");
+ 
+ 	const char *video_thread_name = profile_store_name(obs_get_profiler_name_store(),
+ 							   "obs_graphics_thread(%g" NBSP "ms)", interval / 1000000.);
+diff --git a/plugins/obs-ffmpeg/ffmpeg-mux/CMakeLists.txt b/plugins/obs-ffmpeg/ffmpeg-mux/CMakeLists.txt
+index c1f9529..b9b0daf 100644
+--- a/plugins/obs-ffmpeg/ffmpeg-mux/CMakeLists.txt
++++ b/plugins/obs-ffmpeg/ffmpeg-mux/CMakeLists.txt
+@@ -16,4 +16,4 @@ target_link_libraries(
+ 
+ target_compile_definitions(obs-ffmpeg-mux PRIVATE $<$<BOOL:${ENABLE_FFMPEG_MUX_DEBUG}>:ENABLE_FFMPEG_MUX_DEBUG>)
+ 
+-set_target_properties_obs(obs-ffmpeg-mux PROPERTIES FOLDER plugins/obs-ffmpeg)
++set_target_properties_obs(obs-ffmpeg-mux PROPERTIES FOLDER plugins/obs-ffmpeg OUTPUT_NAME "$<IF:$<PLATFORM_ID:Windows>,obs-ffmpeg-mux,moonclip-mux>")
+diff --git a/plugins/obs-ffmpeg/obs-ffmpeg-mux.c b/plugins/obs-ffmpeg/obs-ffmpeg-mux.c
+index f152b28..2af6d7c 100644
+--- a/plugins/obs-ffmpeg/obs-ffmpeg-mux.c
++++ b/plugins/obs-ffmpeg/obs-ffmpeg-mux.c
+@@ -113,7 +113,7 @@ static void *ffmpeg_mux_create(obs_data_t *settings, obs_output_t *output)
+ #ifdef _WIN32
+ #define FFMPEG_MUX "obs-ffmpeg-mux.exe"
+ #else
+-#define FFMPEG_MUX "obs-ffmpeg-mux"
++#define FFMPEG_MUX "moonclip-mux"
+ #endif
+ 
+ static inline bool capturing(struct ffmpeg_muxer *stream)
+diff --git a/plugins/obs-nvenc/nvenc-helpers.c b/plugins/obs-nvenc/nvenc-helpers.c
+index 91fac5c..081fae6 100644
+--- a/plugins/obs-nvenc/nvenc-helpers.c
++++ b/plugins/obs-nvenc/nvenc-helpers.c
+@@ -290,7 +290,7 @@ static bool nvenc_check(void)
+ #ifdef _WIN32
+ 	char *test_exe = os_get_executable_path_ptr("obs-nvenc-test.exe");
+ #else
+-	char *test_exe = os_get_executable_path_ptr("obs-nvenc-test");
++	char *test_exe = os_get_executable_path_ptr("moonclip-nvenc-test");
+ #endif
+ 	os_process_args_t *args;
+ 	struct dstr caps_str = {0};
+diff --git a/plugins/obs-nvenc/obs-nvenc-test/CMakeLists.txt b/plugins/obs-nvenc/obs-nvenc-test/CMakeLists.txt
+index 7f83925..edf956e 100644
+--- a/plugins/obs-nvenc/obs-nvenc-test/CMakeLists.txt
++++ b/plugins/obs-nvenc/obs-nvenc-test/CMakeLists.txt
+@@ -7,4 +7,4 @@ add_executable(obs-nvenc-test)
+ target_sources(obs-nvenc-test PRIVATE obs-nvenc-test.cpp)
+ target_link_libraries(obs-nvenc-test FFnvcodec::FFnvcodec)
+ 
+-set_target_properties_obs(obs-nvenc-test PROPERTIES FOLDER plugins/obs-nvenc)
++set_target_properties_obs(obs-nvenc-test PROPERTIES FOLDER plugins/obs-nvenc OUTPUT_NAME "$<IF:$<PLATFORM_ID:Windows>,obs-nvenc-test,moonclip-nvenc-test>")

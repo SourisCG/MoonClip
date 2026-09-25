@@ -5,7 +5,7 @@
 # Tray is unaffected: it uses icons/tray-icon.png via TrayIconBuilder in lib.rs.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TEMPLATE="$ROOT/build-aux/common/dev.souriscg.moonclip.desktop.template"
 OUT="$HOME/.local/share/applications/dev.souriscg.moonclip.desktop"
 

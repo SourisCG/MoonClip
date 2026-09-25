@@ -458,6 +458,14 @@ mod tests {
         assert!(!s.contains("--portable"), "{s}");
     }
 
+    /// The launch command line must never name the upstream product.
+    #[test]
+    fn launch_args_have_no_upstream_name() {
+        let args = p().obs_launch_args(Path::new("/tmp/cfg"), "MoonClip", "MoonClip");
+        let s = args.join(" ").to_lowercase();
+        assert!(!s.contains("obs"), "{s}");
+    }
+
     #[test]
     fn launch_env_isolates_config() {
         let rt = p().prepare_runtime(Path::new("/usr/bin/obs")).unwrap();

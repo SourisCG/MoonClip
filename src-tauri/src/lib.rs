@@ -262,6 +262,18 @@ pub fn run() {
                     commands::sweep_engine_liveness(&handle).await;
                 }
             });
+            // E2E-only (debug builds): auto-start the replay buffer so the
+            // stealth live checks can run without UI interaction.
+            #[cfg(debug_assertions)]
+            if std::env::var("MOONCLIP_E2E_AUTOSTART").as_deref() == Ok("1") {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match commands::start_buffer(handle).await {
+                        Ok(_) => eprintln!("[moonclip] e2e autostart: buffer started"),
+                        Err(e) => eprintln!("[moonclip] e2e autostart failed: {e}"),
+                    }
+                });
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
