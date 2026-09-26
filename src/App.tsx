@@ -9,15 +9,18 @@ import { SettingsModal } from "./components/settings/SettingsModal";
 import { SetupWizard } from "./components/settings/SetupWizard";
 import { AppManager } from "./components/settings/AppManager";
 import { GalleryView } from "./components/gallery/GalleryView";
+import { GamePrompt } from "./components/GamePrompt";
 import { useClips } from "./hooks/useClips";
 import { useEngine } from "./hooks/useEngine";
 import { useLocale } from "./hooks/useLocale";
+import { useCurrentGame } from "./hooks/useCurrentGame";
 
 type View = "clips" | "games" | "settings";
 
 export default function App() {
   const { t } = useTranslation();
   const { locale, setLocale } = useLocale();
+  const currentGame = useCurrentGame();
   const [view, setView] = useState<View>("clips");
   const { clips, refresh: refreshClips } = useClips();
   const [galleryTick, setGalleryTick] = useState(0);
@@ -118,10 +121,12 @@ export default function App() {
                     <p className="font-medium text-slate-300">
                       {status.running ? t("rec.recording") : t("status.standby")}
                     </p>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="truncate text-[11px] text-slate-500">
                       {status.running
-                        ? `${status.backend} · ${t("rec.tracks", { n: status.tracks_linked })}`
-                        : t("status.shortcut", { hotkey })}
+                        ? `${currentGame ? currentGame.title : status.backend} · ${t("rec.tracks", { n: status.tracks_linked })}`
+                        : currentGame
+                          ? t("game.waiting", { name: currentGame.title })
+                          : t("status.shortcut", { hotkey })}
                     </p>
                   </div>
                 </div>
@@ -170,6 +175,7 @@ export default function App() {
           </aside>
 
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-2xl border border-white/5 bg-moonclip-panel/30 p-3 shadow-2xl backdrop-blur-xl sm:p-4 lg:p-6">
+            <GamePrompt />
             {view === "settings" && (
               <>
                 <h2 className="text-xl font-bold text-slate-100">{t("nav.settings")}</h2>

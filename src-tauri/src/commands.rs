@@ -926,6 +926,17 @@ pub fn register_app(db: State<'_, DbState>, input: RegisterAppInput) -> Result<C
 }
 
 #[tauri::command]
+pub fn update_custom_app(
+    db: State<'_, DbState>,
+    id: String,
+    display_name: String,
+    clip_duration_seconds: Option<i64>,
+    auto_buffer: bool,
+) -> Result<(), String> {
+    db.update_app(&id, &display_name, clip_duration_seconds, auto_buffer)
+}
+
+#[tauri::command]
 pub fn delete_app(db: State<'_, DbState>, id: String) -> Result<(), String> {
     db.delete_app(&id)
 }

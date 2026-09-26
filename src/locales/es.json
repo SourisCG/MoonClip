@@ -150,7 +150,22 @@
       "ok": "Bóveda OK: guardar → leer → borrar funcionó."
     }
   },
+  "game": {
+    "detected": "Detectado: {{name}}",
+    "add_hint": "Añádelo una vez y MoonClip lo grabará automáticamente siempre.",
+    "add_and_record": "Añadir y grabar",
+    "ignore": "Ignorar",
+    "registered": "Añadido - se grabará automáticamente",
+    "waiting": "{{name}} listo (búfer apagado)"
+  },
   "games": {
+    "running": "En ejecución",
+    "refresh": "Actualizar",
+    "register_btn": "Añadir",
+    "registered": "Añadido",
+    "browse": "Buscar ejecutable...",
+    "auto_buffer": "Auto",
+    "duration_ph": "segs",
     "name_ph": "Nombre visible (ej. Minecraft)",
     "exe_ph": "Ejecutable objetivo (ej. javaw.exe)",
     "add": "Registrar",

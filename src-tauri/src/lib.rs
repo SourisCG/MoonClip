@@ -309,6 +309,7 @@ pub fn run() {
             commands::get_running_applications,
             commands::current_game,
             commands::register_app,
+            commands::update_custom_app,
             commands::delete_app,
             commands::secret_store,
             commands::secret_get,

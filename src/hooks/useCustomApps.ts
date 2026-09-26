@@ -32,6 +32,24 @@ export function useCustomApps() {
     [refresh],
   );
 
+  const updateApp = useCallback(
+    async (
+      id: string,
+      displayName: string,
+      clipDurationSeconds: number | null,
+      autoBuffer: boolean,
+    ) => {
+      await invoke("update_custom_app", {
+        id,
+        displayName,
+        clipDurationSeconds,
+        autoBuffer,
+      });
+      await refresh();
+    },
+    [refresh],
+  );
+
   const deleteApp = useCallback(
     async (id: string) => {
       await invoke("delete_app", { id });
@@ -40,5 +58,5 @@ export function useCustomApps() {
     [refresh],
   );
 
-  return { apps, loading, error, refresh, registerApp, deleteApp };
+  return { apps, loading, error, refresh, registerApp, updateApp, deleteApp };
 }

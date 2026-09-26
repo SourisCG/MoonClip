@@ -27,6 +27,26 @@ export interface ClipMetadata {
 
 export type AppSettings = Record<string, string>;
 
+/** Mirrors Rust ResolvedCandidate (game detection). */
+export interface ResolvedCandidate {
+  pid: number;
+  exe: string;
+  comm: string;
+  title: string;
+  game_key: string;
+  source: string;
+  uses_gpu: boolean;
+  is_wine: boolean;
+  steam_app_id?: number | null;
+  window_match?: string | null;
+  source_kind: "X11" | "Portal";
+  registered: boolean;
+  custom_id?: string | null;
+  auto_buffer: boolean;
+  clip_duration_seconds?: number | null;
+  icon_path?: string | null;
+}
+
 /** Mirrors Rust CustomApp. */
 export interface CustomApp {
   id: string;

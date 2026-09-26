@@ -151,12 +151,27 @@
       "ok": "Vault OK: store → read → delete succeeded."
     }
   },
+  "game": {
+    "detected": "Detected: {{name}}",
+    "add_hint": "Add it once and MoonClip will record it automatically from now on.",
+    "add_and_record": "Add & record",
+    "ignore": "Ignore",
+    "registered": "Added - auto-recording from now on",
+    "waiting": "{{name}} ready (buffer off)"
+  },
   "games": {
+    "running": "Running now",
+    "refresh": "Refresh",
+    "register_btn": "Add",
+    "registered": "Added",
+    "browse": "Browse executable...",
+    "auto_buffer": "Auto",
+    "duration_ph": "secs",
     "name_ph": "Display name (e.g. Minecraft)",
     "exe_ph": "Target exe (e.g. javaw.exe)",
     "add": "Register",
     "empty": "No custom apps yet.",
-    "picker_note": "Running-process picker and click-to-register arrive in Phase 4."
+    "picker_note": "Detected games are added automatically; register unknown ones once and they will auto-record forever."
   },
   "common": { "loading": "Loading…", "delete": "Delete" },
   "rec": {

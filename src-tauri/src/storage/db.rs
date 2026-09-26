@@ -567,6 +567,38 @@ impl DbState {
         Ok(())
     }
 
+    /// Update the user-editable fields of a row (name, per-game duration,
+    /// auto-buffer toggle). Strategy/window/token are owned by detection.
+    pub fn update_app(
+        &self,
+        id: &str,
+        display_name: &str,
+        clip_duration_seconds: Option<i64>,
+        auto_buffer: bool,
+    ) -> Result<(), String> {
+        if display_name.trim().is_empty() {
+            return Err("display_name is required".into());
+        }
+        let conn = self.lock()?;
+        let changed = conn
+            .execute(
+                "UPDATE custom_apps
+                 SET display_name = ?1, clip_duration_seconds = ?2, auto_buffer = ?3
+                 WHERE id = ?4",
+                params![
+                    display_name,
+                    clip_duration_seconds,
+                    if auto_buffer { 1 } else { 0 },
+                    id
+                ],
+            )
+            .map_err(|e| format!("cannot update app: {e}"))?;
+        if changed == 0 {
+            return Err("app not found".into());
+        }
+        Ok(())
+    }
+
     pub fn delete_app(&self, id: &str) -> Result<(), String> {
         let conn = self.lock()?;
         let changed = conn
@@ -676,6 +708,32 @@ mod tests {
         assert_eq!(app.window_match.as_deref(), Some("1\r\nD\r\ndota"));
         assert_eq!(app.last_seen_ms, Some(222));
         assert_eq!(app.match_strategy, "auto");
+    }
+
+    #[test]
+    fn update_app_edits_user_fields_only() {
+        let db = game_state_db();
+        let app = db
+            .register_app(RegisterAppInput {
+                display_name: "Old".into(),
+                target_exe: "game.exe".into(),
+                match_strategy: "exact_exe".into(),
+                clip_duration_seconds: None,
+                is_wine_proton: Some(true),
+                game_key: Some("wine:game.exe".into()),
+                source_kind: Some("x11".into()),
+                window_match: Some("m".into()),
+                auto_buffer: Some(true),
+            })
+            .unwrap();
+        db.update_app(&app.id, "New Name", Some(60), false).unwrap();
+        let listed = db.list_custom_apps().unwrap();
+        assert_eq!(listed[0].display_name, "New Name");
+        assert_eq!(listed[0].clip_duration_seconds, Some(60));
+        assert!(!listed[0].auto_buffer);
+        assert_eq!(listed[0].match_strategy, "exact_exe");
+        assert_eq!(listed[0].window_match.as_deref(), Some("m"));
+        assert!(db.update_app("nope", "X", None, true).is_err());
     }
 
     #[test]
