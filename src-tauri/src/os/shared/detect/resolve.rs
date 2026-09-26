@@ -41,6 +41,8 @@ pub struct ResolvedCandidate {
     pub auto_buffer: bool,
     /// User-chosen clip duration for this app, if any.
     pub clip_duration_seconds: Option<i64>,
+    /// Cached icon PNG path (from the `custom_apps` row), when known.
+    pub icon_path: Option<String>,
 }
 
 /// Manifest data the platform scanner loaded once per pass.
@@ -125,6 +127,7 @@ fn build(c: &CandidateProcess, title: String, game_key: String, source: &str) ->
         custom_id: None,
         auto_buffer: true,
         clip_duration_seconds: None,
+        icon_path: None,
     }
 }
 

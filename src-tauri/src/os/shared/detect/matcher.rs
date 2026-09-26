@@ -77,6 +77,7 @@ pub fn with_custom(
         resolved.custom_id = Some(app.id.clone());
         resolved.auto_buffer = app.auto_buffer;
         resolved.clip_duration_seconds = app.clip_duration_seconds;
+        resolved.icon_path = app.icon_path.clone();
     }
     resolved
 }

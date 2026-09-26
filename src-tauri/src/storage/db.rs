@@ -552,6 +552,21 @@ impl DbState {
         Ok(())
     }
 
+    /// Store the cached icon path for a game row.
+    pub fn set_game_icon(&self, game_key: &str, icon_path: &str) -> Result<(), String> {
+        let conn = self.lock()?;
+        let changed = conn
+            .execute(
+                "UPDATE custom_apps SET icon_path = ?1 WHERE game_key = ?2",
+                params![icon_path, game_key],
+            )
+            .map_err(|e| format!("cannot store game icon: {e}"))?;
+        if changed == 0 {
+            return Err("game not found".into());
+        }
+        Ok(())
+    }
+
     pub fn delete_app(&self, id: &str) -> Result<(), String> {
         let conn = self.lock()?;
         let changed = conn
@@ -661,6 +676,17 @@ mod tests {
         assert_eq!(app.window_match.as_deref(), Some("1\r\nD\r\ndota"));
         assert_eq!(app.last_seen_ms, Some(222));
         assert_eq!(app.match_strategy, "auto");
+    }
+
+    #[test]
+    fn game_icon_is_stored() {
+        let db = game_state_db();
+        db.set_game_capture("steam:570", "Dota 2", None, None, None, 1)
+            .unwrap();
+        db.set_game_icon("steam:570", "/tmp/icons/abc.png").unwrap();
+        let apps = db.list_custom_apps().unwrap();
+        assert_eq!(apps[0].icon_path.as_deref(), Some("/tmp/icons/abc.png"));
+        assert!(db.set_game_icon("steam:404", "/tmp/x.png").is_err());
     }
 
     #[test]

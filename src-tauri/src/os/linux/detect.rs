@@ -437,6 +437,221 @@ pub fn resolve_all(candidates: Vec<CandidateProcess>) -> Vec<ResolvedCandidate> 
         .collect()
 }
 
+/// Icon lookup roots (injectable in tests).
+#[derive(Debug, Default, Clone)]
+pub struct IconRoots {
+    pub steam_librarycache: Vec<PathBuf>,
+    pub prism_instances: Vec<PathBuf>,
+    pub prism_icons: Vec<PathBuf>,
+    pub applications: Vec<PathBuf>,
+    pub icon_roots: Vec<PathBuf>,
+}
+
+/// Real user/system locations (native + flatpak).
+pub fn default_icon_roots() -> IconRoots {
+    let Some(home) = dirs::home_dir() else {
+        return IconRoots::default();
+    };
+    IconRoots {
+        steam_librarycache: vec![
+            home.join(".steam/steam/appcache/librarycache"),
+            home.join(".local/share/Steam/appcache/librarycache"),
+        ],
+        prism_instances: vec![
+            home.join(".local/share/PrismLauncher/instances"),
+            home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances"),
+        ],
+        prism_icons: vec![
+            home.join(".local/share/PrismLauncher/icons"),
+            home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/icons"),
+        ],
+        applications: vec![
+            home.join(".local/share/applications"),
+            PathBuf::from("/usr/share/applications"),
+            home.join(".local/share/flatpak/exports/share/applications"),
+            PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+        ],
+        icon_roots: vec![
+            home.join(".local/share/icons"),
+            home.join(".local/share/pixmaps"),
+            PathBuf::from("/usr/share/icons"),
+            PathBuf::from("/usr/share/pixmaps"),
+        ],
+    }
+}
+
+/// Best available artwork for a resolved game (the caller caches the copy).
+pub fn find_icon(r: &ResolvedCandidate, roots: &IconRoots) -> Option<PathBuf> {
+    if let Some(id) = r.steam_app_id {
+        if let Some(p) = steam_icon(id, &roots.steam_librarycache) {
+            return Some(p);
+        }
+    }
+    if let Some(instance) = r.game_key.strip_prefix("prism:") {
+        if let Some(p) = prism_icon(instance, roots) {
+            return Some(p);
+        }
+    }
+    desktop_icon(&r.exe, window_class(r), roots)
+}
+
+fn steam_icon(app_id: u32, caches: &[PathBuf]) -> Option<PathBuf> {
+    for cache in caches {
+        for file in [
+            "header.jpg",
+            "library_600x900.jpg",
+            "library_hero.jpg",
+            "logo.png",
+        ] {
+            let p = cache.join(app_id.to_string()).join(file);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        let p = cache.join(format!("{app_id}_header.jpg"));
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn prism_icon(instance: &str, roots: &IconRoots) -> Option<PathBuf> {
+    for dir in &roots.prism_instances {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.to_lowercase() != instance {
+                continue;
+            }
+            if let Ok(cfg) = std::fs::read_to_string(e.path().join("instance.cfg")) {
+                if let Some(key) = cfg
+                    .lines()
+                    .find_map(|l| l.trim().strip_prefix("iconKey="))
+                {
+                    for icons in &roots.prism_icons {
+                        let p = icons.join(format!("{}.png", key.trim()));
+                        if p.is_file() {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+            let p = e.path().join("icon.png");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn window_class(r: &ResolvedCandidate) -> Option<String> {
+    let m = r.window_match.as_deref()?;
+    let class = m.rsplit("\r\n").next().unwrap_or("").trim();
+    (!class.is_empty()).then(|| class.to_lowercase())
+}
+
+fn desktop_icon(exe: &str, class: Option<String>, roots: &IconRoots) -> Option<PathBuf> {
+    let exe_base = exe
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(exe)
+        .to_lowercase();
+    let exe_stem = exe_base
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(&exe_base)
+        .to_string();
+    for dir in &roots.applications {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            if e.path().extension().and_then(|s| s.to_str()) != Some("desktop") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(e.path()) else {
+                continue;
+            };
+            let mut icon = None;
+            let mut matched = false;
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(v) = line.strip_prefix("Exec=") {
+                    let first = v.split_whitespace().next().unwrap_or("");
+                    let base = first
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(first)
+                        .to_lowercase();
+                    if !base.is_empty() && (base == exe_base || base == exe_stem) {
+                        matched = true;
+                    }
+                } else if let Some(v) = line.strip_prefix("StartupWMClass=") {
+                    if class.as_deref() == Some(v.trim().to_lowercase().as_str()) {
+                        matched = true;
+                    }
+                } else if let Some(v) = line.strip_prefix("Icon=") {
+                    icon = Some(v.trim().to_string());
+                }
+            }
+            if matched {
+                if let Some(icon) = icon {
+                    if let Some(p) = resolve_icon_name(&icon, &roots.icon_roots) {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_icon_name(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
+    let direct = PathBuf::from(name);
+    if direct.is_absolute() && direct.is_file() {
+        return Some(direct);
+    }
+    for root in roots {
+        if let Some(p) = search_icon(root, name, 4) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn search_icon(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            if let Some(p) = search_icon(&path, name, depth - 1) {
+                return Some(p);
+            }
+        } else {
+            let file_name = e.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            if file_name == format!("{name}.png") || file_name == format!("{name}.svg") {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +779,72 @@ mod tests {
         // but it has no GPU FD / window: still fine to be present).
         assert!(found.iter().all(|c| c.pid != std::process::id()));
         assert!(found.iter().all(|c| !is_blacklisted(&c.comm)));
+    }
+
+    #[test]
+    fn icon_resolution_from_fixtures() {
+        use crate::os::shared::detect::{ResolvedCandidate, SourceKind};
+        let root = std::env::temp_dir().join(format!("moonclip-icons-idx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        write(&root.join("steam/105600/header.jpg"), b"jpeg-bytes");
+        write(&root.join("prism/MiMundo/instance.cfg"), b"name=Mi Mundo\niconKey=modrinth_x\n");
+        write(&root.join("prism-icons/modrinth_x.png"), b"png-bytes");
+        write(
+            &root.join("apps/game.desktop"),
+            b"[Desktop Entry]\nExec=/opt/Game/game.bin %u\nIcon=myicon\nStartupWMClass=mygame\n",
+        );
+        write(&root.join("themes/hicolor/64x64/apps/myicon.png"), b"png-bytes");
+
+        let roots = IconRoots {
+            steam_librarycache: vec![root.join("steam")],
+            prism_instances: vec![root.join("prism")],
+            prism_icons: vec![root.join("prism-icons")],
+            applications: vec![root.join("apps")],
+            icon_roots: vec![root.join("themes")],
+        };
+
+        let base = ResolvedCandidate {
+            pid: 1,
+            exe: "/opt/Game/game.bin".to_string(),
+            comm: "game".to_string(),
+            title: "Game".to_string(),
+            game_key: "exe:game".to_string(),
+            source: "fallback".to_string(),
+            uses_gpu: true,
+            is_wine: false,
+            steam_app_id: None,
+            window_match: None,
+            source_kind: SourceKind::Portal,
+            registered: false,
+            custom_id: None,
+            auto_buffer: true,
+            clip_duration_seconds: None,
+            icon_path: None,
+        };
+
+        let mut steam = base.clone();
+        steam.steam_app_id = Some(105600);
+        assert_eq!(
+            find_icon(&steam, &roots).unwrap(),
+            root.join("steam/105600/header.jpg")
+        );
+
+        let mut prism = base.clone();
+        prism.game_key = "prism:mimundo".to_string();
+        assert_eq!(
+            find_icon(&prism, &roots).unwrap(),
+            root.join("prism-icons/modrinth_x.png")
+        );
+
+        // Desktop entry matched by WM_CLASS from the encoded window match.
+        let mut desktop = base.clone();
+        desktop.window_match = Some("1\r\nTitle\r\nmygame".to_string());
+        assert_eq!(
+            find_icon(&desktop, &roots).unwrap(),
+            root.join("themes/hicolor/64x64/apps/myicon.png")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

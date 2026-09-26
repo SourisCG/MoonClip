@@ -98,6 +98,22 @@ pub fn encoder_catalog() -> &'static [shared::encoder_options::EncoderEntry] {
     linux::engine::encoder_catalog()
 }
 
+/// Directory where resolved game icons are cached as PNGs.
+pub fn game_icons_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("MoonClip").join("icons"))
+}
+
+/// Best available icon source for a resolved game (Linux artwork sources;
+/// Windows wires `SHGetFileInfo` in its own step).
+#[cfg(target_os = "linux")]
+pub fn find_game_icon(r: &shared::detect::ResolvedCandidate) -> Option<PathBuf> {
+    linux::detect::find_icon(r, &linux::detect::default_icon_roots())
+}
+#[cfg(not(target_os = "linux"))]
+pub fn find_game_icon(_r: &shared::detect::ResolvedCandidate) -> Option<PathBuf> {
+    None
+}
+
 /// Raw running game candidates (read-only scan). Windows wires its own
 /// scanner in the Windows step.
 #[cfg(target_os = "linux")]

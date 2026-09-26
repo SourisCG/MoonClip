@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { Plus, Trash2 } from "lucide-react";
 import { useCustomApps } from "../../hooks/useCustomApps";
 
@@ -74,12 +75,25 @@ export function AppManager() {
               key={a.id}
               className="flex flex-col items-start gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4"
             >
-              <div className="w-full min-w-0 text-sm sm:w-auto">
-                <p className="font-medium text-slate-200">{a.display_name}</p>
-                <p className="break-all font-mono text-xs text-slate-500">
-                  {a.target_exe} · {a.match_strategy}
-                  {a.clip_duration_seconds ? ` · ${a.clip_duration_seconds}s` : ""}
-                </p>
+              <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto">
+                {a.icon_path ? (
+                  <img
+                    src={convertFileSrc(a.icon_path)}
+                    alt=""
+                    className="h-8 w-8 shrink-0 rounded-lg object-cover"
+                  />
+                ) : (
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-xs font-semibold text-slate-300">
+                    {a.display_name.trim().charAt(0).toUpperCase() || "?"}
+                  </span>
+                )}
+                <div className="min-w-0 text-sm">
+                  <p className="truncate font-medium text-slate-200">{a.display_name}</p>
+                  <p className="break-all font-mono text-xs text-slate-500">
+                    {a.target_exe || a.game_key} · {a.match_strategy}
+                    {a.clip_duration_seconds ? ` · ${a.clip_duration_seconds}s` : ""}
+                  </p>
+                </div>
               </div>
               <button
                 onClick={() => void deleteApp(a.id)}

@@ -3,6 +3,7 @@
 //! `os/<os>/detect.rs`; everything here is pure and unit-tested with fixtures.
 
 pub mod auto;
+pub mod icons;
 pub mod matcher;
 pub mod parsers;
 pub mod resolve;

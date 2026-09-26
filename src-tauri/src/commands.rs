@@ -844,6 +844,28 @@ pub(crate) async fn detect_tick(app: &AppHandle) {
     if changed {
         let _ = app.emit("moonclip://game-changed", &best);
     }
+    // Resolve the game icon once per row (Steam/Prism/.desktop artwork),
+    // cache it as PNG and remember it next to the per-game state.
+    if let Some(r) = best.as_ref() {
+        if let Some(row) = apps
+            .iter()
+            .find(|a| a.game_key.as_deref() == Some(r.game_key.as_str()))
+        {
+            let missing = row
+                .icon_path
+                .as_ref()
+                .map(|p| !std::path::Path::new(p).exists())
+                .unwrap_or(true);
+            if missing {
+                if let (Some(src), Some(icons_dir)) = (os::find_game_icon(r), os::game_icons_dir()) {
+                    if let Some(cached) = os::shared::detect::icons::cache_icon(&src, &icons_dir) {
+                        let db = app.state::<DbState>();
+                        let _ = db.set_game_icon(&r.game_key, &cached.to_string_lossy());
+                    }
+                }
+            }
+        }
+    }
     match action {
         os::shared::detect::auto::AutoAction::Start => {
             let Some(r) = best.as_ref() else { return };
