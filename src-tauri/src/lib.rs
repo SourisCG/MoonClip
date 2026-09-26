@@ -292,6 +292,7 @@ pub fn run() {
             commands::delete_clip,
             commands::purge_missing_clips,
             commands::resolve_clip_src,
+            commands::read_thumbnail,
             commands::get_settings,
             commands::set_setting,
             commands::set_settings,

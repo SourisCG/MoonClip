@@ -709,6 +709,41 @@ pub fn register_app(db: State<'_, DbState>, input: RegisterAppInput) -> Result<C
     db.register_app(input)
 }
 
+/// Validate a stored media file name (a name, never a path) and resolve it
+/// inside `base`.
+pub(crate) fn validated_media_path(
+    base: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, String> {
+    if name.is_empty()
+        || name.contains("..")
+        || name.contains('/')
+        || name.contains('\\')
+        || std::path::Path::new(name).is_absolute()
+    {
+        return Err("invalid media name".into());
+    }
+    let path = base.join(name);
+    if !path.is_file() {
+        return Err(format!("media not found: {name}"));
+    }
+    Ok(path)
+}
+
+/// Raw thumbnail bytes for the gallery. The webview cannot load `asset://`
+/// reliably, so images travel over IPC as bytes.
+#[tauri::command]
+pub fn read_thumbnail(
+    db: State<'_, DbState>,
+    thumbnail_name: String,
+) -> Result<tauri::ipc::Response, String> {
+    let base = db.clips_dir()?;
+    let path = validated_media_path(&base, &thumbnail_name)?;
+    let bytes =
+        std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 pub fn delete_app(db: State<'_, DbState>, id: String) -> Result<(), String> {
     db.delete_app(&id)
@@ -1691,6 +1726,26 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         color_ranges: enc::COLOR_RANGES.iter().map(|s| s.to_string()).collect(),
         custom,
     })
+}
+
+#[cfg(test)]
+mod media_path_tests {
+    use super::validated_media_path;
+
+    #[test]
+    fn media_path_is_a_name_only() {
+        let tmp = std::env::temp_dir().join(format!("moonclip-media-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("thumb.jpg"), b"x").unwrap();
+
+        assert!(validated_media_path(&tmp, "thumb.jpg").is_ok());
+        for bad in ["../thumb.jpg", "/etc/passwd", "sub/thumb.jpg", "..", "", "a\\b.jpg"] {
+            assert!(validated_media_path(&tmp, bad).is_err(), "{bad}");
+        }
+        assert!(validated_media_path(&tmp, "missing.jpg").is_err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 #[cfg(test)]

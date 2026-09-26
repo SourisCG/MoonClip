@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { thumbnailUrl } from "../../lib/media";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Clapperboard, FolderOpen, Star, Trash2 } from "lucide-react";
 import { useClips } from "../../hooks/useClips";
@@ -25,19 +26,26 @@ function Thumb({
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    absOf(clip.thumbnail_name).then(
-      (abs) => {
-        if (!cancelled) setSrc(convertFileSrc(abs));
+    let url: string | null = null;
+    thumbnailUrl(clip.thumbnail_name).then(
+      (u) => {
+        if (cancelled) {
+          URL.revokeObjectURL(u);
+        } else {
+          url = u;
+          setSrc(u);
+        }
       },
       (e) => {
         if (!cancelled) {
-          onError(`thumb resolve: ${String(e)}`);
+          onError(`thumb: ${String(e)}`);
           setSrc(null);
         }
       },
     );
     return () => {
       cancelled = true;
+      if (url) URL.revokeObjectURL(url);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.thumbnail_name]);
