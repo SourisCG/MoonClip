@@ -17,6 +17,23 @@ fn basename(s: &str) -> String {
     s.rsplit(['/', '\\']).next().unwrap_or(s).to_string()
 }
 
+/// Display/registration name for a process: Wine/Proton wrappers show the
+/// game's `.exe` (from the cmdline) instead of `wine-preloader`.
+pub fn game_exe_name(p: &ProcInfo) -> String {
+    let base = basename(&p.exe);
+    let low = base.to_lowercase();
+    if low.starts_with("wine") || low.contains("pressure-vessel") {
+        if let Some(exe) = p
+            .cmdline
+            .iter()
+            .find(|a| a.to_lowercase().ends_with(".exe"))
+        {
+            return basename(exe);
+        }
+    }
+    base
+}
+
 /// Does a registered app rule match this process? `window_title` needs
 /// compositor window info and is not supported by the simple poller.
 pub fn app_matches(app: &CustomApp, p: &ProcInfo) -> bool {
@@ -81,6 +98,18 @@ mod tests {
         assert!(!app_matches(&app("exact_exe", "other.exe"), &p));
         assert!(!app_matches(&app("window_title", "fnaf"), &p));
         assert!(!app_matches(&app("exact_exe", ""), &p));
+    }
+
+    #[test]
+    fn wine_wrappers_report_the_game_exe() {
+        let p = proc_info(
+            "wine-preloader",
+            "/usr/bin/wine-preloader",
+            &["Z:\\games\\KINGDOM HEARTS FINAL MIX.exe", "-steam"],
+        );
+        assert_eq!(game_exe_name(&p), "KINGDOM HEARTS FINAL MIX.exe");
+        let native = proc_info("fnaf.exe", "/games/fnaf.exe", &["/games/fnaf.exe"]);
+        assert_eq!(game_exe_name(&native), "fnaf.exe");
     }
 
     #[test]

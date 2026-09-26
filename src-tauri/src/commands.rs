@@ -974,12 +974,7 @@ pub fn running_apps() -> Vec<RunningApp> {
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<RunningApp> = Vec::new();
     for p in os::running_processes() {
-        let base = p
-            .exe
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(&p.exe)
-            .to_string();
+        let base = os::shared::procs::game_exe_name(&p);
         let low = base.to_lowercase();
         if low.is_empty() || low.starts_with("moonclip") || !seen.insert(low) {
             continue;
