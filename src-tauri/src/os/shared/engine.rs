@@ -130,7 +130,12 @@ pub trait ObsPlatform: Send + Sync {
     fn kill_orphans(&self, obs_bin: &Path);
     /// OBS video source for the chosen monitor/window: (source id, settings).
     /// Implementations must never return the game-capture source.
-    fn video_source(&self, monitor: &str, window: &str) -> (&'static str, serde_json::Value);
+    fn video_source(
+        &self,
+        monitor: &str,
+        window: &str,
+        window_match: Option<&str>,
+    ) -> (&'static str, serde_json::Value);
     /// OBS source ids for desktop (game) and microphone audio.
     fn game_audio_source_id(&self) -> &'static str;
     fn mic_audio_source_id(&self) -> &'static str;
@@ -363,7 +368,7 @@ impl ObsProfile {
         };
 
         let (video_source_id, mut video_settings) =
-            platform.video_source(&cfg.monitor, &cfg.window);
+            platform.video_source(&cfg.monitor, &cfg.window, cfg.window_match.as_deref());
         // Portal restore token (Wayland): pre-seed it so OBS restores the
         // screen session silently instead of showing the picker again. OBS
         // refreshes the token on every successful Start; the caller reads it
@@ -1332,7 +1337,12 @@ mod tests {
             None
         }
         fn kill_orphans(&self, _bin: &Path) {}
-        fn video_source(&self, monitor: &str, _window: &str) -> (&'static str, serde_json::Value) {
+        fn video_source(
+            &self,
+            monitor: &str,
+            _window: &str,
+            _window_match: Option<&str>,
+        ) -> (&'static str, serde_json::Value) {
             (
                 "monitor_capture",
                 json!({"monitor": monitor, "method": 1, "capture_cursor": true}),
@@ -1374,6 +1384,7 @@ mod tests {
             out_height: 1080,
             monitor: "0".into(),
             window: String::new(),
+            window_match: None,
             desktop_device: "default_output".into(),
             mic_device: "default_input".into(),
             gain_game: 100,

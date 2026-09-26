@@ -247,7 +247,12 @@ impl ObsPlatform for WindowsPlatform {
         }
     }
 
-    fn video_source(&self, monitor: &str, window: &str) -> (&'static str, serde_json::Value) {
+    fn video_source(
+        &self,
+        monitor: &str,
+        window: &str,
+        _window_match: Option<&str>,
+    ) -> (&'static str, serde_json::Value) {
         if !window.trim().is_empty() {
             // Window capture (WGC, no injection); opt-in for now.
             return (
@@ -543,12 +548,12 @@ mod tests {
     fn video_source_never_game_capture() {
         let dev =
             r"\\?\DISPLAY#IPS2380#5&2772c986&0&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
-        let (id, settings) = p().video_source(dev, "");
+        let (id, settings) = p().video_source(dev, "", None);
         assert_eq!(id, "monitor_capture");
         assert_eq!(settings["monitor_id"], dev);
         assert_eq!(settings["method"], 2);
         assert_eq!(settings["force_sdr"], true);
-        let (id, settings) = p().video_source("", "Game");
+        let (id, settings) = p().video_source("", "Game", None);
         assert_eq!(id, "window_capture");
         assert_eq!(settings["window"], "Game");
         assert_ne!(id, "game_capture");

@@ -216,10 +216,24 @@ impl ObsPlatform for LinuxPlatform {
         );
     }
 
-    fn video_source(&self, _monitor: &str, window: &str) -> (&'static str, serde_json::Value) {
-        // Wayland/X11 screen capture through the XDG portal (compositor-level,
-        // no injection). OBS opens the system picker on first use; the user
-        // can persist the choice in the portal (Remember).
+    fn video_source(
+        &self,
+        _monitor: &str,
+        window: &str,
+        window_match: Option<&str>,
+    ) -> (&'static str, serde_json::Value) {
+        // X11/XWayland windows are captured directly (no portal, no dialog)
+        // by exact id + name + class; the id is tried first and the
+        // name/class fallback survives window recreation.
+        if let Some(m) = window_match.filter(|m| !m.trim().is_empty()) {
+            return (
+                "xcomposite_input",
+                serde_json::json!({ "capture_window": m }),
+            );
+        }
+        // Wayland-native windows (and monitors) go through the XDG portal;
+        // a per-game RestoreToken is pre-seeded so the picker only appears
+        // the first time.
         if !window.trim().is_empty() {
             return ("pipewire-window-capture-source", serde_json::json!({}));
         }
@@ -493,10 +507,22 @@ mod tests {
     }
 
     #[test]
-    fn video_source_is_portal_never_game() {
-        let (id, _) = p().video_source("", "");
+    fn x11_window_source_uses_xcomposite() {
+        let m = "123456789\r\nElden Ring\r\neldenring";
+        let (id, settings) = p().video_source("", "", Some(m));
+        assert_eq!(id, "xcomposite_input");
+        assert_eq!(settings["capture_window"], m);
+        let (id, _) = p().video_source("", "window", Some(""));
+        assert_eq!(id, "pipewire-window-capture-source");
+        let (id, _) = p().video_source("", "", None);
         assert_eq!(id, "pipewire-desktop-capture-source");
-        let (id, _) = p().video_source("", "Game");
+    }
+
+    #[test]
+    fn video_source_is_portal_never_game() {
+        let (id, _) = p().video_source("", "", None);
+        assert_eq!(id, "pipewire-desktop-capture-source");
+        let (id, _) = p().video_source("", "Game", None);
         assert_eq!(id, "pipewire-window-capture-source");
         assert_ne!(id, crate::os::shared::engine::FORBIDDEN_SOURCE_ID);
     }

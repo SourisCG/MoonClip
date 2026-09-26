@@ -121,6 +121,23 @@ pub(crate) struct StartOverrides {
     /// Full Custom payloads for the "Probar" button (validated, not persisted).
     pub custom_encoder: Option<CustomEncoder>,
     pub custom_video: Option<CustomVideo>,
+    /// Detected per-game context (window capture + duration), when known.
+    pub game: Option<GameContext>,
+}
+
+/// Detection result for the game being captured: drives window targeting,
+/// the per-game portal token and the user-chosen clip duration.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GameContext {
+    pub key: String,
+    pub title: String,
+    /// 'x11' | 'portal'
+    pub source_kind: Option<String>,
+    pub window_match: Option<String>,
+    /// Wayland-native restore token already stored for this game.
+    pub token: Option<String>,
+    /// User-chosen clip duration for this game.
+    pub duration_seconds: Option<u32>,
 }
 
 /// Validate Custom JSON payloads before persisting: unknown encoder ids,
@@ -180,6 +197,7 @@ pub(crate) async fn build_capture_config(
     let output_dir = db.clips_dir()?;
     let duration_seconds = overrides
         .duration_seconds
+        .or_else(|| overrides.game.as_ref().and_then(|g| g.duration_seconds))
         .unwrap_or_else(|| buffer_seconds(&db) as u32);
 
     // Legacy `video_codec=x264` (old CPU option) maps to h264 + cpu encoder.
@@ -331,7 +349,23 @@ pub(crate) async fn build_capture_config(
         bitrate_kbps: bitrate,
         out_height,
         monitor: selected.map(|m| m.name.clone()).unwrap_or_default(),
-        window: setting_str(&db, "capture_window", ""),
+        window: if overrides
+            .game
+            .as_ref()
+            .map(|g| g.window_match.is_none() && g.source_kind.as_deref() == Some("portal"))
+            .unwrap_or(false)
+        {
+            // Portal window capture: any non-empty marker selects the window
+            // source; the session itself comes from the per-game token.
+            overrides
+                .game
+                .as_ref()
+                .map(|g| g.key.clone())
+                .unwrap_or_default()
+        } else {
+            setting_str(&db, "capture_window", "")
+        },
+        window_match: overrides.game.as_ref().and_then(|g| g.window_match.clone()),
         desktop_device: devices::resolve_obs_device_id(
             &setting_str(&db, "desktop_device", "default_output"),
             true,
@@ -364,7 +398,12 @@ pub(crate) async fn build_capture_config(
         vendor: video::vendor().await,
         base_width,
         base_height,
-        portal_restore_token: setting_str(&db, "engine_restore_token", ""),
+        portal_restore_token: overrides
+            .game
+            .as_ref()
+            .and_then(|g| g.token.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| setting_str(&db, "engine_restore_token", "")),
         custom_encoder,
         custom_video,
         obs_bin: Some(obs_bin),
@@ -430,9 +469,38 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
             "no screen captured: the system picker was cancelled or no stream was granted".into(),
         );
     };
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    };
+    if let Some(g) = &overrides.game {
+        // Persist the detected per-game capture state (window/token) so the
+        // next start restores silently.
+        let db = app.state::<DbState>();
+        let _ = db.set_game_capture(
+            &g.key,
+            &g.title,
+            g.source_kind.as_deref(),
+            g.window_match.as_deref(),
+            None,
+            now_ms(),
+        );
+    }
     if let Some(token) = engine.read_restore_token().await {
         let db = app.state::<DbState>();
         let _ = db.set_setting("engine_restore_token", &token);
+        if let Some(g) = &overrides.game {
+            let _ = db.set_game_capture(
+                &g.key,
+                &g.title,
+                g.source_kind.as_deref(),
+                g.window_match.as_deref(),
+                Some(&token),
+                now_ms(),
+            );
+        }
         engine.note("screen token updated");
     }
     {

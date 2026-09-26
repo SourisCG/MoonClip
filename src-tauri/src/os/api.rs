@@ -52,9 +52,13 @@ pub struct CaptureConfig {
     pub out_height: u32,
     /// Monitor selector (platform id/name). Empty = primary/portal.
     pub monitor: String,
-    /// Optional window capture target (empty = monitor capture).
-    #[allow(dead_code)] // wired by the window-capture UI in a later phase
+    /// Optional window capture target (empty = monitor capture). For the
+    /// portal route it only marks "capture a window"; the real target is the
+    /// per-game restore token. Windows passes the title/class here (WGC).
     pub window: String,
+    /// X11/XWayland `xcomposite_input` match (`id\r\nname\r\nclass`):
+    /// when set, the window is captured with no portal dialog.
+    pub window_match: Option<String>,
     /// Game/desktop audio device id ("default_output" = OS default).
     pub desktop_device: String,
     /// Microphone device id ("default_input" = OS default).

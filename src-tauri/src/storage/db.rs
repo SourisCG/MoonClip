@@ -510,6 +510,48 @@ impl DbState {
         Ok(app)
     }
 
+    /// Create or refresh the per-game row and persist capture state. User
+    /// prefs (duration, auto_buffer, icon) are never overwritten; a `None`
+    /// token/window keeps the stored one.
+    pub fn set_game_capture(
+        &self,
+        game_key: &str,
+        display_name: &str,
+        source_kind: Option<&str>,
+        window_match: Option<&str>,
+        token: Option<&str>,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        if game_key.trim().is_empty() {
+            return Err("empty game_key".into());
+        }
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO custom_apps
+             (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path,
+              is_wine_proton, game_key, capture_mode, source_kind, window_match, portal_token,
+              auto_buffer, last_seen_ms)
+             VALUES (?1, ?2, '', 'auto', NULL, NULL, 0, ?3, 'window', ?4, ?5, ?6, 1, ?7)
+             ON CONFLICT(game_key) WHERE game_key IS NOT NULL DO UPDATE SET
+               display_name = excluded.display_name,
+               source_kind  = COALESCE(excluded.source_kind, source_kind),
+               window_match = COALESCE(excluded.window_match, window_match),
+               portal_token = COALESCE(excluded.portal_token, portal_token),
+               last_seen_ms = excluded.last_seen_ms",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                display_name,
+                game_key,
+                source_kind,
+                window_match,
+                token,
+                now_ms,
+            ],
+        )
+        .map_err(|e| format!("cannot store game capture state: {e}"))?;
+        Ok(())
+    }
+
     pub fn delete_app(&self, id: &str) -> Result<(), String> {
         let conn = self.lock()?;
         let changed = conn
@@ -593,6 +635,32 @@ mod tests {
         ] {
             assert!(cols.iter().any(|c| c == expected), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn game_capture_state_is_upserted_and_preserves_prefs() {
+        let db = game_state_db();
+        db.set_game_capture(
+            "steam:570",
+            "Dota 2",
+            Some("x11"),
+            Some("1\r\nD\r\ndota"),
+            Some("tok-1"),
+            111,
+        )
+        .unwrap();
+        // Second call without token/window: keep both, update the name.
+        db.set_game_capture("steam:570", "Dota 2 v2", None, None, None, 222)
+            .unwrap();
+        let apps = db.list_custom_apps().unwrap();
+        assert_eq!(apps.len(), 1);
+        let app = &apps[0];
+        assert_eq!(app.display_name, "Dota 2 v2");
+        assert_eq!(app.game_key.as_deref(), Some("steam:570"));
+        assert_eq!(app.portal_token.as_deref(), Some("tok-1"));
+        assert_eq!(app.window_match.as_deref(), Some("1\r\nD\r\ndota"));
+        assert_eq!(app.last_seen_ms, Some(222));
+        assert_eq!(app.match_strategy, "auto");
     }
 
     #[test]
