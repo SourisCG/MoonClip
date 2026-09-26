@@ -28,7 +28,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 |  | Typical closed recorders | MoonClip |
 |---|---|---|
 | Cloud required | Often yes, account + upload | **No. Zero-cloud, local-first** |
-| Linux support | Rare / limited | **Yes (X11 + Wayland via PipeWire portal, embedded OBS)** |
+| Linux support | Rare / limited | **Yes (Wayland via PipeWire portal, embedded OBS)** |
 | Windows support | Yes | Yes (Windows 10 1903+ / 11, DXGI/WGC display capture, embedded OBS) |
 | Idle footprint while gaming | Often heavy (bundled Chromium/Electron) | **<80 MB RAM, ~0% CPU, window hidden to tray** |
 | Replay buffer | Sometimes | **Yes, RAM ring, no disk writes until save** |
