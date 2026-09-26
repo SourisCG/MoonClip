@@ -3,6 +3,7 @@
 //! config).
 
 pub mod binary;
+pub mod detect;
 pub mod devices;
 pub mod engine;
 pub mod open;

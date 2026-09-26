@@ -39,6 +39,8 @@ obws = "0.15"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }
+# X11/XWayland window lookup for game detection + window capture targeting.
+x11rb = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # WASAPI audio via the `wasapi` crate (loopback + mic + IAudioClock/QPCPosition);

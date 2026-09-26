@@ -298,6 +298,7 @@ pub fn run() {
             commands::set_video_quality,
             commands::system_memory,
             commands::list_custom_apps,
+            commands::get_running_applications,
             commands::register_app,
             commands::delete_app,
             commands::secret_store,

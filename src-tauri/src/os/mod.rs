@@ -98,6 +98,18 @@ pub fn encoder_catalog() -> &'static [shared::encoder_options::EncoderEntry] {
     linux::engine::encoder_catalog()
 }
 
+/// Resolved running game candidates for the picker and the detection worker
+/// (manifest lookups cached). Windows wires its own scanner in the Windows
+/// step.
+#[cfg(target_os = "linux")]
+pub fn detect_running_applications() -> Vec<shared::detect::ResolvedCandidate> {
+    linux::detect::resolve_all(linux::detect::scan())
+}
+#[cfg(not(target_os = "linux"))]
+pub fn detect_running_applications() -> Vec<shared::detect::ResolvedCandidate> {
+    Vec::new()
+}
+
 /// Free physical memory in MB when the platform can report it (used by the
 /// settings UI to color the buffer-size warning; `None` hides the check).
 #[cfg(target_os = "windows")]

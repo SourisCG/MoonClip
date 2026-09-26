@@ -699,6 +699,19 @@ pub async fn set_settings(app: AppHandle, values: Vec<SettingPair>) -> Result<()
     Ok(())
 }
 
+/// Running game candidates for the picker (read-only; already blacklist
+/// filtered). Keeps processes that use the GPU, come from Steam/Wine or own
+/// an X11 window.
+#[tauri::command]
+pub fn get_running_applications() -> Vec<os::shared::detect::ResolvedCandidate> {
+    let mut out = os::detect_running_applications();
+    out.retain(|c| {
+        c.uses_gpu || c.steam_app_id.is_some() || c.is_wine || c.window_match.is_some()
+    });
+    out.sort_by(|a, b| a.title.cmp(&b.title));
+    out
+}
+
 #[tauri::command]
 pub fn list_custom_apps(db: State<'_, DbState>) -> Result<Vec<CustomApp>, String> {
     db.list_custom_apps()
