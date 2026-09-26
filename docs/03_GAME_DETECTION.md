@@ -1,14 +1,37 @@
 # 03 — Game Detection (Steam, Wine/Proton, Launchers, Custom Apps)
 
-> **V4 decisions (supersede parts of this doc; as-built rewrite in 4.9):**
-> the capture source is the **game window** by default. X11/XWayland windows
-> are captured with `xcomposite_input` (`capture_window` = `id\r\nname\r\nclass`)
-> with **no portal dialog**; Wayland-native windows use
-> `pipewire-window-capture-source` with a **per-game restore token** stored in
-> `custom_apps`. Known/registered games auto-start the buffer and auto-stop
-> when they close; unknown games are registered once (then auto forever).
-> Monitor capture stays available as a manual option. See
-> `docs/10_GAME_DETECTION_PLAN.md`.
+> **As-built (V4, 2026-09-26).** The sections below remain the source
+> reference; this is what shipped:
+>
+> - **Scanner**: `os/linux/detect.rs` (read-only `/proc`: exe/cmdline, GPU FDs
+>   `/dev/dri/renderD*` + `/dev/nvidia*`, strict Wine detection, `SteamAppId`
+>   env, flatpak cgroups, `x11rb` pid-to-window map) and
+>   `os/windows/detect.rs` (ToolHelp32 + foreground window).
+> - **Parsers** (`os/shared/detect/parsers.rs`): Steam `.acf` +
+>   `libraryfolders.vdf`, Heroic `installed.json`, Prism `instance.cfg` +
+>   `--gameDir`, Wine cmdline/exe, Minecraft Java, flatpak id, blacklist
+>   (our engine, compositors, browsers/Electron, Wine plumbing).
+> - **Resolution** (`resolve.rs`): custom app -> Steam -> Heroic ->
+>   Prism/Minecraft -> Wine -> fallback (window title / exe stem). Windows
+>   adds Steam-installdir, Epic manifests and a Battle.net exe map.
+> - **State** (`custom_apps`, migration 010): `game_key` (stable identity),
+>   `capture_mode`, `source_kind` (`window`/`portal`), `window_match`
+>   (`id\r\nname\r\nclass` for `xcomposite_input`), `portal_token`,
+>   `auto_buffer`, `last_seen_ms`, `icon_path`.
+> - **Worker** (`commands::detect_tick`, 3 s): emits
+>   `moonclip://game-changed` and drives the pure auto-buffer state machine
+>   (`auto.rs`: 3 s start debounce, 7 s stop debounce, manual sessions never
+>   auto-stopped, unknown games need the one-time registration).
+> - **Capture**: X11/XWayland windows via `xcomposite_input` (zero dialogs,
+>   survives restarts); Wayland-native windows via the portal with a per-game
+>   restore token refreshed after every Start; monitor stays a manual option.
+> - **Icons**: Steam `librarycache`, Prism `icons/<iconKey>`, Linux
+>   `.desktop` theme icons -> cached PNGs under `<data>/MoonClip/icons`;
+>   letter avatar fallback.
+> - **Not implemented yet**: click-to-pick-window crosshair, Xbox/UWP and
+>   EA/Ubisoft/Rockstar/GOG/itch manifests on Windows, exe icons via
+>   `SHGetFileInfo`, and the real-game spike (KDE window restore behaviour).
+>   See `docs/10_GAME_DETECTION_PLAN.md` for the live checklist.
 
 ## 1. Priority pipeline (on F9)
 

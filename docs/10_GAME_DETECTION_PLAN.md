@@ -75,6 +75,22 @@ state.
 | candidate gone ~7 s, session was auto | stop |
 | manual session | never auto-stopped |
 
+## Status (2026-09-26)
+
+| # | Status | Commit |
+|---|---|---|
+| 4.0 docs | done | `93a9cef` |
+| 4.1 Linux detection | done | `5db7c96` |
+| 4.2 DB + matcher | done | `afd34c8` |
+| 4.3 window capture | done | `e0d867b` |
+| 4.4 auto-buffer | done | `ebf8538` |
+| 4.5 clip integration | done | `2d4e2ce` |
+| 4.6 icons | done | `eadd458` |
+| 4.7 UX | done | `9b03d5f` |
+| 4.8 Windows code | done (owner pass pending) | `d9336c6` |
+| 4.9 close | in progress | - |
+| Spike A/B/C | pending (real game) | - |
+
 ## Sub-phases (agent pattern: implement ONLY 4.x, verify acceptance, commit)
 
 | # | Scope | Acceptance |

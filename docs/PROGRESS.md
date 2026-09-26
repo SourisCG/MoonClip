@@ -27,6 +27,42 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **V4 — game detection, window capture and auto-buffer (2026-09-26)** —
+  Medal-style flow: games are detected, the replay buffer follows them, and
+  anything unknown is registered once (persisted, deletable).
+  - **4.0 docs**: SPEC/ROADMAP refreshed; live plan `docs/10`.
+  - **4.1 Linux detection**: read-only `/proc` scan (GPU FDs, strict Wine,
+    Steam env, flatpak cgroups) + `x11rb` pid-to-window map; pure parsers for
+    Steam `.acf`/`libraryfolders.vdf`, Heroic, Prism/Minecraft, Wine; resolver
+    priority custom -> Steam -> Heroic -> Prism -> Wine -> fallback; blacklist
+    keeps our engine/compositors/browsers out (live: 0 false positives).
+  - **4.2 state**: migration 010 (`game_key`, `capture_mode`, `source_kind`,
+    `window_match`, `portal_token`, `auto_buffer`, `last_seen_ms`) and the
+    custom-app matcher (all strategies incl. `steam_appid`, `prism_instance`).
+  - **4.3 window capture**: `xcomposite_input` by `id+name+class` (X11/
+    XWayland, zero dialogs, survives restarts) or portal window session with a
+    per-game restore token refreshed after each Start.
+  - **4.4 auto-buffer**: 3 s worker + `moonclip://game-changed`, pure state
+    machine (3 s start / 7 s stop debounce, manual sessions untouched); E2E
+    `auto-buffer-check.sh` PASS with a real X11 window registered like a user
+    (no hooks).
+  - **4.5 clips**: detected titles in the library, user-chosen per-game
+    duration (debounced buffer restart only when it differs), gallery filter.
+  - **4.6 icons**: Steam `librarycache`, Prism `icons/<iconKey>`, `.desktop`
+    theme artwork -> cached PNGs; letter avatar fallback.
+  - **4.7 UX**: status chip, one-time "Detected X - add & record" prompt
+    (per-game dismissal), Games page with running picker, browse executable,
+    per-game duration/auto toggles and delete.
+  - **4.8 Windows code**: ToolHelp32 + foreground, Steam registry+ACF, Epic
+    manifests, Battle.net map, WGC `title:class`; owner compile/in-game pass
+    pending (`libsqlite3-sys` blocks a cross `cargo check` on Linux).
+  - **Tests**: 101 Rust tests + clippy `-D warnings` + `pnpm build`; scripts
+    `stealth-live-check`, `auto-buffer-check`, `save_replay` (now removes its
+    test clip unless `--keep`).
+  - **Pending**: owner Windows pass; real-game spike (XWayland silence, KDE
+    window-token restore across restarts, two games); click-to-pick-window
+    crosshair; Windows exe icons.
+
 - **V3.6 — identity & isolation (2026-09-24)** — the engine is invisible as
   "OBS" to the user and to other apps (Discord scans `/proc`):
   - **Reproducible patch set** `build-aux/patches/0001..0007`, applied by

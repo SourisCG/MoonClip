@@ -20,6 +20,9 @@ Clipping epic moments shouldn't require a heavy client, a cloud account, or a si
 Many popular clipping tools are closed-source, tied to their cloud, and resource-heavy, with limited support on Linux. **MoonClip takes a different approach:** capture what just happened while you game, with almost zero cost, and keep the files with you.
 
 - **Press `F9` while playing** — get an `.mp4` of the last seconds in <1s.
+- **It knows your game** — Medal-style detection (Steam/Wine/Prism/launchers + a
+  one-time registration for anything else): the replay buffer starts and stops
+  with the game and clips are named, filtered and icon-tagged per game.
 - **Keep playing** — capture lives in RAM inside the embedded OBS child; the React UI stays hidden in tray.
 - **Own your clips** — local files + SQLite + OS keyring. No central server. Share via *your* Google Drive or webhooks.
 

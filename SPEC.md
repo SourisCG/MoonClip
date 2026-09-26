@@ -2,7 +2,7 @@
 
 > Open-source, lightweight, zero-cloud Medal.tv alternative for Linux + Windows. Bilingual app (ES/EN). Docs in English.
 
-## Status: V4 — game detection, window capture and auto-buffer (in progress)
+## Status: V4 — game detection, window capture and auto-buffer (Linux done; Windows pass pending)
 
 - Capture engine (V3.x): BOTH OSes run one shared, embedded and isolated
   engine driven in-process over obs-websocket v5 (`obws`) — `obs-cmd` was
@@ -14,10 +14,13 @@
   `build-aux/linux/build-obs.sh`); binaries/threads/audio/portal/disk/DB/UI
   never expose the upstream name. Verification scripts live in
   `build-aux/linux/tests/`.
-- V4 (current): game detection, **window capture** (X11/XWayland via
-  `xcomposite_input`; Wayland native via portal window session with a
-  per-game restore token; one window choice per game, monitor remains a
-  manual option), Medal-style auto-buffer, per-game clip duration, icons.
+- V4 (current, Linux done): game detection (read-only `/proc` + manifests;
+  Windows ToolHelp/registry code ready for the owner's pass), **window
+  capture** (X11/XWayland via `xcomposite_input`; Wayland native via portal
+  window session with a per-game restore token; one window choice per game,
+  monitor remains a manual option), Medal-style auto-buffer, per-game clip
+  duration, icons (Steam/Prism/.desktop). Pending: real-game spike (KDE
+  window-token restore), click-to-pick-window crosshair, Windows exe icons.
 - HDR is out of scope (capture treated as normal SDR video).
 - Stack: Tauri v2 + React 19 + TS + Vite + Tailwind v3 + `react-i18next` +
   Wavesurfer + Lucide. Rust: tokio, serde, rusqlite, keyring, rodio, uuid,
