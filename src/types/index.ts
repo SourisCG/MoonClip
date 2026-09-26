@@ -36,6 +36,13 @@ export interface CustomApp {
   clip_duration_seconds?: number | null;
   icon_path?: string | null;
   is_wine_proton: boolean;
+  game_key?: string | null;
+  capture_mode: string;
+  source_kind?: string | null;
+  window_match?: string | null;
+  portal_token?: string | null;
+  auto_buffer: boolean;
+  last_seen_ms?: number | null;
 }
 
 export interface RegisterAppInput {
@@ -44,6 +51,10 @@ export interface RegisterAppInput {
   match_strategy: string;
   clip_duration_seconds?: number | null;
   is_wine_proton?: boolean | null;
+  game_key?: string | null;
+  source_kind?: string | null;
+  window_match?: string | null;
+  auto_buffer?: boolean | null;
 }
 
 /** Mirrors Rust EngineStatus (payload keys stay snake_case on the wire). */

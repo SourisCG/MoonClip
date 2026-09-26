@@ -2,6 +2,7 @@
 //! Platform scanners (reading `/proc`, ToolHelp32, X11, ...) live in
 //! `os/<os>/detect.rs`; everything here is pure and unit-tested with fixtures.
 
+pub mod matcher;
 pub mod parsers;
 pub mod resolve;
 pub mod types;

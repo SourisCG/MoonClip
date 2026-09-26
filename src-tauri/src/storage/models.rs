@@ -27,6 +27,19 @@ pub struct CustomApp {
     pub clip_duration_seconds: Option<i64>,
     pub icon_path: Option<String>,
     pub is_wine_proton: bool,
+    /// Stable identity for detected games (`steam:570`, `prism:foo`, ...).
+    pub game_key: Option<String>,
+    /// 'window' | 'monitor'
+    pub capture_mode: String,
+    /// 'x11' | 'portal' | 'monitor' | NULL
+    pub source_kind: Option<String>,
+    /// Ready-to-use `xcomposite_input` match string for X11 windows.
+    pub window_match: Option<String>,
+    /// Wayland-native window restore token for this game.
+    pub portal_token: Option<String>,
+    /// Medal-style auto buffer for this app.
+    pub auto_buffer: bool,
+    pub last_seen_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,4 +49,8 @@ pub struct RegisterAppInput {
     pub match_strategy: String,
     pub clip_duration_seconds: Option<i64>,
     pub is_wine_proton: Option<bool>,
+    pub game_key: Option<String>,
+    pub source_kind: Option<String>,
+    pub window_match: Option<String>,
+    pub auto_buffer: Option<bool>,
 }

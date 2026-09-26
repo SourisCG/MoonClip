@@ -98,15 +98,28 @@ pub fn encoder_catalog() -> &'static [shared::encoder_options::EncoderEntry] {
     linux::engine::encoder_catalog()
 }
 
-/// Resolved running game candidates for the picker and the detection worker
-/// (manifest lookups cached). Windows wires its own scanner in the Windows
-/// step.
+/// Raw running game candidates (read-only scan). Windows wires its own
+/// scanner in the Windows step.
 #[cfg(target_os = "linux")]
-pub fn detect_running_applications() -> Vec<shared::detect::ResolvedCandidate> {
-    linux::detect::resolve_all(linux::detect::scan())
+pub fn detect_candidates() -> Vec<shared::detect::CandidateProcess> {
+    linux::detect::scan()
 }
 #[cfg(not(target_os = "linux"))]
-pub fn detect_running_applications() -> Vec<shared::detect::ResolvedCandidate> {
+pub fn detect_candidates() -> Vec<shared::detect::CandidateProcess> {
+    Vec::new()
+}
+
+/// Resolve candidates against cached manifest lookups (Steam/Heroic/Prism).
+#[cfg(target_os = "linux")]
+pub fn resolve_candidates(
+    cands: Vec<shared::detect::CandidateProcess>,
+) -> Vec<shared::detect::ResolvedCandidate> {
+    linux::detect::resolve_all(cands)
+}
+#[cfg(not(target_os = "linux"))]
+pub fn resolve_candidates(
+    _cands: Vec<shared::detect::CandidateProcess>,
+) -> Vec<shared::detect::ResolvedCandidate> {
     Vec::new()
 }
 

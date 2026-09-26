@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, CustomApp, RegisterAppInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -19,6 +19,7 @@ const MIGRATION_006: &str = include_str!("../../migrations/006_monitor.sql");
 const MIGRATION_007: &str = include_str!("../../migrations/007_obs.sql");
 const MIGRATION_008: &str = include_str!("../../migrations/008_custom_video.sql");
 const MIGRATION_009: &str = include_str!("../../migrations/009_engine_keys.sql");
+const MIGRATION_010: &str = include_str!("../../migrations/010_game_state.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -65,6 +66,10 @@ impl DbState {
             if version < 9 {
                 conn.execute_batch(MIGRATION_009)
                     .map_err(|e| format!("migration 009 failed: {e}"))?;
+            }
+            if version < 10 {
+                conn.execute_batch(MIGRATION_010)
+                    .map_err(|e| format!("migration 010 failed: {e}"))?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
@@ -416,7 +421,9 @@ impl DbState {
         let mut stmt = conn
             .prepare(
                 "SELECT id, display_name, target_exe, match_strategy,
-                        clip_duration_seconds, icon_path, is_wine_proton
+                        clip_duration_seconds, icon_path, is_wine_proton,
+                        game_key, capture_mode, source_kind, window_match,
+                        portal_token, auto_buffer, last_seen_ms
                  FROM custom_apps ORDER BY display_name",
             )
             .map_err(|e| format!("cannot list custom apps: {e}"))?;
@@ -430,6 +437,13 @@ impl DbState {
                     clip_duration_seconds: r.get(4)?,
                     icon_path: r.get(5)?,
                     is_wine_proton: r.get::<_, i64>(6)? != 0,
+                    game_key: r.get(7)?,
+                    capture_mode: r.get(8)?,
+                    source_kind: r.get(9)?,
+                    window_match: r.get(10)?,
+                    portal_token: r.get(11)?,
+                    auto_buffer: r.get::<_, i64>(12)? != 0,
+                    last_seen_ms: r.get(13)?,
                 })
             })
             .map_err(|e| format!("cannot list custom apps: {e}"))?;
@@ -443,6 +457,8 @@ impl DbState {
             "cmdline_contains",
             "window_title",
             "wine_target",
+            "steam_appid",
+            "prism_instance",
         ];
         if input.display_name.trim().is_empty() || input.target_exe.trim().is_empty() {
             return Err("display_name and target_exe are required".into());
@@ -458,12 +474,21 @@ impl DbState {
             clip_duration_seconds: input.clip_duration_seconds,
             icon_path: None,
             is_wine_proton: input.is_wine_proton.unwrap_or(false),
+            game_key: input.game_key,
+            capture_mode: "window".to_string(),
+            source_kind: input.source_kind,
+            window_match: input.window_match,
+            portal_token: None,
+            auto_buffer: input.auto_buffer.unwrap_or(true),
+            last_seen_ms: None,
         };
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO custom_apps
-             (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path, is_wine_proton)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path,
+              is_wine_proton, game_key, capture_mode, source_kind, window_match, portal_token,
+              auto_buffer, last_seen_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 app.id,
                 app.display_name,
@@ -472,6 +497,13 @@ impl DbState {
                 app.clip_duration_seconds,
                 app.icon_path,
                 if app.is_wine_proton { 1 } else { 0 },
+                app.game_key,
+                app.capture_mode,
+                app.source_kind,
+                app.window_match,
+                app.portal_token,
+                if app.auto_buffer { 1 } else { 0 },
+                app.last_seen_ms,
             ],
         )
         .map_err(|e| format!("cannot register app: {e}"))?;
@@ -530,5 +562,63 @@ mod tests {
             )
             .unwrap();
         assert_eq!(port, "4456");
+    }
+
+    fn game_state_db() -> DbState {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATION_001).unwrap();
+        conn.execute_batch(MIGRATION_010).unwrap();
+        DbState(Mutex::new(conn))
+    }
+
+    #[test]
+    fn migration_010_adds_game_state_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATION_001).unwrap();
+        conn.execute_batch(MIGRATION_010).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(custom_apps)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for expected in [
+            "game_key",
+            "capture_mode",
+            "source_kind",
+            "window_match",
+            "portal_token",
+            "auto_buffer",
+            "last_seen_ms",
+        ] {
+            assert!(cols.iter().any(|c| c == expected), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn register_app_persists_game_state_fields() {
+        let db = game_state_db();
+        let app = db
+            .register_app(RegisterAppInput {
+                display_name: "Mi Juego".into(),
+                target_exe: "mijuego.exe".into(),
+                match_strategy: "wine_target".into(),
+                clip_duration_seconds: Some(45),
+                is_wine_proton: Some(true),
+                game_key: Some("wine:mijuego.exe".into()),
+                source_kind: Some("x11".into()),
+                window_match: Some("7\r\nMi Juego\r\nmijuego".into()),
+                auto_buffer: Some(false),
+            })
+            .unwrap();
+        assert_eq!(app.game_key.as_deref(), Some("wine:mijuego.exe"));
+        assert!(!app.auto_buffer);
+        assert_eq!(app.source_kind.as_deref(), Some("x11"));
+        let listed = db.list_custom_apps().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].clip_duration_seconds, Some(45));
+        assert!(listed[0].is_wine_proton);
+        db.delete_app(&app.id).unwrap();
+        assert!(db.list_custom_apps().unwrap().is_empty());
     }
 }

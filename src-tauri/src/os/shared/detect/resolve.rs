@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use super::parsers::{is_minecraft_java, parse_prism_game_dir, title_from_exe, wine_exe_from_cmdline};
 use super::types::{CandidateProcess, SourceKind};
 
+pub const SRC_CUSTOM: &str = "custom";
 pub const SRC_STEAM: &str = "steam";
 pub const SRC_HEROIC: &str = "heroic";
 pub const SRC_PRISM: &str = "prism";
@@ -32,6 +33,14 @@ pub struct ResolvedCandidate {
     pub window_match: Option<String>,
     /// Intended capture route: X11 window (no portal) or portal window.
     pub source_kind: SourceKind,
+    /// The user registered this app (title/prefs come from `custom_apps`).
+    pub registered: bool,
+    /// Row id in `custom_apps` when registered.
+    pub custom_id: Option<String>,
+    /// Medal-style auto buffer for this app (default on).
+    pub auto_buffer: bool,
+    /// User-chosen clip duration for this app, if any.
+    pub clip_duration_seconds: Option<i64>,
 }
 
 /// Manifest data the platform scanner loaded once per pass.
@@ -112,6 +121,10 @@ fn build(c: &CandidateProcess, title: String, game_key: String, source: &str) ->
         } else {
             SourceKind::Portal
         },
+        registered: false,
+        custom_id: None,
+        auto_buffer: true,
+        clip_duration_seconds: None,
     }
 }
 
