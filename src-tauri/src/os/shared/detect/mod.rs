@@ -2,11 +2,13 @@
 //! Platform scanners (reading `/proc`, ToolHelp32, X11, ...) live in
 //! `os/<os>/detect.rs`; everything here is pure and unit-tested with fixtures.
 
+pub mod auto;
 pub mod matcher;
 pub mod parsers;
 pub mod resolve;
 pub mod types;
 
+pub use auto::*;
 pub use parsers::*;
 pub use resolve::*;
 pub use types::*;

@@ -13,7 +13,61 @@ use crate::os::shared::detect::{
 /// Candidates running right now (best effort; never panics).
 pub fn scan() -> Vec<CandidateProcess> {
     let windows = x11_windows();
-    scan_proc(Path::new("/proc"), &windows)
+    let mut out = scan_proc(Path::new("/proc"), &windows);
+    #[cfg(debug_assertions)]
+    if let Some(fake) = fake_game_candidate() {
+        out.push(fake);
+    }
+    out
+}
+
+/// Debug-only synthetic candidate for E2E runs (never compiled into release
+/// builds; not a game hook: nothing is injected into any process).
+#[cfg(debug_assertions)]
+fn fake_game_candidate() -> Option<CandidateProcess> {
+    use crate::os::shared::detect::WindowInfo;
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+
+    let name = std::env::var("MOONCLIP_FAKE_GAME")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    if let Ok(secs) = std::env::var("MOONCLIP_FAKE_GAME_SECS") {
+        if let Ok(secs) = secs.parse::<u64>() {
+            if start.elapsed().as_secs() > secs {
+                return None;
+            }
+        }
+    }
+    let window = std::env::var("MOONCLIP_FAKE_WINDOW_MATCH")
+        .ok()
+        .and_then(|m| {
+            let mut parts = m.split("\r\n");
+            let id = parts.next()?.parse::<u32>().ok()?;
+            let wname = parts.next()?.to_string();
+            let class = parts.next()?.to_string();
+            Some(WindowInfo {
+                id,
+                name: wname,
+                class,
+                wm_pid: 999_999,
+            })
+        });
+    Some(CandidateProcess {
+        pid: 999_999,
+        ppid: 1,
+        exe: format!("/tmp/moonclip-fake/{name}"),
+        comm: name.clone(),
+        cmdline: vec![format!("/tmp/moonclip-fake/{name}")],
+        uses_gpu: true,
+        is_wine: false,
+        flatpak_id: None,
+        steam_app_id: None,
+        window,
+    })
 }
 
 /// Injectable scanner: `/proc` in production, a fixture tree in tests.

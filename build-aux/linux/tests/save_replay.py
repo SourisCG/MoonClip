@@ -114,6 +114,11 @@ def probe(clip):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--timeout", type=float, default=60.0)
+    ap.add_argument(
+        "--keep",
+        action="store_true",
+        help="keep the test clip in the library (default: delete it after checks)",
+    )
     args = ap.parse_args()
 
     clip = asyncio.run(save(args.timeout))
@@ -128,6 +133,14 @@ def main():
     if video != 1 or audio != 3:
         print("FAIL expected 1 video + 3 audio tracks")
         return 1
+    if not args.keep:
+        # The save went straight through obs-websocket (bypassing MoonClip's
+        # pipeline), so this file was never in the library: don't pollute it.
+        try:
+            clip.unlink()
+            print(f"OK  removed test clip {clip.name} (use --keep to retain)")
+        except OSError as e:
+            print(f"WARN could not remove test clip {clip}: {e}")
     print("PASS save-replay")
     return 0
 

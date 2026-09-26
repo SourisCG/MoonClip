@@ -5,6 +5,13 @@ use tokio::sync::Mutex;
 
 pub type Engine = crate::os::Engine;
 
+/// Detection runtime: last picked game (UI/IPC) + auto-buffer machine.
+#[derive(Default)]
+pub struct DetectRuntime {
+    pub current: Option<crate::os::shared::detect::ResolvedCandidate>,
+    pub auto: crate::os::shared::detect::AutoState,
+}
+
 #[derive(Default)]
 pub struct AppState {
     pub recorder: Mutex<Option<Engine>>,
@@ -16,4 +23,6 @@ pub struct AppState {
     pub audio_error: Mutex<Option<String>>,
     /// Last engine death/exit error (None = ok/never). Shown in UI.
     pub engine_error: Mutex<Option<String>>,
+    /// Game detection + Medal-style auto buffer.
+    pub detect: Mutex<DetectRuntime>,
 }

@@ -531,6 +531,10 @@ async fn stop_engine(app: &AppHandle) -> Result<EngineStatus, String> {
         engine.stop_buffer().await?;
     }
     drop(guard);
+    {
+        let st = app.state::<AppState>();
+        st.detect.lock().await.auto.auto_started = false;
+    }
     set_audio_error(app, None).await;
     set_engine_error(app, None).await;
     Ok(EngineStatus {
@@ -787,6 +791,107 @@ pub fn get_running_applications(
     Ok(resolved)
 }
 
+/// Wall-clock milliseconds (diagnostics / last_seen).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Detection worker tick (every ~3 s): resolve running candidates, apply the
+/// user registrations, emit game changes and drive the Medal-style auto
+/// buffer. Never touches the user's OBS; window targeting comes from the
+/// per-game row (token/window_match).
+pub(crate) async fn detect_tick(app: &AppHandle) {
+    let cands = os::detect_candidates();
+    let mut resolved = os::resolve_candidates(cands.clone());
+    let apps = match app.try_state::<DbState>() {
+        Some(db) => db.list_custom_apps().unwrap_or_default(),
+        None => Vec::new(),
+    };
+    for (r, c) in resolved.iter_mut().zip(cands.iter()) {
+        *r = os::shared::detect::matcher::with_custom(r.clone(), c, &apps);
+    }
+    let best = os::shared::detect::auto::pick_game(&resolved).cloned();
+    let st = app.state::<AppState>();
+    let running = st.recorder.lock().await.is_some();
+    let auto_game = best.as_ref().map(os::shared::detect::auto::auto_game);
+    let (action, changed) = {
+        let mut det = st.detect.lock().await;
+        let action = os::shared::detect::auto::decide(
+            &mut det.auto,
+            os::shared::detect::auto::AutoInput {
+                now_ms: now_ms(),
+                detected: auto_game.as_ref(),
+                buffer_running: running,
+            },
+        );
+        let before = det
+            .current
+            .as_ref()
+            .map(|c| (c.game_key.clone(), c.title.clone()));
+        let after = best
+            .as_ref()
+            .map(|c| (c.game_key.clone(), c.title.clone()));
+        let changed = before != after;
+        if changed {
+            det.current = best.clone();
+        }
+        (action, changed)
+    };
+    if changed {
+        let _ = app.emit("moonclip://game-changed", &best);
+    }
+    match action {
+        os::shared::detect::auto::AutoAction::Start => {
+            let Some(r) = best.as_ref() else { return };
+            let saved = apps
+                .iter()
+                .find(|a| a.game_key.as_deref() == Some(r.game_key.as_str()));
+            let (source_kind, window_match) = match (
+                r.window_match.clone(),
+                saved.and_then(|a| a.window_match.clone()),
+            ) {
+                (Some(m), _) => ("x11", Some(m)),
+                (None, Some(m)) => ("x11", Some(m)),
+                (None, None) => ("portal", None),
+            };
+            let ctx = GameContext {
+                key: r.game_key.clone(),
+                title: r.title.clone(),
+                source_kind: Some(source_kind.to_string()),
+                window_match,
+                token: saved.and_then(|a| a.portal_token.clone()),
+                duration_seconds: saved
+                    .and_then(|a| a.clip_duration_seconds)
+                    .map(|d| d.clamp(5, 3600) as u32),
+            };
+            let overrides = StartOverrides {
+                game: Some(ctx),
+                ..Default::default()
+            };
+            if let Err(e) = start_engine(app, &overrides).await {
+                eprintln!("[moonclip] auto-buffer start failed: {e}");
+            }
+        }
+        os::shared::detect::auto::AutoAction::Stop => {
+            if let Err(e) = stop_engine(app).await {
+                eprintln!("[moonclip] auto-buffer stop failed: {e}");
+            }
+        }
+        os::shared::detect::auto::AutoAction::None => {}
+    }
+}
+
+/// Last game picked by the detection worker (null when none).
+#[tauri::command]
+pub async fn current_game(app: AppHandle) -> Option<os::shared::detect::ResolvedCandidate> {
+    let st = app.state::<AppState>();
+    let det = st.detect.lock().await;
+    det.current.clone()
+}
+
 #[tauri::command]
 pub fn list_custom_apps(db: State<'_, DbState>) -> Result<Vec<CustomApp>, String> {
     db.list_custom_apps()
@@ -896,7 +1001,13 @@ pub async fn start_buffer(app: AppHandle) -> Result<EngineStatus, String> {
             return Err("buffer already running".into());
         }
     }
-    start_engine(&app, &StartOverrides::default()).await
+    let res = start_engine(&app, &StartOverrides::default()).await;
+    if res.is_ok() {
+        // Manual session: the autopilot must never stop it.
+        let st = app.state::<AppState>();
+        st.detect.lock().await.auto.auto_started = false;
+    }
+    res
 }
 
 #[tauri::command]

@@ -262,6 +262,14 @@ pub fn run() {
                     commands::sweep_engine_liveness(&handle).await;
                 }
             });
+            // Game detection worker + Medal-style auto buffer (3 s cadence).
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    commands::detect_tick(&handle).await;
+                }
+            });
             // E2E-only (debug builds): auto-start the replay buffer so the
             // stealth live checks can run without UI interaction.
             #[cfg(debug_assertions)]
@@ -299,6 +307,7 @@ pub fn run() {
             commands::system_memory,
             commands::list_custom_apps,
             commands::get_running_applications,
+            commands::current_game,
             commands::register_app,
             commands::delete_app,
             commands::secret_store,
