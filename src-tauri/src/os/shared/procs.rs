@@ -11,6 +11,36 @@ pub struct ProcInfo {
     pub comm: String,
     pub exe: String,
     pub cmdline: Vec<String>,
+    /// Holds a GPU device FD (`/dev/dri/renderD*`, `/dev/nvidia*`).
+    pub uses_gpu: bool,
+}
+
+/// Noise that must never reach the Games picker (browsers, Electron, build
+/// tools, Proton plumbing). The list stays short on purpose.
+const PICKER_BLACKLIST: &[&str] = &[
+    "brave", "brave-browser", "chrome", "chromium", "chromium-browser", "firefox",
+    "google-chrome", "discord", "vesktop", "code", "codium", "node", "electron",
+    "steamwebhelper", "gameoverlayui", "rust-analyzer", "rust-analyzer-proc-macro-srv",
+    "reaper", "srt-bwrap", "pv-adverb", "pv-runtime", "pressure-vessel",
+    "python3", "python3.11", "python3.12", "python3.13", "mangohud", "gamescope",
+];
+
+/// Should this process be offered in the Games picker? Only real apps: GPU
+/// holders or Windows `.exe` games, minus the noise blacklist.
+pub fn is_selectable(p: &ProcInfo) -> bool {
+    let game_exe = game_exe_name(p);
+    let low = game_exe.to_lowercase();
+    if low.is_empty() || low.starts_with("moonclip") {
+        return false;
+    }
+    let known_game = p.cmdline.iter().any(|a| a.to_lowercase().ends_with(".exe"));
+    if !(p.uses_gpu || known_game) {
+        return false;
+    }
+    let base = basename(&p.exe).to_lowercase();
+    !PICKER_BLACKLIST
+        .iter()
+        .any(|b| base == *b || low == *b)
 }
 
 fn basename(s: &str) -> String {
@@ -86,6 +116,7 @@ mod tests {
             comm: comm.into(),
             exe: exe.into(),
             cmdline: cmdline.iter().map(|s| s.to_string()).collect(),
+            uses_gpu: true,
         }
     }
 
@@ -110,6 +141,20 @@ mod tests {
         assert_eq!(game_exe_name(&p), "KINGDOM HEARTS FINAL MIX.exe");
         let native = proc_info("fnaf.exe", "/games/fnaf.exe", &["/games/fnaf.exe"]);
         assert_eq!(game_exe_name(&native), "fnaf.exe");
+    }
+
+    #[test]
+    fn picker_filter_hides_noise_and_keeps_games() {
+        let game = proc_info("fnaf.exe", "Z:\\games\\fnaf.exe", &["Z:\\games\\fnaf.exe"]);
+        assert!(is_selectable(&game));
+        let browser = proc_info("brave", "/usr/bin/brave", &["/usr/bin/brave"]);
+        assert!(!is_selectable(&browser));
+        let mut no_gpu = proc_info("mytool", "/opt/mytool", &["/opt/mytool"]);
+        no_gpu.uses_gpu = false;
+        assert!(!is_selectable(&no_gpu));
+        let mut editor = proc_info("someeditor", "/home/u/someeditor", &["/home/u/someeditor"]);
+        editor.uses_gpu = true;
+        assert!(is_selectable(&editor));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { Circle, Clapperboard, Gamepad2, Settings, Square } from "lucide-react";
+import { Circle, Clapperboard, Gamepad2, Monitor, Settings, Square } from "lucide-react";
 import { MoonClipStarfield } from "./components/starfield/MoonClipStarfield";
 import { MoonClipLogo } from "./components/logo/MoonClipLogo";
 import { Topbar } from "./components/topbar/Topbar";
@@ -28,6 +28,17 @@ export default function App() {
     void refreshClips();
   }, [refreshClips]);
   const { status, busy, error: engineError, start, stop, saveNow } = useEngine(onClipSaved);
+  const [screenBusy, setScreenBusy] = useState(false);
+  const startScreen = async () => {
+    setScreenBusy(true);
+    try {
+      await invoke("start_screen_buffer");
+    } catch (e) {
+      console.error("record screen:", e);
+    } finally {
+      setScreenBusy(false);
+    }
+  };
   const [hotkey, setHotkey] = useState("F9");
   const [showWizard, setShowWizard] = useState(false);
 
@@ -144,6 +155,17 @@ export default function App() {
                     {status.running ? t("rec.stop") : t("rec.start")}
                   </span>
                 </button>
+                {!status.running && (
+                  <button
+                    onClick={() => void startScreen()}
+                    disabled={screenBusy}
+                    title={t("rec.record_screen")}
+                    className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs font-semibold text-slate-300 transition hover:bg-white/10 disabled:opacity-50"
+                  >
+                    <Monitor size={12} />
+                    <span className="hidden lg:inline">{t("rec.record_screen")}</span>
+                  </button>
+                )}
                 {engineError && (
                   <p className="mt-1.5 break-all font-mono text-[11px] text-red-400">{engineError}</p>
                 )}

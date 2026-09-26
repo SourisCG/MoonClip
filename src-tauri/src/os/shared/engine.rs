@@ -1086,6 +1086,25 @@ impl CaptureEngine for ObsEngine {
         // 3. Sweep leftovers of OUR runtime binary from a force-killed session.
         self.platform.kill_orphans(&rt.bin);
 
+        // 3b. The private control port must be free: an engine that cannot
+        // bind it would look alive but ignore every command (dead saves and
+        // sliders). Wait briefly for a shutting-down instance, then fail loud.
+        let port = profile.websocket_port;
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let mut busy = true;
+        for _ in 0..10 {
+            busy = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok();
+            if !busy {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        if busy {
+            return Err(format!(
+                "control port {port} is already in use (another MoonClip instance?); close it and retry"
+            ));
+        }
+
         // 4. Launch the embedded OBS, isolated and out of the way.
         let mut args =
             self.platform

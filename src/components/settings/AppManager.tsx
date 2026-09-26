@@ -16,6 +16,7 @@ export function AppManager() {
   const [strategy, setStrategy] = useState(STRATEGIES[0]);
   const [formError, setFormError] = useState<string | null>(null);
   const [running, setRunning] = useState<RunningApp[]>([]);
+  const [query, setQuery] = useState("");
 
   const refreshRunning = useCallback(async () => {
     try {
@@ -80,11 +81,24 @@ export function AppManager() {
             <RefreshCw size={12} /> {t("games.refresh")}
           </button>
         </div>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("games.search_ph")}
+          className="mb-2 w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-500/50"
+        />
         {running.length === 0 ? (
           <p className="text-xs text-slate-500">{t("games.empty_running")}</p>
         ) : (
           <ul className="max-h-56 space-y-1 overflow-y-auto pr-1">
-            {running.map((r) => {
+            {running
+              .filter(
+                (r) =>
+                  query.trim() === "" ||
+                  r.name.toLowerCase().includes(query.toLowerCase()) ||
+                  r.exe.toLowerCase().includes(query.toLowerCase()),
+              )
+              .map((r) => {
               const already = registered.has(r.exe.toLowerCase());
               return (
                 <li

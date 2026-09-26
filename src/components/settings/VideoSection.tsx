@@ -159,18 +159,6 @@ export function VideoSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Wayland: forget the portal choice so the picker opens again (restarts a
-   * running buffer so the dialog appears immediately). */
-  const changePortalScreen = async () => {
-    setError(null);
-    try {
-      await invoke("clear_portal_token");
-      await load();
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
   const customMode = settings?.video_mode === "custom";
   const bufferSeconds = Number(settings?.buffer_seconds ?? "30") || 30;
 
@@ -439,54 +427,6 @@ export function VideoSection() {
           ))}
         </select>
       </label>
-
-      {/* Capture target: the registered game's OBS window (default) or the
-          whole screen. */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-2.5">
-        <div className="min-w-0">
-          <p className="text-sm text-slate-300">{t("video.capture_mode")}</p>
-          <p className="text-[11px] text-slate-500">{t("video.capture_mode_hint")}</p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {(["window", "monitor"] as const).map((m) => {
-            const active = (settings?.capture_mode ?? "window") === m;
-            return (
-              <button
-                key={m}
-                type="button"
-                onClick={() => void applySettings([{ key: "capture_mode", value: m }])}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                  active
-                    ? "border-cyan-500/40 bg-cyan-500/15 text-cyan-100"
-                    : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
-                }`}
-              >
-                {m === "window" ? t("video.capture_mode_window") : t("video.capture_mode_monitor")}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Screen (Linux/Wayland portal, Full screen mode): the selection lives
-          in the system picker and is stored as a one-time restore token. */}
-      {opts.monitors.length === 0 && (settings?.capture_mode ?? "window") === "monitor" && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-2.5">
-          <div className="min-w-0">
-            <p className="text-sm text-slate-300">{t("video.portal_screen")}</p>
-            <p className="text-[11px] text-slate-500">
-              {opts.portal_ready ? t("video.portal_ready") : t("video.portal_note")}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => void changePortalScreen()}
-            className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20"
-          >
-            {t("video.portal_change")}
-          </button>
-        </div>
-      )}
 
       {/* Preset cards (both modes; in Custom they set the output resolution) */}
       <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">

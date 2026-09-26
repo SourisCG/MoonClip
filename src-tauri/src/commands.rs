@@ -371,11 +371,10 @@ pub(crate) async fn build_capture_config(
         vendor: video::vendor().await,
         base_width,
         base_height,
-        portal_restore_token: overrides
-            .portal_token
-            .clone()
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| setting_str(&db, "engine_restore_token", "")),
+        // Window capture uses ONLY the game's own token; an empty token means
+        // the system picker appears (choose the game window once). The screen
+        // button passes no token at all: monitor tokens never exist here.
+        portal_restore_token: overrides.portal_token.clone().unwrap_or_default(),
         custom_encoder,
         custom_video,
         obs_bin: Some(obs_bin),
@@ -443,12 +442,10 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     };
     if let Some(token) = engine.read_restore_token().await {
         let db = app.state::<DbState>();
-        // Per-game token: the picker appears once per registered game.
+        // Only the game's own window token is stored; screen recordings
+        // never keep a token.
         if let Some(app_id) = &overrides.app_id {
             let _ = db.set_app_token(app_id, &token);
-        } else {
-            // Monitor mode keeps the global screen token.
-            let _ = db.set_setting("engine_restore_token", &token);
         }
         engine.note("screen token updated");
     }
@@ -961,6 +958,22 @@ pub(crate) async fn poll_games(app: &AppHandle) {
     }
 }
 
+/// Explicit "Record screen" button: full-screen capture with the OBS monitor
+/// source. No token is stored, so the picker appears every time by design.
+#[tauri::command]
+pub async fn start_screen_buffer(app: AppHandle) -> Result<EngineStatus, String> {
+    {
+        let st = app.state::<AppState>();
+        if st.recorder.lock().await.is_some() {
+            return Err("buffer already running".into());
+        }
+    }
+    let res = start_engine(&app, &StartOverrides::default()).await?;
+    let st = app.state::<AppState>();
+    st.game.lock().await.auto_started = false;
+    Ok(res)
+}
+
 /// Registered game currently running (null when none) for the status chip.
 /// One row per running executable for the Games picker (no duplicates).
 #[derive(Debug, Clone, serde::Serialize)]
@@ -974,9 +987,12 @@ pub fn running_apps() -> Vec<RunningApp> {
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<RunningApp> = Vec::new();
     for p in os::running_processes() {
+        if !os::shared::procs::is_selectable(&p) {
+            continue;
+        }
         let base = os::shared::procs::game_exe_name(&p);
         let low = base.to_lowercase();
-        if low.is_empty() || low.starts_with("moonclip") || !seen.insert(low) {
+        if !seen.insert(low) {
             continue;
         }
         let name = base

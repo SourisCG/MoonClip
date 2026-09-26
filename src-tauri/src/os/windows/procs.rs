@@ -34,6 +34,7 @@ pub fn running() -> Vec<ProcInfo> {
                         comm,
                         exe,
                         cmdline: Vec::new(),
+                        uses_gpu: false,
                     });
                 }
                 if Process32NextW(snapshot, &mut entry).is_err() {

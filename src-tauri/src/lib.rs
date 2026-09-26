@@ -447,20 +447,21 @@ pub fn run() {
             app.manage(db);
             app.manage(state::AppState::default());
 
-            // One-time: drop per-game portal tokens saved by the reverted
-            // V4 experiment (a stale monitor token would silently capture the
-            // whole screen instead of the game window).
+            // One-time (v2): wipe every portal token, including the global
+            // monitor token that leaked into game rows and made the engine
+            // record the whole screen.
             {
                 let db = app.state::<storage::DbState>();
                 let done = db
                     .get_settings()
                     .ok()
-                    .and_then(|s| s.get("engine_token_reset_v1").cloned())
+                    .and_then(|s| s.get("engine_token_reset_v2").cloned())
                     .unwrap_or_default();
                 if done != "1" {
                     let cleared = db.clear_app_tokens().unwrap_or(0);
-                    let _ = db.set_setting("engine_token_reset_v1", "1");
-                    eprintln!("[moonclip] cleared {cleared} stale per-game portal tokens");
+                    let _ = db.set_setting("engine_restore_token", "");
+                    let _ = db.set_setting("engine_token_reset_v2", "1");
+                    eprintln!("[moonclip] token reset v2: cleared {cleared} game tokens + monitor token");
                 }
             }
 
@@ -537,6 +538,7 @@ pub fn run() {
             commands::clear_portal_token,
             commands::engine_status,
             commands::current_game,
+            commands::start_screen_buffer,
             commands::running_apps,
             commands::save_clip_now,
             commands::audio_levels,

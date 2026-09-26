@@ -361,7 +361,7 @@ impl DbState {
             "faststart",
             "capture_window",
             "capture_mode",
-            "engine_token_reset_v1",
+            "engine_token_reset_v2",
             "engine_ws_port",
             "engine_ws_password",
             "engine_restore_token",

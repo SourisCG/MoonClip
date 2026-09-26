@@ -30,9 +30,25 @@ pub fn running() -> Vec<ProcInfo> {
             comm,
             exe,
             cmdline,
+            uses_gpu: uses_gpu_device(&dir.join("fd")),
         });
     }
     out
+}
+
+fn uses_gpu_device(fd_dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(fd_dir) else {
+        return false;
+    };
+    for e in entries.flatten() {
+        if let Ok(target) = std::fs::read_link(e.path()) {
+            let s = target.to_string_lossy();
+            if s.starts_with("/dev/dri/renderD") || s.starts_with("/dev/nvidia") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn read_cmdline(p: &std::path::Path) -> Vec<String> {
