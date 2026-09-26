@@ -1,5 +1,15 @@
 # 03 — Game Detection (Steam, Wine/Proton, Launchers, Custom Apps)
 
+> **V4 decisions (supersede parts of this doc; as-built rewrite in 4.9):**
+> the capture source is the **game window** by default. X11/XWayland windows
+> are captured with `xcomposite_input` (`capture_window` = `id\r\nname\r\nclass`)
+> with **no portal dialog**; Wayland-native windows use
+> `pipewire-window-capture-source` with a **per-game restore token** stored in
+> `custom_apps`. Known/registered games auto-start the buffer and auto-stop
+> when they close; unknown games are registered once (then auto forever).
+> Monitor capture stays available as a manual option. See
+> `docs/10_GAME_DETECTION_PLAN.md`.
+
 ## 1. Priority pipeline (on F9)
 
 ```text

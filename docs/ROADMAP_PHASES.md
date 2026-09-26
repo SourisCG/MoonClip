@@ -20,11 +20,27 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 - Windows: `monitor_capture` (DXGI Desktop Duplication) + WASAPI; Linux: PipeWire portal + PulseAudio.
 - **Accept:** F9 → `.mp4` with 3 audio tracks (Mix first); indexed in DB with thumbnail; the user's own OBS config is never touched.
 
-## Phase 4 — Game detection + launchers
+## Phase 4 — Game detection, window capture and auto-buffer (V4)
 
-- GPU FD scan, Wine cmdline parser + blacklist, `SteamAppId` + `.acf`, Minecraft/Prism, Heroic/Epic manifests, Battle.net child, Xbox title, `get_running_applications` + `matcher.rs`.
-- Frontend `AppManager` + process picker (running / click-window / browse).
-- **Accept:** native + Wine/Proton + Minecraft report correct titles; custom app overrides duration.
+Plan and sub-phases: `docs/10_GAME_DETECTION_PLAN.md`.
+- Detection worker (read-only `/proc` + manifests; Windows ToolHelp + foreground),
+  matcher priority: `custom_apps` → Steam → Heroic/Epic/Lutris → Wine/Proton →
+  Prism/Minecraft → fallback.
+- **Window capture**: X11/XWayland `xcomposite_input` by `id+name+class` (zero
+  dialogs); Wayland native `pipewire-window-capture-source` with a **per-game
+  restore token** (one window choice per game; if KDE invalidates it, one
+  prompt per session). Monitor stays a manual option.
+- **Register once**: unknown games get a one-time prompt; rows persist forever
+  in `custom_apps` and the user can delete them from Games.
+- **Medal-style auto-buffer**: starts with a known/registered game (~3 s
+  stable), stops ~7 s after it closes (auto sessions only); per-app toggle.
+- Per-game clip duration (debounced buffer restart), real icons (Steam
+  librarycache, Prism instance icon, `.desktop` theme, Windows `SHGetFileInfo`).
+- **Accept:** Steam/Proton/Minecraft windows captured (no dialogs after the
+  first per game), clips titled + icon + per-game duration; closing the game
+  stops the buffer; deleting a game forgets its window; Discord/MoonClip never
+  detected; `pnpm build` + `cargo test/clippy` + detection/stealth/save tests
+  green; Windows code passes the owner's in-game check.
 
 ## Phase 5 — Lazy editor + FFmpeg
 
