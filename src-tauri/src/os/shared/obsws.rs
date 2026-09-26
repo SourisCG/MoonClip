@@ -159,6 +159,17 @@ impl Obsws {
         Ok(settings.settings)
     }
 
+    /// Open OBS's own source properties dialog (Windows setup runs: the user
+    /// picks the game window there, then the settings are read back).
+    #[allow(dead_code)] // only the Windows platform's setup hook calls it
+    pub async fn open_input_properties_dialog(&self, source: &str) -> Result<(), String> {
+        self.client
+            .ui()
+            .open_properties_dialog(InputId::Name(source))
+            .await
+            .map_err(|e| format!("open properties dialog failed: {e}"))
+    }
+
     /// Live per-track gain (0-200 % -> OBS multiplier 0.0-2.0).
     pub async fn set_input_volume(&self, source: &str, percent: u32) -> Result<(), String> {
         let mul = ((percent.clamp(0, 200) as f32) / 100.0).clamp(0.0, 2.0);

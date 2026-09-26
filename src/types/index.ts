@@ -27,26 +27,6 @@ export interface ClipMetadata {
 
 export type AppSettings = Record<string, string>;
 
-/** Mirrors Rust CustomApp. */
-export interface CustomApp {
-  id: string;
-  display_name: string;
-  target_exe: string;
-  match_strategy: string;
-  clip_duration_seconds?: number | null;
-  icon_path?: string | null;
-  is_wine_proton: boolean;
-  portal_token?: string | null;
-}
-
-export interface RegisterAppInput {
-  display_name: string;
-  target_exe: string;
-  match_strategy: string;
-  clip_duration_seconds?: number | null;
-  is_wine_proton?: boolean | null;
-}
-
 /** Mirrors Rust EngineStatus (payload keys stay snake_case on the wire). */
 export interface EngineStatus {
   running: boolean;
@@ -250,8 +230,3 @@ export interface SettingPair {
   value: string;
 }
 
-/** Mirrors Rust RunningApp (registered-app picker). */
-export interface RunningApp {
-  name: string;
-  exe: string;
-}

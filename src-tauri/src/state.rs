@@ -10,6 +10,8 @@ pub type Engine = crate::os::Engine;
 pub struct GameRuntime {
     /// Registered app currently running (None = no game).
     pub current: Option<crate::storage::models::RegisteredInput>,
+    /// Input the running buffer is recording (game or screen), for restarts.
+    pub active_input: Option<String>,
     /// The running buffer was started by the poller (never auto-stop manual).
     pub auto_started: bool,
     /// Consecutive polls with no game while an auto session runs.

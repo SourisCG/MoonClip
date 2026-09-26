@@ -7,8 +7,8 @@ pub mod binary;
 pub mod devices;
 pub mod engine;
 pub mod open;
-pub mod procs;
 pub mod paths;
+pub mod winlist;
 pub mod video;
 
 pub use super::shared::engine::ObsEngine as Engine;

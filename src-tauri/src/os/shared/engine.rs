@@ -113,6 +113,12 @@ pub trait ObsPlatform: Send + Sync {
     /// Undo `conceal_window` when the engine stops (Linux: unload the KWin
     /// script). Best effort; default no-op.
     fn unconceal_window(&self, _pid: u32) {}
+    /// Keep concealing during setup runs. Linux hides the engine even while
+    /// the portal picker is open (the dialog is the compositor's, not OBS's);
+    /// Windows must show the OBS window to pick in the source dialog.
+    fn conceal_in_setup(&self) -> bool {
+        true
+    }
     /// Whether this platform's OBS instance keeps its tray icon enabled.
     /// Windows disables it (the watcher hides the window instead); other
     /// platforms keep the tray path until they implement concealment.
@@ -138,6 +144,19 @@ pub trait ObsPlatform: Send + Sync {
     fn encoder_id(&self, vendor: &str, codec: &str, encoder: &str) -> Option<&'static str>;
     /// Encoder ids compiled into this platform's OBS build (Custom picker).
     fn encoder_catalog(&self) -> &'static [super::encoder_options::EncoderEntry];
+    /// Setup-run hook once the control channel is up: platforms whose picker
+    /// needs an explicit dialog (Windows opens the source properties) do it
+    /// here. Linux opens the portal picker by itself when the capture source
+    /// activates, so the default is a no-op. Boxed so the trait stays dyn
+    /// compatible (the engine holds `Box<dyn ObsPlatform>`).
+    fn setup_pick_hook<'a>(
+        &'a self,
+        _ws: &'a super::obsws::Obsws,
+        _input: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,9 +1118,10 @@ impl CaptureEngine for ObsEngine {
             self.platform.adopt_child(pid);
             // Hide the embedded window right away so the user never sees
             // it (no-op on platforms without concealment).
-            // Setup runs keep the OBS window visible so the user can pick the
-            // capture window (Windows) instead of hunting for a hidden UI.
-            if !config.setup {
+            // Windows setup runs keep the OBS window visible so the user can
+            // pick the capture window in the source dialog; Linux conceals it
+            // even then (the portal picker is independent of the OBS window).
+            if !config.setup || self.platform.conceal_in_setup() {
                 self.platform.conceal_window(pid, &rt.bin);
             }
         }
@@ -1140,6 +1160,20 @@ impl CaptureEngine for ObsEngine {
                 return Err("engine control channel did not come up within 45 s".into());
             }
         };
+
+        // Setup runs exist only to let the user pick a capture target: hand
+        // the engine back with no replay buffer so the caller can wait for
+        // the pick to land in the source settings.
+        if config.setup {
+            let active = profile.active_input.clone();
+            if let Err(e) = self.platform.setup_pick_hook(&ws, &active).await {
+                return Err(self.fail_start(e).await);
+            }
+            self.obsws = Some(ws);
+            self.profile = Some(profile);
+            self.push_event(format!("setup: waiting for window pick ({active})"));
+            return Ok(());
+        }
 
         // Start the replay buffer. One retry absorbs a transient state while
         // OBS finishes initializing its outputs.

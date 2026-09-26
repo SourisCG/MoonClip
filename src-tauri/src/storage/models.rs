@@ -17,29 +17,6 @@ pub struct ClipRecord {
     pub exists: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomApp {
-    pub id: String,
-    pub display_name: String,
-    pub target_exe: String,
-    /// 'exact_exe' | 'cmdline_contains' | 'window_title' | 'wine_target'
-    pub match_strategy: String,
-    pub clip_duration_seconds: Option<i64>,
-    pub icon_path: Option<String>,
-    pub is_wine_proton: bool,
-    /// Wayland portal restore token for this registered game's window.
-    pub portal_token: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegisterAppInput {
-    pub display_name: String,
-    pub target_exe: String,
-    pub match_strategy: String,
-    pub clip_duration_seconds: Option<i64>,
-    pub is_wine_proton: Option<bool>,
-}
-
 /// One registered capture input (mirrors an OBS source we created).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredInput {
@@ -48,9 +25,12 @@ pub struct RegisteredInput {
     /// 'window' | 'screen'
     pub input_kind: String,
     pub display_name: String,
-    /// Process rule to know when this app is running.
+    /// Window title learned from the picker (the autopilot matches by it).
+    pub window_title: Option<String>,
+    /// Window app id/class when the platform reports one (KDE), else NULL.
+    pub window_app_id: Option<String>,
+    /// Exe name stored from the Windows window target (unused on Linux).
     pub target_exe: String,
-    pub match_strategy: String,
     /// Saved OBS source settings JSON (portal token / window target).
     pub input_settings: Option<String>,
     pub source_uuid: String,

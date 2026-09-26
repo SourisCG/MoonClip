@@ -280,6 +280,24 @@ impl ObsPlatform for WindowsPlatform {
         "wasapi_output_capture"
     }
 
+    /// Windows setup runs show the engine window so the picker dialog is
+    /// reachable (Linux keeps it hidden).
+    fn conceal_in_setup(&self) -> bool {
+        false
+    }
+
+    /// Windows picker: open the window-capture properties dialog on the
+    /// visible engine window so the user selects the game there. The caller
+    /// polls the source settings and stores the pick.
+    fn setup_pick_hook<'a>(
+        &'a self,
+        ws: &'a crate::os::shared::obsws::Obsws,
+        input: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+    {
+        Box::pin(async move { ws.open_input_properties_dialog(input).await })
+    }
+
     fn mic_audio_source_id(&self) -> &'static str {
         "wasapi_input_capture"
     }

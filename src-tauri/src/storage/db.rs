@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::AppHandle;
 
-use super::models::{ClipRecord, CustomApp, RegisterAppInput, RegisteredInput};
+use super::models::{ClipRecord, RegisteredInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -21,6 +21,7 @@ const MIGRATION_008: &str = include_str!("../../migrations/008_custom_video.sql"
 const MIGRATION_009: &str = include_str!("../../migrations/009_engine_keys.sql");
 const MIGRATION_010: &str = include_str!("../../migrations/010_game_token.sql");
 const MIGRATION_011: &str = include_str!("../../migrations/011_registered_inputs.sql");
+const MIGRATION_012: &str = include_str!("../../migrations/012_window_identity.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -75,6 +76,10 @@ impl DbState {
             if version < 11 {
                 conn.execute_batch(MIGRATION_011)
                     .map_err(|e| format!("migration 011 failed: {e}"))?;
+            }
+            if version < 12 {
+                conn.execute_batch(MIGRATION_012)
+                    .map_err(|e| format!("migration 012 failed: {e}"))?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
@@ -423,88 +428,28 @@ impl DbState {
         Ok(())
     }
 
-    pub fn list_custom_apps(&self) -> Result<Vec<CustomApp>, String> {
-        let conn = self.lock()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, display_name, target_exe, match_strategy,
-                        clip_duration_seconds, icon_path, is_wine_proton, portal_token
-                 FROM custom_apps ORDER BY display_name",
-            )
-            .map_err(|e| format!("cannot list custom apps: {e}"))?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(CustomApp {
-                    id: r.get(0)?,
-                    display_name: r.get(1)?,
-                    target_exe: r.get(2)?,
-                    match_strategy: r.get(3)?,
-                    clip_duration_seconds: r.get(4)?,
-                    icon_path: r.get(5)?,
-                    is_wine_proton: r.get::<_, i64>(6)? != 0,
-                    portal_token: r.get(7)?,
-                })
-            })
-            .map_err(|e| format!("cannot list custom apps: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("cannot read custom app row: {e}"))
-    }
-
-    pub fn register_app(&self, input: RegisterAppInput) -> Result<CustomApp, String> {
-        const STRATEGIES: &[&str] = &[
-            "exact_exe",
-            "cmdline_contains",
-            "window_title",
-            "wine_target",
-        ];
-        if input.display_name.trim().is_empty() || input.target_exe.trim().is_empty() {
-            return Err("display_name and target_exe are required".into());
-        }
-        if !STRATEGIES.contains(&input.match_strategy.as_str()) {
-            return Err(format!("unknown match_strategy: {}", input.match_strategy));
-        }
-        let app = CustomApp {
-            id: uuid::Uuid::new_v4().to_string(),
-            display_name: input.display_name,
-            target_exe: input.target_exe,
-            match_strategy: input.match_strategy,
-            clip_duration_seconds: input.clip_duration_seconds,
-            icon_path: None,
-            is_wine_proton: input.is_wine_proton.unwrap_or(false),
-            portal_token: None,
-        };
-        let conn = self.lock()?;
-        conn.execute(
-            "INSERT INTO custom_apps
-             (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path,
-              is_wine_proton, portal_token)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
-            params![
-                app.id,
-                app.display_name,
-                app.target_exe,
-                app.match_strategy,
-                app.clip_duration_seconds,
-                app.icon_path,
-                if app.is_wine_proton { 1 } else { 0 },
-            ],
-        )
-        .map_err(|e| format!("cannot register app: {e}"))?;
-        Ok(app)
-    }
-
-
-    /// Registered capture inputs (rows with an OBS input name).
+    /// Registered games (window inputs). The screen input is internal and
+    /// never listed here.
     pub fn list_registered_inputs(&self) -> Result<Vec<RegisteredInput>, String> {
+        self.list_inputs_where("input_kind = 'window'")
+    }
+
+    /// The single internal full-screen input (created on first screen start).
+    pub fn screen_input(&self) -> Result<Option<RegisteredInput>, String> {
+        Ok(self.list_inputs_where("input_kind = 'screen'")?.into_iter().next())
+    }
+
+    fn list_inputs_where(&self, filter: &str) -> Result<Vec<RegisteredInput>, String> {
         let conn = self.lock()?;
+        let sql = format!(
+            "SELECT id, input_name, input_kind, display_name, window_title,
+                    window_app_id, target_exe, input_settings, source_uuid, icon_path
+             FROM custom_apps
+             WHERE input_name IS NOT NULL AND input_name != '' AND {filter}
+             ORDER BY display_name COLLATE NOCASE"
+        );
         let mut stmt = conn
-            .prepare(
-                "SELECT id, input_name, input_kind, display_name, target_exe,
-                        match_strategy, input_settings, source_uuid, icon_path
-                 FROM custom_apps
-                 WHERE input_name IS NOT NULL AND input_name != ''
-                 ORDER BY display_name",
-            )
+            .prepare(&sql)
             .map_err(|e| format!("cannot list registered inputs: {e}"))?;
         let rows = stmt
             .query_map([], |r| {
@@ -513,16 +458,27 @@ impl DbState {
                     input_name: r.get(1)?,
                     input_kind: r.get(2)?,
                     display_name: r.get(3)?,
-                    target_exe: r.get(4)?,
-                    match_strategy: r.get(5)?,
-                    input_settings: r.get(6)?,
-                    source_uuid: r.get(7)?,
-                    icon_path: r.get(8)?,
+                    window_title: r.get(4)?,
+                    window_app_id: r.get(5)?,
+                    target_exe: r.get(6)?,
+                    input_settings: r.get(7)?,
+                    source_uuid: r.get(8)?,
+                    icon_path: r.get(9)?,
                 })
             })
             .map_err(|e| format!("cannot list registered inputs: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("cannot read registered input row: {e}"))
+    }
+
+    pub fn input_by_name(&self, input_name: &str) -> Result<Option<RegisteredInput>, String> {
+        Ok(self
+            .list_inputs_where(&format!(
+                "input_name = '{}'",
+                input_name.replace('\'', "''")
+            ))?
+            .into_iter()
+            .next())
     }
 
     /// Create the registry row for a new capture input.
@@ -531,8 +487,6 @@ impl DbState {
         input_name: &str,
         input_kind: &str,
         display_name: &str,
-        target_exe: &str,
-        match_strategy: &str,
     ) -> Result<RegisteredInput, String> {
         if input_name.trim().is_empty() || display_name.trim().is_empty() {
             return Err("input_name and display_name are required".into());
@@ -545,8 +499,9 @@ impl DbState {
             input_name: input_name.to_string(),
             input_kind: input_kind.to_string(),
             display_name: display_name.to_string(),
-            target_exe: target_exe.to_string(),
-            match_strategy: match_strategy.to_string(),
+            window_title: None,
+            window_app_id: None,
+            target_exe: String::new(),
             input_settings: None,
             source_uuid: uuid::Uuid::new_v4().to_string(),
             icon_path: None,
@@ -556,15 +511,13 @@ impl DbState {
             "INSERT INTO custom_apps
              (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path,
               is_wine_proton, input_name, input_kind, input_settings, source_uuid)
-             VALUES (?1, ?2, ?6, ?7, NULL, NULL, 0, ?3, ?4, NULL, ?5)",
+             VALUES (?1, ?2, '', 'window', NULL, NULL, 0, ?3, ?4, NULL, ?5)",
             params![
                 input.id,
                 input.display_name,
                 input.input_name,
                 input.input_kind,
                 input.source_uuid,
-                input.target_exe,
-                input.match_strategy
             ],
         )
         .map_err(|e| format!("cannot register input: {e}"))?;
@@ -582,6 +535,29 @@ impl DbState {
         Ok(())
     }
 
+    /// Store what the picker taught us about the picked window.
+    pub fn set_input_identity(
+        &self,
+        input_name: &str,
+        display_name: &str,
+        window_title: Option<&str>,
+        window_app_id: Option<&str>,
+        target_exe: &str,
+    ) -> Result<(), String> {
+        if display_name.trim().is_empty() {
+            return Err("display_name is required".into());
+        }
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE custom_apps
+             SET display_name = ?1, window_title = ?2, window_app_id = ?3, target_exe = ?4
+             WHERE input_name = ?5",
+            params![display_name, window_title, window_app_id, target_exe, input_name],
+        )
+        .map_err(|e| format!("cannot store window identity: {e}"))?;
+        Ok(())
+    }
+
     /// Remove a registered input (the engine drops its OBS source too).
     pub fn delete_registered_input(&self, id: &str) -> Result<(), String> {
         let conn = self.lock()?;
@@ -593,17 +569,6 @@ impl DbState {
             .map_err(|e| format!("cannot delete registered input: {e}"))?;
         if changed == 0 {
             return Err("registered input not found".into());
-        }
-        Ok(())
-    }
-
-    pub fn delete_app(&self, id: &str) -> Result<(), String> {
-        let conn = self.lock()?;
-        let changed = conn
-            .execute("DELETE FROM custom_apps WHERE id = ?1", params![id])
-            .map_err(|e| format!("cannot delete app: {e}"))?;
-        if changed == 0 {
-            return Err("app not found".into());
         }
         Ok(())
     }
@@ -633,25 +598,42 @@ mod tests {
         conn.execute_batch(MIGRATION_001).unwrap();
         conn.execute_batch(MIGRATION_010).unwrap();
         conn.execute_batch(MIGRATION_011).unwrap();
+        conn.execute_batch(MIGRATION_012).unwrap();
         DbState(Mutex::new(conn))
     }
 
     #[test]
     fn registered_input_round_trip() {
         let db = tiny_db();
-        let input = db
-            .register_input("Game", "window", "Game", "game.exe", "exact_exe")
-            .unwrap();
+        let input = db.register_input("Game", "window", "Juego 1").unwrap();
         assert_eq!(input.input_kind, "window");
         db.set_input_settings("Game", "{\"RestoreToken\":\"tok\"}")
             .unwrap();
+        db.set_input_identity(
+            "Game",
+            "KINGDOM HEARTS FINAL MIX",
+            Some("KINGDOM HEARTS FINAL MIX"),
+            Some("steam_app_2552430"),
+            "",
+        )
+        .unwrap();
         let listed = db.list_registered_inputs().unwrap();
         assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].display_name, "KINGDOM HEARTS FINAL MIX");
+        assert_eq!(
+            listed[0].window_title.as_deref(),
+            Some("KINGDOM HEARTS FINAL MIX")
+        );
+        assert_eq!(listed[0].window_app_id.as_deref(), Some("steam_app_2552430"));
         assert_eq!(
             listed[0].input_settings.as_deref(),
             Some("{\"RestoreToken\":\"tok\"}")
         );
-        assert_eq!(listed[0].match_strategy, "exact_exe");
+        // The screen input is internal: never listed as a game.
+        db.register_input("MoonClip Screen", "screen", "Pantalla")
+            .unwrap();
+        assert_eq!(db.list_registered_inputs().unwrap().len(), 1);
+        assert!(db.screen_input().unwrap().is_some());
         db.delete_registered_input(&input.id).unwrap();
         assert!(db.list_registered_inputs().unwrap().is_empty());
     }

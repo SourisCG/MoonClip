@@ -83,18 +83,52 @@ pub fn screen_input_settings(_monitor: &str) -> serde_json::Value {
     serde_json::json!({})
 }
 
-/// Running processes for registered-app polling (read-only snapshot).
+/// Visible top-level windows on this desktop (autopilot checker input).
 #[cfg(target_os = "linux")]
-pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
-    linux::procs::running()
+pub fn list_windows() -> Vec<shared::winlist::DesktopWindow> {
+    #[cfg(debug_assertions)]
+    if let Ok(path) = std::env::var("MOONCLIP_FAKE_WINDOWS_FILE") {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return serde_json::from_str(&text).unwrap_or_default();
+        }
+    }
+    linux::winlist::list_windows()
 }
 #[cfg(target_os = "windows")]
-pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
-    windows::procs::running()
+pub fn list_windows() -> Vec<shared::winlist::DesktopWindow> {
+    #[cfg(debug_assertions)]
+    if let Ok(path) = std::env::var("MOONCLIP_FAKE_WINDOWS_FILE") {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return serde_json::from_str(&text).unwrap_or_default();
+        }
+    }
+    windows::winlist::list_windows()
 }
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
+pub fn list_windows() -> Vec<shared::winlist::DesktopWindow> {
     Vec::new()
+}
+
+/// Window identity of a successful picker pick (portal token on Linux, OBS
+/// window target on Windows), used to name the game and drive the autopilot.
+#[cfg(target_os = "linux")]
+pub fn window_identity(settings: &serde_json::Value) -> Option<shared::winlist::WindowIdentity> {
+    let token = settings.get("RestoreToken")?.as_str()?;
+    let id = linux::portal::window_identity(token)?;
+    Some(shared::winlist::WindowIdentity {
+        title: id.title,
+        app_id: id.app_id,
+        exe: String::new(),
+    })
+}
+#[cfg(target_os = "windows")]
+pub fn window_identity(settings: &serde_json::Value) -> Option<shared::winlist::WindowIdentity> {
+    let target = settings.get("window")?.as_str()?;
+    (!target.trim().is_empty()).then(|| shared::winlist::parse_windows_target(target))
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn window_identity(_settings: &serde_json::Value) -> Option<shared::winlist::WindowIdentity> {
+    None
 }
 
 /// MoonClip-owned OBS config root (never the user's OBS config).
