@@ -251,13 +251,17 @@ impl ObsPlatform for WindowsPlatform {
         &self,
         monitor: &str,
         window: &str,
-        _window_match: Option<&str>,
+        window_match: Option<&str>,
     ) -> (&'static str, serde_json::Value) {
-        if !window.trim().is_empty() {
-            // Window capture (WGC, no injection); opt-in for now.
+        // `window_match` carries the detected game's `title:class` target;
+        // `window` remains the manual override. WGC needs no dialog.
+        let target = window_match
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(window);
+        if !target.trim().is_empty() {
             return (
                 "window_capture",
-                serde_json::json!({"window": window, "method": 2, "cursor": true}),
+                serde_json::json!({"window": target, "method": 2, "cursor": true}),
             );
         }
         // Modern `monitor_capture` (duplicator) takes the WinRT device

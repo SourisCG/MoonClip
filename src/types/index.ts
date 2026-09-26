@@ -39,7 +39,7 @@ export interface ResolvedCandidate {
   is_wine: boolean;
   steam_app_id?: number | null;
   window_match?: string | null;
-  source_kind: "X11" | "Portal";
+  source_kind: "Window" | "Portal";
   registered: boolean;
   custom_id?: string | null;
   auto_buffer: boolean;

@@ -109,7 +109,11 @@ pub fn game_icons_dir() -> Option<PathBuf> {
 pub fn find_game_icon(r: &shared::detect::ResolvedCandidate) -> Option<PathBuf> {
     linux::detect::find_icon(r, &linux::detect::default_icon_roots())
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub fn find_game_icon(r: &shared::detect::ResolvedCandidate) -> Option<PathBuf> {
+    windows::detect::find_icon(r)
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn find_game_icon(_r: &shared::detect::ResolvedCandidate) -> Option<PathBuf> {
     None
 }
@@ -120,7 +124,11 @@ pub fn find_game_icon(_r: &shared::detect::ResolvedCandidate) -> Option<PathBuf>
 pub fn detect_candidates() -> Vec<shared::detect::CandidateProcess> {
     linux::detect::scan()
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub fn detect_candidates() -> Vec<shared::detect::CandidateProcess> {
+    windows::detect::scan()
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn detect_candidates() -> Vec<shared::detect::CandidateProcess> {
     Vec::new()
 }
@@ -132,7 +140,13 @@ pub fn resolve_candidates(
 ) -> Vec<shared::detect::ResolvedCandidate> {
     linux::detect::resolve_all(cands)
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub fn resolve_candidates(
+    cands: Vec<shared::detect::CandidateProcess>,
+) -> Vec<shared::detect::ResolvedCandidate> {
+    windows::detect::resolve_all(cands)
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn resolve_candidates(
     _cands: Vec<shared::detect::CandidateProcess>,
 ) -> Vec<shared::detect::ResolvedCandidate> {

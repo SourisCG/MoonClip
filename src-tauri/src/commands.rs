@@ -131,7 +131,7 @@ pub(crate) struct StartOverrides {
 pub(crate) struct GameContext {
     pub key: String,
     pub title: String,
-    /// 'x11' | 'portal'
+    /// 'window' | 'portal'
     pub source_kind: Option<String>,
     pub window_match: Option<String>,
     /// Wayland-native restore token already stored for this game.
@@ -876,8 +876,8 @@ pub(crate) async fn detect_tick(app: &AppHandle) {
                 r.window_match.clone(),
                 saved.and_then(|a| a.window_match.clone()),
             ) {
-                (Some(m), _) => ("x11", Some(m)),
-                (None, Some(m)) => ("x11", Some(m)),
+                (Some(m), _) => ("window", Some(m)),
+                (None, Some(m)) => ("window", Some(m)),
                 (None, None) => ("portal", None),
             };
             let ctx = GameContext {

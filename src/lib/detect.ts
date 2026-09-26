@@ -21,7 +21,7 @@ export function registerInputFromCandidate(g: ResolvedCandidate): RegisterAppInp
     target_exe: target,
     match_strategy: strategy,
     game_key: g.game_key,
-    source_kind: g.source_kind === "X11" ? "x11" : "portal",
+    source_kind: g.source_kind === "Window" ? "window" : "portal",
     window_match: g.window_match ?? null,
     auto_buffer: true,
   };

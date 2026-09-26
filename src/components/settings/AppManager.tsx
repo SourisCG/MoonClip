@@ -111,7 +111,7 @@ export function AppManager() {
                     <p className="truncate text-sm text-slate-200">{g.title}</p>
                     <p className="truncate font-mono text-[11px] text-slate-500">
                       {exeBasename(g.exe)} · {g.source}
-                      {g.is_wine ? " · wine" : ""} · {g.source_kind === "X11" ? "x11" : "portal"}
+                      {g.is_wine ? " · wine" : ""} · {g.source_kind === "Window" ? "window" : "portal"}
                     </p>
                   </div>
                   {already ? (

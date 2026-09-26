@@ -3,8 +3,9 @@
 /// How a detected game's window will be captured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SourceKind {
-    /// X11/XWayland window captured with `xcomposite_input` (no portal).
-    X11,
+    /// Direct window target: `xcomposite_input` on X11/XWayland, WGC on
+    /// Windows (no portal dialog).
+    Window,
     /// Wayland-native window through the portal (per-game restore token).
     Portal,
 }

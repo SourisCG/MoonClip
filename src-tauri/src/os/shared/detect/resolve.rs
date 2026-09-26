@@ -119,7 +119,7 @@ fn build(c: &CandidateProcess, title: String, game_key: String, source: &str) ->
         steam_app_id: c.steam_app_id,
         window_match: c.window.as_ref().map(|w| w.xcomposite_match()),
         source_kind: if c.window.is_some() {
-            SourceKind::X11
+            SourceKind::Window
         } else {
             SourceKind::Portal
         },
