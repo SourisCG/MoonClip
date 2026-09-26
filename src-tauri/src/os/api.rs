@@ -35,6 +35,21 @@ pub struct CustomVideo {
     pub color_range: String,
 }
 
+/// One registered capture input (an OBS source stored in the collection).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CaptureInput {
+    /// OBS source/item name (also the registry key).
+    pub name: String,
+    /// 'window' | 'screen'
+    pub kind: String,
+    /// OBS source id for this platform (`pipewire-window-capture-source`, ...).
+    pub source_id: String,
+    /// Saved source settings (portal token / window target / monitor id).
+    pub settings: serde_json::Value,
+    /// Stable source uuid (registry row).
+    pub uuid: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CaptureConfig {
     pub duration_seconds: u32,
@@ -52,9 +67,14 @@ pub struct CaptureConfig {
     pub out_height: u32,
     /// Monitor selector (platform id/name). Empty = primary/portal.
     pub monitor: String,
-    /// Optional window capture target (empty = monitor capture).
-    #[allow(dead_code)] // wired by the window-capture UI in a later phase
-    pub window: String,
+    /// Registered capture inputs (one OBS source each); `active_input` is the
+    /// visible one being recorded. Audio configuration is global and never
+    /// changes when switching inputs.
+    pub inputs: Vec<CaptureInput>,
+    /// Name of the input being recorded (empty = nothing registered).
+    pub active_input: String,
+    /// Setup run: keep the OBS window visible so the user can pick the window.
+    pub setup: bool,
     /// Game/desktop audio device id ("default_output" = OS default).
     pub desktop_device: String,
     /// Microphone device id ("default_input" = OS default).
@@ -74,9 +94,6 @@ pub struct CaptureConfig {
     /// the output resolution equals the base.
     pub base_width: u32,
     pub base_height: u32,
-    /// Portal ScreenCast restore token (Wayland): pre-seeded into the capture
-    /// source so OBS restores the screen session without the picker dialog.
-    pub portal_restore_token: String,
     /// Custom encoder selection (video_mode=custom). None = ladder recipe.
     pub custom_encoder: Option<CustomEncoder>,
     /// Custom [Video] tab (video_mode=custom). None = ladder video.

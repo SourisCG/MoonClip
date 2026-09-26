@@ -166,8 +166,16 @@
     "name_ph": "Display name (e.g. Minecraft)",
     "exe_ph": "Target exe (e.g. javaw.exe)",
     "add": "Register",
-    "empty": "No custom apps yet.",
-    "picker_note": "Running-process picker and click-to-register arrive in Phase 4."
+    "empty": "No registered apps yet. Add one that is running.",
+    "registered_title": "Registered",
+    "kind_window": "Window",
+    "kind_screen": "Screen",
+    "pick_window": "Pick window",
+    "pick_screen": "Pick screen",
+    "record": "Record",
+    "finish_setup": "Done",
+    "setup_hint_window": "Pick the game window in the dialog, then press Done.",
+    "setup_hint_screen": "Pick the screen in the dialog, then press Done."
   },
   "common": { "loading": "Loading…", "delete": "Delete" },
   "rec": {

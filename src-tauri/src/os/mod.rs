@@ -18,7 +18,7 @@ pub mod windows;
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub mod linux;
 
-pub use api::{AudioDevice, CaptureConfig, CaptureEngine, CustomEncoder, CustomVideo};
+pub use api::{AudioDevice, CaptureConfig, CaptureEngine, CaptureInput, CustomEncoder, CustomVideo};
 
 #[cfg(target_os = "linux")]
 pub use linux::{backend_name, devices, open, paths, prepare_environment, video, Engine};
@@ -55,6 +55,34 @@ pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     linux::binary::resolve_obs(app)
 }
 
+/// OBS source id for a registered input kind on this platform.
+#[cfg(target_os = "linux")]
+pub fn input_source_id(kind: &str) -> &'static str {
+    linux::input_source_id(kind)
+}
+#[cfg(target_os = "windows")]
+pub fn input_source_id(kind: &str) -> &'static str {
+    windows::input_source_id(kind)
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn input_source_id(_kind: &str) -> &'static str {
+    "pipewire-window-capture-source"
+}
+
+/// Settings for the screen input on this platform.
+#[cfg(target_os = "linux")]
+pub fn screen_input_settings(monitor: &str) -> serde_json::Value {
+    linux::screen_input_settings(monitor)
+}
+#[cfg(target_os = "windows")]
+pub fn screen_input_settings(monitor: &str) -> serde_json::Value {
+    windows::screen_input_settings(monitor)
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn screen_input_settings(_monitor: &str) -> serde_json::Value {
+    serde_json::json!({})
+}
+
 /// Running processes for registered-app polling (read-only snapshot).
 #[cfg(target_os = "linux")]
 pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
@@ -67,12 +95,6 @@ pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
     Vec::new()
-}
-
-/// First registered app with a running process.
-pub fn matched_app(apps: &[crate::storage::models::CustomApp]) -> Option<crate::storage::models::CustomApp> {
-    let procs = running_processes();
-    shared::procs::first_match(apps, &procs).cloned()
 }
 
 /// MoonClip-owned OBS config root (never the user's OBS config).

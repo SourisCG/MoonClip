@@ -59,3 +59,17 @@ pub fn prepare_environment() {
 /// Shared shell identity for MoonClip and its embedded engine
 /// ("cooperative processes" per Microsoft's AppUserModelID guidance).
 pub const APP_USER_MODEL_ID: &str = "dev.souriscg.moonclip";
+
+/// OBS source id for a registered input kind on Windows.
+pub fn input_source_id(kind: &str) -> &'static str {
+    use crate::os::shared::engine::ObsPlatform;
+    let window = if kind == "screen" { "" } else { "x" };
+    engine::WindowsPlatform::new().video_source("", window).0
+}
+
+/// Settings for the screen input: WGC (method 2) monitor capture with the
+/// configured monitor id and HDR->SDR tonemapping.
+pub fn screen_input_settings(monitor: &str) -> serde_json::Value {
+    use crate::os::shared::engine::ObsPlatform;
+    engine::WindowsPlatform::new().video_source(monitor, "").1
+}

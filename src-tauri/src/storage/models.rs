@@ -39,3 +39,20 @@ pub struct RegisterAppInput {
     pub clip_duration_seconds: Option<i64>,
     pub is_wine_proton: Option<bool>,
 }
+
+/// One registered capture input (mirrors an OBS source we created).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredInput {
+    pub id: String,
+    pub input_name: String,
+    /// 'window' | 'screen'
+    pub input_kind: String,
+    pub display_name: String,
+    /// Process rule to know when this app is running.
+    pub target_exe: String,
+    pub match_strategy: String,
+    /// Saved OBS source settings JSON (portal token / window target).
+    pub input_settings: Option<String>,
+    pub source_uuid: String,
+    pub icon_path: Option<String>,
+}

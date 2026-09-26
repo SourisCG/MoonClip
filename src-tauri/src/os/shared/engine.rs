@@ -29,6 +29,7 @@ use tokio::process::{Child, Command};
 
 use super::obsws::Obsws;
 use super::super::{CaptureConfig, CaptureEngine};
+use crate::os::api::CaptureInput;
 
 // ---------------------------------------------------------------------------
 // Identity constants (generated profile/scene — never the user's)
@@ -42,7 +43,6 @@ pub const SCENE_NAME: &str = "MoonClip Capture";
 /// the FIRST source registered with that name. With both named the same, the
 /// program scene resolved to the capture source, the program stayed empty and
 /// the saved video was all black (observed live).
-pub const VIDEO_SOURCE_NAME: &str = "MoonClip Screen";
 pub const GAME_SOURCE_NAME: &str = "MoonClip Game Audio";
 pub const MIC_SOURCE_NAME: &str = "MoonClip Mic";
 
@@ -189,10 +189,12 @@ pub struct ObsProfile {
     pub mute_game: bool,
     pub mute_mic: bool,
     pub single_track: bool,
-    pub video_source_id: String,
+    /// Registered capture inputs (one OBS source each); the active one is
+    /// visible, the rest stay hidden so audio never changes.
+    pub inputs: Vec<CaptureInput>,
+    pub active_input: String,
     pub game_audio_id: String,
     pub mic_audio_id: String,
-    pub video_settings: serde_json::Value,
     pub websocket_port: u16,
     pub websocket_password: String,
 }
@@ -362,19 +364,8 @@ impl ObsProfile {
             }
         };
 
-        let (video_source_id, mut video_settings) =
-            platform.video_source(&cfg.monitor, &cfg.window);
-        // Portal restore token (Wayland): pre-seed it so OBS restores the
-        // screen session silently instead of showing the picker again. OBS
-        // refreshes the token on every successful Start; the caller reads it
-        // back and persists the newest one.
-        if !cfg.portal_restore_token.trim().is_empty() {
-            if let serde_json::Value::Object(map) = &mut video_settings {
-                map.insert(
-                    "RestoreToken".to_string(),
-                    serde_json::Value::String(cfg.portal_restore_token.clone()),
-                );
-            }
+        if cfg.inputs.is_empty() {
+            return Err("no registered capture input (add one in Games first)".into());
         }
         Ok(Self {
             encoder_id,
@@ -412,10 +403,10 @@ impl ObsProfile {
             mute_game: cfg.mute_game,
             mute_mic: cfg.mute_mic,
             single_track: cfg.audio_single_track,
-            video_source_id: video_source_id.to_string(),
+            inputs: cfg.inputs.clone(),
+            active_input: cfg.active_input.clone(),
             game_audio_id: platform.game_audio_source_id().to_string(),
             mic_audio_id: platform.mic_audio_source_id().to_string(),
-            video_settings,
             websocket_port: cfg.websocket_port,
             websocket_password: cfg.websocket_password.clone(),
         })
@@ -514,7 +505,6 @@ pub fn gain_to_volume(pct: u32) -> f64 {
 #[derive(Debug, Clone)]
 pub struct SourceUuids {
     pub scene: String,
-    pub video: String,
     pub game_audio: String,
     pub mic_audio: String,
 }
@@ -523,7 +513,6 @@ impl SourceUuids {
     pub fn generate() -> Self {
         Self {
             scene: uuid::Uuid::new_v4().to_string(),
-            video: uuid::Uuid::new_v4().to_string(),
             game_audio: uuid::Uuid::new_v4().to_string(),
             mic_audio: uuid::Uuid::new_v4().to_string(),
         }
@@ -572,39 +561,55 @@ pub fn render_collection(p: &ObsProfile, uuids: &SourceUuids) -> String {
     use serde_json::json;
     let game_mixers = if p.single_track { 1 } else { 1 | 2 };
     let mic_mixers = if p.single_track { 1 } else { 1 | 4 };
-    let scene_item = json!({
-        "name": VIDEO_SOURCE_NAME,
-        "source_uuid": uuids.video,
-        "visible": true,
-        "locked": false,
-        "rot": 0.0,
-        "pos": {"x": 0.0, "y": 0.0},
-        "scale": {"x": 1.0, "y": 1.0},
-        "align": 5,
-        "bounds_type": 0,
-        "bounds_align": 0,
-        "bounds_crop": false,
-        "bounds": {"x": 0.0, "y": 0.0},
-        "crop_left": 0,
-        "crop_top": 0,
-        "crop_right": 0,
-        "crop_bottom": 0,
-        "id": 1,
-        "group_item_backup": false,
-        "scale_filter": "disable",
-        "blend_method": "default",
-        "blend_type": "normal",
-        "show_transition": {"duration": 0},
-        "hide_transition": {"duration": 0},
-        "private_settings": {}
-    });
+    let active = if p.active_input.is_empty() {
+        p.inputs.first().map(|i| i.name.as_str()).unwrap_or("")
+    } else {
+        p.active_input.as_str()
+    };
+    let items: Vec<serde_json::Value> = p
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, inp)| {
+            json!({
+                "name": inp.name,
+                "source_uuid": inp.uuid,
+                "visible": inp.name == active,
+                "locked": false,
+                "rot": 0.0,
+                "pos": {"x": 0.0, "y": 0.0},
+                "scale": {"x": 1.0, "y": 1.0},
+                "align": 5,
+                "bounds_type": 0,
+                "bounds_align": 0,
+                "bounds_crop": false,
+                "bounds": {"x": 0.0, "y": 0.0},
+                "crop_left": 0,
+                "crop_top": 0,
+                "crop_right": 0,
+                "crop_bottom": 0,
+                "id": (i + 1) as i64,
+                "group_item_backup": false,
+                "scale_filter": "disable",
+                "blend_method": "default",
+                "blend_type": "normal",
+                "show_transition": {"duration": 0},
+                "hide_transition": {"duration": 0},
+                "private_settings": {}
+            })
+        })
+        .collect();
     let scene = json!({
         "prev_ver": SCENE_PREV_VER,
         "name": SCENE_NAME,
         "uuid": uuids.scene,
         "id": "scene",
         "versioned_id": "scene",
-        "settings": {"id_counter": 2, "custom_size": false, "items": [scene_item]},
+        "settings": {
+            "id_counter": (p.inputs.len() + 1) as i64,
+            "custom_size": false,
+            "items": items
+        },
         "mixers": 0,
         "sync": 0,
         "flags": 0,
@@ -623,15 +628,18 @@ pub fn render_collection(p: &ObsProfile, uuids: &SourceUuids) -> String {
         "canvas_uuid": MAIN_CANVAS_UUID,
         "private_settings": {}
     });
-    let video_source = source_entry(
-        &uuids.video,
-        VIDEO_SOURCE_NAME,
-        &p.video_source_id,
-        p.video_settings.clone(),
-        0,
-        1.0,
-        false,
-    );
+    let mut sources = vec![scene];
+    for inp in &p.inputs {
+        sources.push(source_entry(
+            &inp.uuid,
+            &inp.name,
+            &inp.source_id,
+            inp.settings.clone(),
+            0,
+            1.0,
+            false,
+        ));
+    }
     let game_audio = source_entry(
         &uuids.game_audio,
         GAME_SOURCE_NAME,
@@ -655,7 +663,7 @@ pub fn render_collection(p: &ObsProfile, uuids: &SourceUuids) -> String {
         "current_scene": SCENE_NAME,
         "current_program_scene": SCENE_NAME,
         "scene_order": [{"name": SCENE_NAME}],
-        "sources": [scene, video_source],
+        "sources": sources,
         "groups": [],
         "quick_transitions": [
             {"name": "Cut", "duration": 300, "hotkeys": [], "id": 1, "fade_to_black": false},
@@ -748,33 +756,13 @@ pub fn write_obs_config(
         std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
     };
     let uuids = SourceUuids::generate();
-    // Preserve the portal RestoreToken OBS saved in the previous collection:
-    // it refreshes the single-use token on every successful Start, so losing
-    // it (force-kill before the DB read-back) would show the picker again.
     let collection_path = scenes_dir.join(format!("{OBS_COLLECTION}.json"));
-    let mut profile = p.clone();
-    let has_token = profile
-        .video_settings
-        .get("RestoreToken")
-        .and_then(|v| v.as_str())
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
-    if !has_token {
-        if let Some(token) = existing_restore_token(&collection_path) {
-            if let serde_json::Value::Object(map) = &mut profile.video_settings {
-                map.insert(
-                    "RestoreToken".to_string(),
-                    serde_json::Value::String(token),
-                );
-            }
-        }
-    }
     write(profile_dir.join("basic.ini"), render_basic_ini(p))?;
     write(
         profile_dir.join("recordEncoder.json"),
         render_record_encoder_json(p),
     )?;
-    write(collection_path, render_collection(&profile, &uuids))?;
+    write(collection_path, render_collection(p, &uuids))?;
     write(conf.join("global.ini"), render_global_ini())?;
     write(conf.join("user.ini"), render_user_ini(tray_enabled))?;
     write(
@@ -794,30 +782,6 @@ pub fn reset_obs_config(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-
-/// Portal `RestoreToken` saved by OBS in our own scene collection file.
-/// OBS refreshes the single-use token on every successful screencast Start and
-/// persists it into the source settings; reading it back here keeps restores
-/// silent even after a force-kill that skipped the live read-back.
-pub fn existing_restore_token(collection_path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(collection_path).ok()?;
-    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
-    doc.get("sources")?
-        .as_array()?
-        .iter()
-        .find_map(|s| {
-            let id = s.get("id")?.as_str()?;
-            if id == "pipewire-desktop-capture-source" || id == "pipewire-screen-capture-source" {
-                s.get("settings")?
-                    .get("RestoreToken")?
-                    .as_str()
-                    .map(|t| t.to_string())
-            } else {
-                None
-            }
-        })
-        .filter(|t| !t.is_empty())
-}
 
 /// Recursive directory copy used to stage the writable portable OBS runtime.
 #[allow(dead_code)] // used by the Windows backend + staging tests
@@ -984,14 +948,11 @@ impl ObsEngine {
     /// Portal restore token OBS persisted on the capture source, if any.
     /// OBS refreshes it on every successful Start (single-use tokens), so the
     /// caller persists the newest one after each start.
-    pub async fn read_restore_token(&self) -> Option<String> {
+    /// Full OBS settings of the active input (portal token / window target):
+    /// the caller persists them in the registry so the pick survives restarts.
+    pub async fn read_input_settings(&self, name: &str) -> Option<serde_json::Value> {
         let obsws = self.obsws.as_ref()?;
-        let settings = obsws.input_settings(VIDEO_SOURCE_NAME).await.ok()?;
-        settings
-            .get("RestoreToken")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty())
+        obsws.input_settings(name).await.ok()
     }
 
     /// Learn the real captured size (the portal decides it, not our profile)
@@ -1002,13 +963,17 @@ impl ObsEngine {
             (p.base_width, p.base_height, p.out_height, p.out_source)
         };
         let shot = std::env::temp_dir().join(format!("moonclip-source-{}.png", std::process::id()));
-        let obsws = self.obsws.as_ref()?;
-        // Wait until the portal stream is really producing frames before
-        // probing (an inactive source has no size yet).
-        if !obsws.source_active(VIDEO_SOURCE_NAME).await.unwrap_or(false) {
+        let active = self.profile.as_ref()?.active_input.clone();
+        if active.is_empty() {
             return None;
         }
-        obsws.save_screenshot(VIDEO_SOURCE_NAME, &shot).await.ok()?;
+        let obsws = self.obsws.as_ref()?;
+        // Wait until the stream is really producing frames before probing
+        // (an inactive source has no size yet).
+        if !obsws.source_active(&active).await.unwrap_or(false) {
+            return None;
+        }
+        obsws.save_screenshot(&active, &shot).await.ok()?;
         let bytes = std::fs::read(&shot).ok()?;
         let _ = std::fs::remove_file(&shot);
         let (w, h) = png_dimensions(&bytes)?;
@@ -1134,7 +1099,11 @@ impl CaptureEngine for ObsEngine {
             self.platform.adopt_child(pid);
             // Hide the embedded window right away so the user never sees
             // it (no-op on platforms without concealment).
-            self.platform.conceal_window(pid, &rt.bin);
+            // Setup runs keep the OBS window visible so the user can pick the
+            // capture window (Windows) instead of hunting for a hidden UI.
+            if !config.setup {
+                self.platform.conceal_window(pid, &rt.bin);
+            }
         }
 
         // 5. Safety guard: if OBS writes outside our config, abort immediately.
@@ -1392,7 +1361,15 @@ mod tests {
             bitrate_kbps: 20_000,
             out_height: 1080,
             monitor: "0".into(),
-            window: String::new(),
+            inputs: vec![CaptureInput {
+                name: "Game".into(),
+                kind: "window".into(),
+                source_id: "pipewire-window-capture-source".into(),
+                settings: serde_json::json!({}),
+                uuid: "11111111-1111-1111-1111-111111111111".into(),
+            }],
+            active_input: "Game".into(),
+            setup: false,
             desktop_device: "default_output".into(),
             mic_device: "default_input".into(),
             gain_game: 100,
@@ -1404,7 +1381,7 @@ mod tests {
             vendor: "nvidia".into(),
             base_width: 2560,
             base_height: 1440,
-            portal_restore_token: String::new(),
+
             custom_encoder: None,
             custom_video: None,
             obs_bin: Some(PathBuf::from("obs64.exe")),
@@ -1610,24 +1587,26 @@ mod tests {
         let uuids = SourceUuids::generate();
         let text = render_collection(&p, &uuids);
         assert!(!text.contains(FORBIDDEN_SOURCE_ID), "{text}");
-        assert!(text.contains("monitor_capture"));
+        assert!(text.contains("pipewire-window-capture-source"));
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["AuxAudioDevice1"]["mixers"], 3);
         assert_eq!(v["AuxAudioDevice2"]["mixers"], 5);
         assert_eq!(v["AuxAudioDevice1"]["volume"], 1.0);
         assert_eq!(v["sources"][0]["name"], SCENE_NAME);
-        assert_eq!(v["sources"][1]["id"], "monitor_capture");
+        assert_eq!(v["sources"][1]["id"], "pipewire-window-capture-source");
         // Scene and capture source MUST have distinct names: OBS resolves the
         // program scene by name and a collision produced all-black clips.
-        assert_eq!(v["sources"][1]["name"], VIDEO_SOURCE_NAME);
+        assert_eq!(v["sources"][1]["name"], "Game");
         assert_ne!(v["sources"][0]["name"], v["sources"][1]["name"]);
         // Scene explicitly bound to libobs' main canvas.
         assert_eq!(v["sources"][0]["canvas_uuid"], MAIN_CANVAS_UUID);
         // The scene item references the capture source by uuid (OBS 30+).
         assert_eq!(
             v["sources"][0]["settings"]["items"][0]["source_uuid"],
-            uuids.video
+            "11111111-1111-1111-1111-111111111111"
         );
+        // Only the active input is visible.
+        assert_eq!(v["sources"][0]["settings"]["items"][0]["visible"], true);
     }
 
     #[test]
@@ -1666,25 +1645,6 @@ mod tests {
         assert_eq!(v["server_password"], "deck");
     }
 
-    #[test]
-    fn existing_restore_token_reads_collection() {
-        let dir = std::env::temp_dir().join(format!("moonclip-token-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("MoonClip.json");
-        std::fs::write(
-            &file,
-            r#"{"sources":[{"id":"scene","settings":{}},{"id":"pipewire-desktop-capture-source","settings":{"RestoreToken":"tok123"}}]}"#,
-        )
-        .unwrap();
-        assert_eq!(existing_restore_token(&file), Some("tok123".to_string()));
-        std::fs::write(
-            &file,
-            r#"{"sources":[{"id":"pipewire-desktop-capture-source","settings":{}}]}"#,
-        )
-        .unwrap();
-        assert_eq!(existing_restore_token(&file), None);
-        std::fs::remove_dir_all(&dir).ok();
-    }
 
     #[test]
     fn replay_mb_has_margin_and_floor() {

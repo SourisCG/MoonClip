@@ -7,10 +7,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::os::shared::encoder_options as enc;
 use crate::os::{
     self, backend_name, devices, new_engine, resolve_obs, shared::engine as obs, video, AudioDevice,
-    CaptureConfig, CaptureEngine, CustomEncoder, CustomVideo,
+    CaptureConfig, CaptureEngine, CaptureInput, CustomEncoder, CustomVideo,
 };
 use crate::state::AppState;
-use crate::storage::models::{ClipRecord, CustomApp, RegisterAppInput};
+use crate::storage::models::{ClipRecord, CustomApp, RegisterAppInput, RegisteredInput};
 use crate::storage::{secrets, DbState};
 
 #[tauri::command]
@@ -121,10 +121,10 @@ pub(crate) struct StartOverrides {
     /// Full Custom payloads for the "Probar" button (validated, not persisted).
     pub custom_encoder: Option<CustomEncoder>,
     pub custom_video: Option<CustomVideo>,
-    /// Capture overrides for a registered game (window + its portal token).
-    pub window: Option<String>,
-    pub portal_token: Option<String>,
-    pub app_id: Option<String>,
+    /// Name of the registered input to record (None = resolve from the
+    /// running registered apps). `setup` keeps OBS visible for window picking.
+    pub record_input: Option<String>,
+    pub setup: bool,
 }
 
 /// Validate Custom JSON payloads before persisting: unknown encoder ids,
@@ -325,6 +325,45 @@ pub(crate) async fn build_capture_config(
 
     let (obs_bin, _) = resolve_obs(app)?;
 
+    // Registered capture inputs: one OBS source per app. The active one is
+    // visible, the rest stay hidden; audio is global and never changes.
+    let mut regs = db.list_registered_inputs()?;
+    if !regs.iter().any(|r| r.input_kind == "screen") {
+        let _ = db.register_input(
+            "MoonClip Screen",
+            "screen",
+            "Pantalla completa",
+            "",
+            "input",
+        );
+        regs = db.list_registered_inputs()?;
+    }
+    let monitor = selected.map(|m| m.name.clone()).unwrap_or_default();
+    let inputs: Vec<CaptureInput> = regs
+        .iter()
+        .map(|r| {
+            let settings = r
+                .input_settings
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .unwrap_or_else(|| {
+                    if r.input_kind == "screen" {
+                        os::screen_input_settings(&monitor)
+                    } else {
+                        serde_json::json!({})
+                    }
+                });
+            CaptureInput {
+                name: r.input_name.clone(),
+                kind: r.input_kind.clone(),
+                source_id: os::input_source_id(&r.input_kind).to_string(),
+                settings,
+                uuid: r.source_uuid.clone(),
+            }
+        })
+        .collect();
+    let active_input = overrides.record_input.clone().unwrap_or_default();
+
     Ok(CaptureConfig {
         duration_seconds,
         fps,
@@ -335,10 +374,7 @@ pub(crate) async fn build_capture_config(
         bitrate_kbps: bitrate,
         out_height,
         monitor: selected.map(|m| m.name.clone()).unwrap_or_default(),
-        window: overrides
-            .window
-            .clone()
-            .unwrap_or_else(|| setting_str(&db, "capture_window", "")),
+
         desktop_device: devices::resolve_obs_device_id(
             &setting_str(&db, "desktop_device", "default_output"),
             true,
@@ -371,10 +407,9 @@ pub(crate) async fn build_capture_config(
         vendor: video::vendor().await,
         base_width,
         base_height,
-        // Window capture uses ONLY the game's own token; an empty token means
-        // the system picker appears (choose the game window once). The screen
-        // button passes no token at all: monitor tokens never exist here.
-        portal_restore_token: overrides.portal_token.clone().unwrap_or_default(),
+        inputs,
+        active_input,
+        setup: overrides.setup,
         custom_encoder,
         custom_video,
         obs_bin: Some(obs_bin),
@@ -386,7 +421,7 @@ pub(crate) async fn build_capture_config(
 async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<EngineStatus, String> {
     let config = build_capture_config(app, overrides).await?;
     eprintln!(
-        "[moonclip] obs engine: {}x{}@{} {} {}kbps replay={}s codec={} monitor={} audio={}",
+        "[moonclip] obs engine: {}x{}@{} {} {}kbps replay={}s codec={} input={} ({}/{} inputs) audio={}",
         config.base_width,
         config.base_height,
         config.fps,
@@ -398,19 +433,27 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
         config.bitrate_kbps,
         config.duration_seconds,
         config.codec,
-        if config.monitor.is_empty() {
-            "primary".into()
+        if config.active_input.is_empty() {
+            "-".to_string()
         } else {
-            config.monitor.clone()
+            config.active_input.clone()
         },
+        config.inputs.iter().filter(|i| i.kind == "window").count(),
+        config.inputs.len(),
         if config.audio_single_track {
             "Mix"
         } else {
             "Mix+Game+Mic"
         }
     );
+    let active_input = config.active_input.clone();
     let mut engine = new_engine();
-    let first_time = config.portal_restore_token.trim().is_empty();
+    let first_time = config
+        .inputs
+        .iter()
+        .find(|i| i.name == config.active_input)
+        .map(|i| i.kind == "window" && i.settings.get("RestoreToken").is_none() && i.settings.get("window").is_none())
+        .unwrap_or(false);
     if let Err(e) = engine.start_buffer(config).await {
         eprintln!("[moonclip] obs start failed: {e}");
         return Err(e);
@@ -440,14 +483,14 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
             "no screen captured: the system picker was cancelled or no stream was granted".into(),
         );
     };
-    if let Some(token) = engine.read_restore_token().await {
-        let db = app.state::<DbState>();
-        // Only the game's own window token is stored; screen recordings
-        // never keep a token.
-        if let Some(app_id) = &overrides.app_id {
-            let _ = db.set_app_token(app_id, &token);
+    if !active_input.is_empty() {
+        if let Some(settings) = engine.read_input_settings(&active_input).await {
+            let db = app.state::<DbState>();
+            // The window pick (portal token / window target) is stored in the
+            // registry and re-injected on every start: the picker appears once.
+            let _ = db.set_input_settings(&active_input, &settings.to_string());
+            engine.note("capture settings updated");
         }
-        engine.note("screen token updated");
     }
     {
         let db = app.state::<DbState>();
@@ -865,30 +908,22 @@ pub async fn start_buffer(app: AppHandle) -> Result<EngineStatus, String> {
 /// Never records the screen silently.
 async fn manual_start(app: &AppHandle) -> Result<EngineStatus, String> {
     let db = app.state::<DbState>();
-    let mode = setting_str(&db, "capture_mode", "window");
+    let inputs = db.list_registered_inputs().unwrap_or_default();
     let matched = {
         let st = app.state::<AppState>();
         let g = st.game.lock().await;
         g.current.clone()
     }
     .or_else(|| {
-        let apps = db.list_custom_apps().unwrap_or_default();
-        os::matched_app(&apps)
+        let procs = os::running_processes();
+        os::shared::procs::first_match_registered(&inputs, &procs).cloned()
     });
-    let overrides = match matched {
-        Some(row) => StartOverrides {
-            window: (mode != "monitor").then(|| row.id.clone()),
-            portal_token: row.portal_token.clone(),
-            app_id: Some(row.id.clone()),
-            ..Default::default()
-        },
-        None if mode == "monitor" => StartOverrides::default(),
-        None => {
-            return Err(
-                "no registered game is running: open the game, or switch to Full screen in Settings > Video"
-                    .into(),
-            )
-        }
+    let Some(input) = matched else {
+        return Err("no registered app is running: add it in Games and open it".into());
+    };
+    let overrides = StartOverrides {
+        record_input: Some(input.input_name.clone()),
+        ..Default::default()
     };
     let res = start_engine(app, &overrides).await?;
     let st = app.state::<AppState>();
@@ -900,11 +935,11 @@ async fn manual_start(app: &AppHandle) -> Result<EngineStatus, String> {
 /// the game-changed event for the status chip.
 pub(crate) async fn poll_games(app: &AppHandle) {
     let db = app.state::<DbState>();
-    let apps = db.list_custom_apps().unwrap_or_default();
-    let matched = os::matched_app(&apps);
+    let inputs = db.list_registered_inputs().unwrap_or_default();
+    let procs = os::running_processes();
+    let matched = os::shared::procs::first_match_registered(&inputs, &procs).cloned();
     let st = app.state::<AppState>();
     let running = st.recorder.lock().await.is_some();
-    let mode = setting_str(&db, "capture_mode", "window");
 
     let changed = {
         let mut g = st.game.lock().await;
@@ -930,9 +965,7 @@ pub(crate) async fn poll_games(app: &AppHandle) {
     match (&matched, running) {
         (Some(row), false) => {
             let overrides = StartOverrides {
-                window: (mode != "monitor").then(|| row.id.clone()),
-                portal_token: row.portal_token.clone(),
-                app_id: Some(row.id.clone()),
+                record_input: Some(row.input_name.clone()),
                 ..Default::default()
             };
             match start_engine(app, &overrides).await {
@@ -968,7 +1001,21 @@ pub async fn start_screen_buffer(app: AppHandle) -> Result<EngineStatus, String>
             return Err("buffer already running".into());
         }
     }
-    let res = start_engine(&app, &StartOverrides::default()).await?;
+    let screen = {
+        let db = app.state::<DbState>();
+        db.list_registered_inputs()?
+            .into_iter()
+            .find(|r| r.input_kind == "screen")
+            .ok_or_else(|| "no screen input registered".to_string())?
+    };
+    let res = start_engine(
+        &app,
+        &StartOverrides {
+            record_input: Some(screen.input_name.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
     let st = app.state::<AppState>();
     st.game.lock().await.auto_started = false;
     Ok(res)
@@ -1012,6 +1059,92 @@ pub async fn current_game(app: AppHandle) -> Option<String> {
     let st = app.state::<AppState>();
     let g = st.game.lock().await;
     g.current.as_ref().map(|a| a.display_name.clone())
+}
+
+#[tauri::command]
+pub fn list_registered_inputs(db: State<'_, DbState>) -> Result<Vec<RegisteredInput>, String> {
+    db.list_registered_inputs()
+}
+
+/// Register a new capture input for an app (name + process rule chosen once
+/// by the user). The OBS source is created by the engine render on next start.
+#[tauri::command]
+pub fn add_registered_input(
+    db: State<'_, DbState>,
+    display_name: String,
+    target_exe: String,
+    match_strategy: String,
+) -> Result<RegisteredInput, String> {
+    let name = display_name.trim().to_string();
+    if name.is_empty() {
+        return Err("display_name is required".into());
+    }
+    let existing = db.list_registered_inputs()?;
+    let mut input_name = name.clone();
+    let mut n = 2;
+    while existing.iter().any(|r| r.input_name == input_name) {
+        input_name = format!("{name} ({n})");
+        n += 1;
+    }
+    db.register_input(&input_name, "window", &name, &target_exe, &match_strategy)
+}
+
+#[tauri::command]
+pub fn delete_registered_input(db: State<'_, DbState>, id: String) -> Result<(), String> {
+    db.delete_registered_input(&id)
+}
+
+/// Setup run: starts the engine visible so the user picks this input's window
+/// (KDE picker on Linux, OBS's own window on Windows).
+#[tauri::command]
+pub async fn setup_registered_input(
+    app: AppHandle,
+    input_name: String,
+) -> Result<EngineStatus, String> {
+    if app.state::<AppState>().recorder.lock().await.is_some() {
+        stop_engine(&app).await?;
+    }
+    let res = start_engine(
+        &app,
+        &StartOverrides {
+            record_input: Some(input_name),
+            setup: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+    app.state::<AppState>().game.lock().await.auto_started = false;
+    Ok(res)
+}
+
+/// Finish setup: the pick was already stored during the start; stop the engine.
+#[tauri::command]
+pub async fn finish_setup(app: AppHandle) -> Result<(), String> {
+    stop_engine(&app).await.map(|_| ())
+}
+
+/// Record a specific registered input (list selection).
+#[tauri::command]
+pub async fn start_registered_input(
+    app: AppHandle,
+    input_name: String,
+) -> Result<EngineStatus, String> {
+    {
+        let st = app.state::<AppState>();
+        if st.recorder.lock().await.is_some() {
+            return Err("buffer already running".into());
+        }
+    }
+    let res = start_engine(
+        &app,
+        &StartOverrides {
+            record_input: Some(input_name),
+            ..Default::default()
+        },
+    )
+    .await?;
+    app.state::<AppState>().game.lock().await.auto_started = false;
+    Ok(res)
 }
 
 #[tauri::command]

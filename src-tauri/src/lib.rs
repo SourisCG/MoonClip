@@ -447,24 +447,6 @@ pub fn run() {
             app.manage(db);
             app.manage(state::AppState::default());
 
-            // One-time (v2): wipe every portal token, including the global
-            // monitor token that leaked into game rows and made the engine
-            // record the whole screen.
-            {
-                let db = app.state::<storage::DbState>();
-                let done = db
-                    .get_settings()
-                    .ok()
-                    .and_then(|s| s.get("engine_token_reset_v2").cloned())
-                    .unwrap_or_default();
-                if done != "1" {
-                    let cleared = db.clear_app_tokens().unwrap_or(0);
-                    let _ = db.set_setting("engine_restore_token", "");
-                    let _ = db.set_setting("engine_token_reset_v2", "1");
-                    eprintln!("[moonclip] token reset v2: cleared {cleared} game tokens + monitor token");
-                }
-            }
-
             // --- Global shortcut (configurable, default F9) ---
             register_stored_hotkey(app.handle());
 
@@ -539,6 +521,12 @@ pub fn run() {
             commands::engine_status,
             commands::current_game,
             commands::start_screen_buffer,
+            commands::list_registered_inputs,
+            commands::add_registered_input,
+            commands::delete_registered_input,
+            commands::setup_registered_input,
+            commands::finish_setup,
+            commands::start_registered_input,
             commands::running_apps,
             commands::save_clip_now,
             commands::audio_levels,

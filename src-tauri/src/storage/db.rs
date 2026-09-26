@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::AppHandle;
 
-use super::models::{ClipRecord, CustomApp, RegisterAppInput};
+use super::models::{ClipRecord, CustomApp, RegisterAppInput, RegisteredInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -20,6 +20,7 @@ const MIGRATION_007: &str = include_str!("../../migrations/007_obs.sql");
 const MIGRATION_008: &str = include_str!("../../migrations/008_custom_video.sql");
 const MIGRATION_009: &str = include_str!("../../migrations/009_engine_keys.sql");
 const MIGRATION_010: &str = include_str!("../../migrations/010_game_token.sql");
+const MIGRATION_011: &str = include_str!("../../migrations/011_registered_inputs.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -70,6 +71,10 @@ impl DbState {
             if version < 10 {
                 conn.execute_batch(MIGRATION_010)
                     .map_err(|e| format!("migration 010 failed: {e}"))?;
+            }
+            if version < 11 {
+                conn.execute_batch(MIGRATION_011)
+                    .map_err(|e| format!("migration 011 failed: {e}"))?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
@@ -488,26 +493,108 @@ impl DbState {
         Ok(app)
     }
 
-    /// Store the portal window token captured for a registered game.
-    pub fn set_app_token(&self, id: &str, token: &str) -> Result<(), String> {
+
+    /// Registered capture inputs (rows with an OBS input name).
+    pub fn list_registered_inputs(&self) -> Result<Vec<RegisteredInput>, String> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, input_name, input_kind, display_name, target_exe,
+                        match_strategy, input_settings, source_uuid, icon_path
+                 FROM custom_apps
+                 WHERE input_name IS NOT NULL AND input_name != ''
+                 ORDER BY display_name",
+            )
+            .map_err(|e| format!("cannot list registered inputs: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(RegisteredInput {
+                    id: r.get(0)?,
+                    input_name: r.get(1)?,
+                    input_kind: r.get(2)?,
+                    display_name: r.get(3)?,
+                    target_exe: r.get(4)?,
+                    match_strategy: r.get(5)?,
+                    input_settings: r.get(6)?,
+                    source_uuid: r.get(7)?,
+                    icon_path: r.get(8)?,
+                })
+            })
+            .map_err(|e| format!("cannot list registered inputs: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("cannot read registered input row: {e}"))
+    }
+
+    /// Create the registry row for a new capture input.
+    pub fn register_input(
+        &self,
+        input_name: &str,
+        input_kind: &str,
+        display_name: &str,
+        target_exe: &str,
+        match_strategy: &str,
+    ) -> Result<RegisteredInput, String> {
+        if input_name.trim().is_empty() || display_name.trim().is_empty() {
+            return Err("input_name and display_name are required".into());
+        }
+        if !matches!(input_kind, "window" | "screen") {
+            return Err(format!("unknown input_kind: {input_kind}"));
+        }
+        let input = RegisteredInput {
+            id: uuid::Uuid::new_v4().to_string(),
+            input_name: input_name.to_string(),
+            input_kind: input_kind.to_string(),
+            display_name: display_name.to_string(),
+            target_exe: target_exe.to_string(),
+            match_strategy: match_strategy.to_string(),
+            input_settings: None,
+            source_uuid: uuid::Uuid::new_v4().to_string(),
+            icon_path: None,
+        };
         let conn = self.lock()?;
         conn.execute(
-            "UPDATE custom_apps SET portal_token = ?1 WHERE id = ?2",
-            params![token, id],
+            "INSERT INTO custom_apps
+             (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path,
+              is_wine_proton, input_name, input_kind, input_settings, source_uuid)
+             VALUES (?1, ?2, ?6, ?7, NULL, NULL, 0, ?3, ?4, NULL, ?5)",
+            params![
+                input.id,
+                input.display_name,
+                input.input_name,
+                input.input_kind,
+                input.source_uuid,
+                input.target_exe,
+                input.match_strategy
+            ],
         )
-        .map_err(|e| format!("cannot store app token: {e}"))?;
+        .map_err(|e| format!("cannot register input: {e}"))?;
+        Ok(input)
+    }
+
+    /// Persist the OBS source settings (token/window target) for an input.
+    pub fn set_input_settings(&self, input_name: &str, settings: &str) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE custom_apps SET input_settings = ?1 WHERE input_name = ?2",
+            params![settings, input_name],
+        )
+        .map_err(|e| format!("cannot store input settings: {e}"))?;
         Ok(())
     }
 
-    /// Forget every per-game portal token (one-time cleanup of tokens saved
-    /// before window capture; the global monitor token is untouched).
-    pub fn clear_app_tokens(&self) -> Result<usize, String> {
+    /// Remove a registered input (the engine drops its OBS source too).
+    pub fn delete_registered_input(&self, id: &str) -> Result<(), String> {
         let conn = self.lock()?;
-        conn.execute(
-            "UPDATE custom_apps SET portal_token = NULL WHERE portal_token IS NOT NULL",
-            [],
-        )
-        .map_err(|e| format!("cannot clear app tokens: {e}"))
+        let changed = conn
+            .execute(
+                "DELETE FROM custom_apps WHERE id = ?1 AND input_name IS NOT NULL",
+                params![id],
+            )
+            .map_err(|e| format!("cannot delete registered input: {e}"))?;
+        if changed == 0 {
+            return Err("registered input not found".into());
+        }
+        Ok(())
     }
 
     pub fn delete_app(&self, id: &str) -> Result<(), String> {
@@ -531,6 +618,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(MIGRATION_001).unwrap();
         conn.execute_batch(MIGRATION_010).unwrap();
+        conn.execute_batch(MIGRATION_011).unwrap();
         let mut stmt = conn.prepare("PRAGMA table_info(custom_apps)").unwrap();
         let cols: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(1))
@@ -544,30 +632,29 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(MIGRATION_001).unwrap();
         conn.execute_batch(MIGRATION_010).unwrap();
+        conn.execute_batch(MIGRATION_011).unwrap();
         DbState(Mutex::new(conn))
     }
 
     #[test]
-    fn app_token_round_trip_and_clear() {
+    fn registered_input_round_trip() {
         let db = tiny_db();
-        let app = db
-            .register_app(RegisterAppInput {
-                display_name: "Game".into(),
-                target_exe: "game.exe".into(),
-                match_strategy: "exact_exe".into(),
-                clip_duration_seconds: None,
-                is_wine_proton: None,
-            })
+        let input = db
+            .register_input("Game", "window", "Game", "game.exe", "exact_exe")
             .unwrap();
-        db.set_app_token(&app.id, "tok-1").unwrap();
+        assert_eq!(input.input_kind, "window");
+        db.set_input_settings("Game", "{\"RestoreToken\":\"tok\"}")
+            .unwrap();
+        let listed = db.list_registered_inputs().unwrap();
+        assert_eq!(listed.len(), 1);
         assert_eq!(
-            db.list_custom_apps().unwrap()[0].portal_token.as_deref(),
-            Some("tok-1")
+            listed[0].input_settings.as_deref(),
+            Some("{\"RestoreToken\":\"tok\"}")
         );
-        assert_eq!(db.clear_app_tokens().unwrap(), 1);
-        assert!(db.list_custom_apps().unwrap()[0].portal_token.is_none());
+        assert_eq!(listed[0].match_strategy, "exact_exe");
+        db.delete_registered_input(&input.id).unwrap();
+        assert!(db.list_registered_inputs().unwrap().is_empty());
     }
-
     #[test]
     fn migration_009_renames_engine_keys() {
         let conn = Connection::open_in_memory().unwrap();

@@ -42,11 +42,12 @@ if [ ! -f "$DB" ]; then
   exit 1
 fi
 sleep 3
-sqlite3 "$DB" "UPDATE settings SET value='monitor' WHERE key='capture_mode';
-               UPDATE settings SET value='$TMP/clips' WHERE key='clips_directory';"
+sqlite3 "$DB" "UPDATE settings SET value='$TMP/clips' WHERE key='clips_directory';"
 sqlite3 "$DB" "INSERT INTO custom_apps
-  (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path, is_wine_proton)
-  VALUES ('e2e-game', 'Test Game', '$GAME', 'exact_exe', NULL, NULL, 0);"
+  (id, input_name, input_kind, display_name, target_exe, match_strategy,
+   clip_duration_seconds, icon_path, is_wine_proton, source_uuid)
+  VALUES ('e2e-game', 'Test Game', 'window', 'Test Game', '$GAME', 'exact_exe',
+          NULL, NULL, 0, 'e2e-uuid-0001');"
 
 # 3. The registered app appears -> poller detects it and tries to record.
 "$TMP/$GAME" 120 &

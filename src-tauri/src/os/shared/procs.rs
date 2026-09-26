@@ -1,8 +1,6 @@
 //! Running-process polling shared by every platform: a tiny read-only
 //! snapshot used to match registered games. No hooks, no windowing.
 
-use crate::storage::models::CustomApp;
-
 #[derive(Debug, Clone)]
 pub struct ProcInfo {
     /// Diagnostic only (the matcher never needs it).
@@ -64,14 +62,13 @@ pub fn game_exe_name(p: &ProcInfo) -> String {
     base
 }
 
-/// Does a registered app rule match this process? `window_title` needs
-/// compositor window info and is not supported by the simple poller.
-pub fn app_matches(app: &CustomApp, p: &ProcInfo) -> bool {
-    let target = app.target_exe.trim().to_lowercase();
+/// Rule-based match shared by the picker and the autopilot.
+pub fn rule_matches(strategy: &str, target_exe: &str, p: &ProcInfo) -> bool {
+    let target = target_exe.trim().to_lowercase();
     if target.is_empty() {
         return false;
     }
-    match app.match_strategy.as_str() {
+    match strategy {
         "exact_exe" => {
             let want = basename(&target);
             basename(&p.exe).to_lowercase() == want || p.comm.to_lowercase() == want
@@ -87,28 +84,24 @@ pub fn app_matches(app: &CustomApp, p: &ProcInfo) -> bool {
     }
 }
 
-/// First registered app with a running process (list order wins).
-pub fn first_match<'a>(apps: &'a [CustomApp], procs: &[ProcInfo]) -> Option<&'a CustomApp> {
-    apps.iter()
-        .find(|a| procs.iter().any(|p| app_matches(a, p)))
+/// First registered INPUT (ground truth for the autopilot) whose rule matches
+/// a running process.
+pub fn first_match_registered<'a>(
+    inputs: &'a [crate::storage::models::RegisteredInput],
+    procs: &[ProcInfo],
+) -> Option<&'a crate::storage::models::RegisteredInput> {
+    inputs.iter().find(|i| {
+        i.input_kind == "window"
+            && !i.target_exe.trim().is_empty()
+            && procs
+                .iter()
+                .any(|p| rule_matches(&i.match_strategy, &i.target_exe, p))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn app(strategy: &str, target: &str) -> CustomApp {
-        CustomApp {
-            id: "1".into(),
-            display_name: "Game".into(),
-            target_exe: target.into(),
-            match_strategy: strategy.into(),
-            clip_duration_seconds: None,
-            icon_path: None,
-            is_wine_proton: false,
-            portal_token: None,
-        }
-    }
 
     fn proc_info(comm: &str, exe: &str, cmdline: &[&str]) -> ProcInfo {
         ProcInfo {
@@ -123,12 +116,12 @@ mod tests {
     #[test]
     fn matches_registered_rules() {
         let p = proc_info("fnaf.exe", "Z:\\games\\fnaf.exe", &["Z:\\games\\fnaf.exe"]);
-        assert!(app_matches(&app("exact_exe", "fnaf.exe"), &p));
-        assert!(app_matches(&app("wine_target", "fnaf.exe"), &p));
-        assert!(app_matches(&app("cmdline_contains", "games\\fnaf"), &p));
-        assert!(!app_matches(&app("exact_exe", "other.exe"), &p));
-        assert!(!app_matches(&app("window_title", "fnaf"), &p));
-        assert!(!app_matches(&app("exact_exe", ""), &p));
+        assert!(rule_matches("exact_exe", "fnaf.exe", &p));
+        assert!(rule_matches("wine_target", "fnaf.exe", &p));
+        assert!(rule_matches("cmdline_contains", "games\\fnaf", &p));
+        assert!(!rule_matches("exact_exe", "other.exe", &p));
+        assert!(!rule_matches("window_title", "fnaf", &p));
+        assert!(!rule_matches("exact_exe", "", &p));
     }
 
     #[test]
@@ -158,15 +151,26 @@ mod tests {
     }
 
     #[test]
-    fn first_match_follows_list_order() {
+    fn first_match_registered_follows_list_order() {
         let procs = vec![
             proc_info("moonclip-testgame", "/tmp/moonclip-testgame", &[]),
             proc_info("other", "/usr/bin/other", &[]),
         ];
-        let apps = vec![
-            app("exact_exe", "other"),
-            app("exact_exe", "moonclip-testgame"),
-        ];
-        assert_eq!(first_match(&apps, &procs).unwrap().target_exe, "other");
+        let row = |name: &str, exe: &str| crate::storage::models::RegisteredInput {
+            id: name.into(),
+            input_name: name.into(),
+            input_kind: "window".into(),
+            display_name: name.into(),
+            target_exe: exe.into(),
+            match_strategy: "exact_exe".into(),
+            input_settings: None,
+            source_uuid: "u".into(),
+            icon_path: None,
+        };
+        let inputs = vec![row("Other", "other"), row("Testgame", "moonclip-testgame")];
+        assert_eq!(
+            first_match_registered(&inputs, &procs).unwrap().display_name,
+            "Other"
+        );
     }
 }

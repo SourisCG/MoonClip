@@ -165,8 +165,16 @@
     "name_ph": "Nombre visible (ej. Minecraft)",
     "exe_ph": "Ejecutable objetivo (ej. javaw.exe)",
     "add": "Registrar",
-    "empty": "Sin apps personalizadas.",
-    "picker_note": "El selector de procesos en ejecución llega en la Fase 4."
+    "empty": "Sin apps registradas. Añade una que esté en ejecución.",
+    "registered_title": "Registradas",
+    "kind_window": "Ventana",
+    "kind_screen": "Pantalla",
+    "pick_window": "Elegir ventana",
+    "pick_screen": "Elegir pantalla",
+    "record": "Grabar",
+    "finish_setup": "Listo",
+    "setup_hint_window": "Elige la ventana del juego en el diálogo y pulsa Listo.",
+    "setup_hint_screen": "Elige la pantalla en el diálogo y pulsa Listo."
   },
   "common": { "loading": "Cargando…", "delete": "Eliminar" },
   "rec": {

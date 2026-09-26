@@ -46,3 +46,16 @@ pub fn prepare_environment() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 }
+
+/// OBS source id for a registered input kind on Linux.
+pub fn input_source_id(kind: &str) -> &'static str {
+    use crate::os::shared::engine::ObsPlatform;
+    let window = if kind == "screen" { "" } else { "x" };
+    engine::LinuxPlatform.video_source("", window).0
+}
+
+/// Settings for the screen input (the Wayland portal picks the monitor).
+pub fn screen_input_settings(monitor: &str) -> serde_json::Value {
+    use crate::os::shared::engine::ObsPlatform;
+    engine::LinuxPlatform.video_source(monitor, "").1
+}
