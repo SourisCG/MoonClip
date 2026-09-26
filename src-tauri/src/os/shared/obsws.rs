@@ -159,6 +159,17 @@ impl Obsws {
         Ok(settings.settings)
     }
 
+    /// Destroy a source. Called before stopping the engine: OBS closes the
+    /// portal session on source teardown, and the portal only persists the
+    /// restore token when the session closes (it deletes it at session start).
+    pub async fn remove_input(&self, source: &str) -> Result<(), String> {
+        self.client
+            .inputs()
+            .remove(InputId::Name(source))
+            .await
+            .map_err(|e| format!("input remove failed: {e}"))
+    }
+
     /// Open OBS's own source properties dialog (Windows setup runs: the user
     /// picks the game window there, then the settings are read back).
     #[allow(dead_code)] // only the Windows platform's setup hook calls it

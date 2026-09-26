@@ -386,6 +386,23 @@ impl ObsProfile {
         if cfg.inputs.is_empty() {
             return Err("no registered capture input (add one in Games first)".into());
         }
+        // Only the active input is rendered into the collection: OBS activates
+        // EVERY source it contains (hidden scene items included), so shipping
+        // the whole registry opened one portal dialog per registered game on
+        // every start and consumed their restore tokens.
+        let active = cfg.active_input.trim();
+        let inputs: Vec<CaptureInput> = if active.is_empty() {
+            cfg.inputs.iter().take(1).cloned().collect()
+        } else {
+            cfg.inputs
+                .iter()
+                .filter(|i| i.name == active)
+                .cloned()
+                .collect()
+        };
+        if inputs.is_empty() {
+            return Err(format!("active capture input '{active}' is not registered"));
+        }
         Ok(Self {
             encoder_id,
             codec,
@@ -422,7 +439,7 @@ impl ObsProfile {
             mute_game: cfg.mute_game,
             mute_mic: cfg.mute_mic,
             single_track: cfg.audio_single_track,
-            inputs: cfg.inputs.clone(),
+            inputs,
             active_input: cfg.active_input.clone(),
             game_audio_id: platform.game_audio_source_id().to_string(),
             mic_audio_id: platform.mic_audio_source_id().to_string(),
@@ -1266,6 +1283,19 @@ impl CaptureEngine for ObsEngine {
         if let Some(obsws) = self.obsws.take() {
             // Best effort: stop the buffer before killing OBS.
             let _ = obsws.replay_stop().await;
+            // The portal deletes a consumed restore token and only writes it
+            // back when the session closes. Destroying the active source makes
+            // OBS call Session.Close (screencast_portal_capture_destroy), so
+            // the refreshed token survives our SIGKILL-based engine stop.
+            if let Some(active) = self
+                .profile
+                .as_ref()
+                .map(|p| p.active_input.clone())
+                .filter(|n| !n.is_empty())
+            {
+                let _ = obsws.remove_input(&active).await;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
         }
         if let Some(mut child) = self.child.take() {
             if let Some(pid) = child.id() {
@@ -1426,6 +1456,36 @@ mod tests {
 
     fn profile() -> ObsProfile {
         ObsProfile::from_config(&config(), &FakePlatform).unwrap()
+    }
+
+    #[test]
+    fn collection_renders_only_the_active_input() {
+        let mut c = config();
+        c.inputs.push(CaptureInput {
+            name: "Other Game".into(),
+            kind: "window".into(),
+            source_id: "pipewire-window-capture-source".into(),
+            settings: serde_json::json!({"RestoreToken": "dead"}),
+            uuid: "22222222-2222-2222-2222-222222222222".into(),
+        });
+        c.active_input = "Game".into();
+        let p = ObsProfile::from_config(&c, &FakePlatform).unwrap();
+        // OBS activates every source in the collection (hidden items too), so
+        // only the active one may be rendered: otherwise every registered
+        // game opens its own portal dialog on every start.
+        assert_eq!(p.inputs.len(), 1);
+        assert_eq!(p.inputs[0].name, "Game");
+        let text = render_collection(&p, &SourceUuids::generate());
+        assert!(!text.contains("Other Game"), "{text}");
+        assert!(!text.contains("dead"), "{text}");
+    }
+
+    #[test]
+    fn missing_active_input_is_an_error() {
+        let mut c = config();
+        c.active_input = "Gone".into();
+        let err = ObsProfile::from_config(&c, &FakePlatform).unwrap_err();
+        assert!(err.contains("Gone"), "{err}");
     }
 
     #[test]

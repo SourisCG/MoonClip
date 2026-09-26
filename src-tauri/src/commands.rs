@@ -456,7 +456,12 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
         let tracks = engine.tracks_linked();
         let st = app.state::<AppState>();
         *st.recorder.lock().await = Some(engine);
-        st.game.lock().await.active_input = Some(active_input.clone());
+        {
+            let mut g = st.game.lock().await;
+            g.active_input = Some(active_input.clone());
+            g.retry_at = None;
+            g.retry_input = None;
+        }
         set_engine_error(app, None).await;
         set_audio_error(app, None).await;
         return Ok(EngineStatus {
@@ -467,10 +472,20 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
             engine_error: None,
         });
     }
-    // Portal token + real canvas size: OBS refreshes the single-use restore
-    // token on every successful Start, and the portal (not our profile)
-    // decides the captured size. Persist both so the next start is silent and
-    // pixel-correct. First run waits for the picker; later runs fail fast.
+    // Portal token + real canvas size: OBS refreshes the restore token on a
+    // successful Start and the portal (not our profile) decides the captured
+    // size. The settings are persisted the moment the source reports them, so
+    // a fresh token survives even if the later size probe fails (and is never
+    // lost when the engine is force-stopped).
+    let db = app.state::<DbState>();
+    let mut stored_settings = if active_input.is_empty() {
+        None
+    } else {
+        db.input_by_name(&active_input)
+            .ok()
+            .flatten()
+            .and_then(|r| r.input_settings)
+    };
     let source_wait = if first_time {
         std::time::Duration::from_secs(60)
     } else {
@@ -479,6 +494,16 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     let mut waited = std::time::Duration::ZERO;
     let mut learned: Option<(u32, u32)> = None;
     while waited < source_wait {
+        if !active_input.is_empty() {
+            if let Some(settings) = engine.read_input_settings(&active_input).await {
+                let text = settings.to_string();
+                if stored_settings.as_deref() != Some(text.as_str()) {
+                    let _ = db.set_input_settings(&active_input, &text);
+                    engine.note("capture settings updated");
+                    stored_settings = Some(text);
+                }
+            }
+        }
         if let Some(size) = engine.detect_and_apply_source_size().await {
             learned = Some(size);
             break;
@@ -492,15 +517,6 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
             "no screen captured: the system picker was cancelled or no stream was granted".into(),
         );
     };
-    if !active_input.is_empty() {
-        if let Some(settings) = engine.read_input_settings(&active_input).await {
-            let db = app.state::<DbState>();
-            // The window pick (portal token / window target) is stored in the
-            // registry and re-injected on every start: the picker appears once.
-            let _ = db.set_input_settings(&active_input, &settings.to_string());
-            engine.note("capture settings updated");
-        }
-    }
     {
         let db = app.state::<DbState>();
         let _ = db.set_setting("engine_source_width", &src_w.to_string());
@@ -510,7 +526,12 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     {
         let st = app.state::<AppState>();
         *st.recorder.lock().await = Some(engine);
-        st.game.lock().await.active_input = Some(active_input.clone());
+        {
+            let mut g = st.game.lock().await;
+            g.active_input = Some(active_input.clone());
+            g.retry_at = None;
+            g.retry_input = None;
+        }
     }
     set_engine_error(app, None).await;
     set_audio_error(app, None).await;
@@ -961,11 +982,29 @@ pub(crate) async fn poll_games(app: &AppHandle) {
     let st = app.state::<AppState>();
     let running = st.recorder.lock().await.is_some();
 
+    // Debug aid: when games are registered but no window matches, show what
+    // the desktop reports (once per change) so mismatched titles are obvious.
+    let seen = if matched.is_none() && tracked {
+        windows
+            .iter()
+            .take(12)
+            .map(|w| w.title.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    } else {
+        String::new()
+    };
+    let mut log_seen = false;
+
     let changed = {
         let mut g = st.game.lock().await;
         let before = g.current.as_ref().map(|a| a.id.clone());
         let after = matched.as_ref().map(|a| a.id.clone());
         g.current = matched.clone();
+        if g.last_seen_windows != seen {
+            g.last_seen_windows = seen.clone();
+            log_seen = !seen.is_empty();
+        }
         if matched.is_none() && g.auto_started {
             g.missing_ticks += 1;
         } else {
@@ -973,6 +1012,9 @@ pub(crate) async fn poll_games(app: &AppHandle) {
         }
         before != after
     };
+    if log_seen {
+        eprintln!("[moonclip] no registered window match; desktop windows: {seen}");
+    }
     if changed {
         let name = matched.as_ref().map(|a| a.display_name.clone());
         match &name {
@@ -984,6 +1026,15 @@ pub(crate) async fn poll_games(app: &AppHandle) {
 
     match (&matched, running) {
         (Some(row), false) => {
+            let blocked = {
+                let g = st.game.lock().await;
+                g.retry_input.as_deref() == Some(row.input_name.as_str())
+                    && g.retry_at
+                        .is_some_and(|t| std::time::Instant::now() < t)
+            };
+            if blocked {
+                return;
+            }
             let overrides = StartOverrides {
                 record_input: Some(row.input_name.clone()),
                 ..Default::default()
@@ -991,9 +1042,20 @@ pub(crate) async fn poll_games(app: &AppHandle) {
             match start_engine(app, &overrides).await {
                 Ok(_) => {
                     let _ = db.set_setting("last_game_input", &row.input_name);
-                    st.game.lock().await.auto_started = true;
+                    let mut g = st.game.lock().await;
+                    g.auto_started = true;
+                    g.retry_at = None;
+                    g.retry_input = None;
                 }
-                Err(e) => eprintln!("[moonclip] auto start failed: {e}"),
+                Err(e) => {
+                    eprintln!("[moonclip] auto start failed: {e}");
+                    let mut g = st.game.lock().await;
+                    // Wait a full minute before hammering the engine/picker
+                    // again with the same input (cancelled picker, bad token).
+                    g.retry_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+                    g.retry_input = Some(row.input_name.clone());
+                }
             }
         }
         (None, true) => {

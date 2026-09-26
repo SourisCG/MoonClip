@@ -47,9 +47,21 @@ pub fn parse_windows_target(target: &str) -> WindowIdentity {
     }
 }
 
-/// Case/space-insensitive title comparison.
+/// Case/space-insensitive title normalization. Titles often change state
+/// ("Game - ", "Game | 1.2", "Game:"), so trailing separators are dropped;
+/// matching then uses prefix-at-word-boundary.
 fn norm(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    let mut t = s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    loop {
+        let trimmed = t.trim_end();
+        match trimmed.chars().last() {
+            Some(c) if matches!(c, '-' | '|' | ':' | '–' | '—') => {
+                t = trimmed[..trimmed.len() - c.len_utf8()].trim_end().to_string();
+            }
+            _ => break,
+        }
+    }
+    t
 }
 
 /// Does this desktop window match the registered game? Matching is by the
@@ -148,6 +160,24 @@ mod tests {
         assert!(window_matches(&row("Steam"), &win("Steam")));
         assert!(window_matches(&row("Steam"), &win("Steam (Beta)")));
         assert!(!window_matches(&row("Steam"), &win("SteamDeck")));
+    }
+
+    #[test]
+    fn ignores_trailing_separators_and_state() {
+        // The picker recorded "KINGDOM HEARTS - HD 1.5+2.5 ReMIX -" (loading
+        // state) while the loaded window reports the plain title.
+        assert!(window_matches(
+            &row("KINGDOM HEARTS - HD 1.5+2.5 ReMIX -"),
+            &win("KINGDOM HEARTS - HD 1.5+2.5 ReMIX")
+        ));
+        assert!(window_matches(
+            &row("Five Nights at Freddy's:"),
+            &win("Five Nights at Freddy's")
+        ));
+        assert!(window_matches(
+            &row("Game |"),
+            &win("Game | Level 2")
+        ));
     }
 
     #[test]

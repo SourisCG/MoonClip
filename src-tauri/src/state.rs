@@ -16,6 +16,12 @@ pub struct GameRuntime {
     pub auto_started: bool,
     /// Consecutive polls with no game while an auto session runs.
     pub missing_ticks: u32,
+    /// Input whose auto-start failed and must not be retried until `retry_at`
+    /// (a cancelled picker must not turn into an engine/picker storm).
+    pub retry_input: Option<String>,
+    pub retry_at: Option<std::time::Instant>,
+    /// Last window-title snapshot logged while nothing matched (debug aid).
+    pub last_seen_windows: String,
 }
 
 #[derive(Default)]

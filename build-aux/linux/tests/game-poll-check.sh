@@ -64,6 +64,17 @@ else
   fail=1
 fi
 
+# With the window still open, the failed auto-start must not hammer the engine
+# (invalid binary here): exactly one attempt inside the 60 s backoff.
+sleep 10
+attempts=$(grep -ac 'auto start failed' "$TMP/app.log" 2>/dev/null || true)
+if [ "${attempts:-0}" -le 1 ]; then
+  echo "OK  failed auto-start backs off (attempts=${attempts:-0})"
+else
+  echo "FAIL auto-start retried too often (attempts=${attempts:-0})"
+  fail=1
+fi
+
 # Window closes -> the checker clears the current game.
 echo '[]' >"$WINDOWS"
 cleared=0
