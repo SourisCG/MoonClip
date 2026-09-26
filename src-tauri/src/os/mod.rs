@@ -55,6 +55,26 @@ pub fn resolve_obs(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     linux::binary::resolve_obs(app)
 }
 
+/// Running processes for registered-app polling (read-only snapshot).
+#[cfg(target_os = "linux")]
+pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
+    linux::procs::running()
+}
+#[cfg(target_os = "windows")]
+pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
+    windows::procs::running()
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn running_processes() -> Vec<shared::procs::ProcInfo> {
+    Vec::new()
+}
+
+/// First registered app with a running process.
+pub fn matched_app(apps: &[crate::storage::models::CustomApp]) -> Option<crate::storage::models::CustomApp> {
+    let procs = running_processes();
+    shared::procs::first_match(apps, &procs).cloned()
+}
+
 /// MoonClip-owned OBS config root (never the user's OBS config).
 #[cfg(target_os = "linux")]
 pub fn obs_config_root() -> Result<PathBuf, String> {

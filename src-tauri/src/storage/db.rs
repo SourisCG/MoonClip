@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, CustomApp, RegisterAppInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -19,6 +19,7 @@ const MIGRATION_006: &str = include_str!("../../migrations/006_monitor.sql");
 const MIGRATION_007: &str = include_str!("../../migrations/007_obs.sql");
 const MIGRATION_008: &str = include_str!("../../migrations/008_custom_video.sql");
 const MIGRATION_009: &str = include_str!("../../migrations/009_engine_keys.sql");
+const MIGRATION_010: &str = include_str!("../../migrations/010_game_token.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -65,6 +66,10 @@ impl DbState {
             if version < 9 {
                 conn.execute_batch(MIGRATION_009)
                     .map_err(|e| format!("migration 009 failed: {e}"))?;
+            }
+            if version < 10 {
+                conn.execute_batch(MIGRATION_010)
+                    .map_err(|e| format!("migration 010 failed: {e}"))?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
@@ -355,6 +360,8 @@ impl DbState {
             "capture_max_fps",
             "faststart",
             "capture_window",
+            "capture_mode",
+            "engine_token_reset_v1",
             "engine_ws_port",
             "engine_ws_password",
             "engine_restore_token",
@@ -416,7 +423,7 @@ impl DbState {
         let mut stmt = conn
             .prepare(
                 "SELECT id, display_name, target_exe, match_strategy,
-                        clip_duration_seconds, icon_path, is_wine_proton
+                        clip_duration_seconds, icon_path, is_wine_proton, portal_token
                  FROM custom_apps ORDER BY display_name",
             )
             .map_err(|e| format!("cannot list custom apps: {e}"))?;
@@ -430,6 +437,7 @@ impl DbState {
                     clip_duration_seconds: r.get(4)?,
                     icon_path: r.get(5)?,
                     is_wine_proton: r.get::<_, i64>(6)? != 0,
+                    portal_token: r.get(7)?,
                 })
             })
             .map_err(|e| format!("cannot list custom apps: {e}"))?;
@@ -458,12 +466,14 @@ impl DbState {
             clip_duration_seconds: input.clip_duration_seconds,
             icon_path: None,
             is_wine_proton: input.is_wine_proton.unwrap_or(false),
+            portal_token: None,
         };
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO custom_apps
-             (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path, is_wine_proton)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (id, display_name, target_exe, match_strategy, clip_duration_seconds, icon_path,
+              is_wine_proton, portal_token)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
             params![
                 app.id,
                 app.display_name,
@@ -476,6 +486,28 @@ impl DbState {
         )
         .map_err(|e| format!("cannot register app: {e}"))?;
         Ok(app)
+    }
+
+    /// Store the portal window token captured for a registered game.
+    pub fn set_app_token(&self, id: &str, token: &str) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE custom_apps SET portal_token = ?1 WHERE id = ?2",
+            params![token, id],
+        )
+        .map_err(|e| format!("cannot store app token: {e}"))?;
+        Ok(())
+    }
+
+    /// Forget every per-game portal token (one-time cleanup of tokens saved
+    /// before window capture; the global monitor token is untouched).
+    pub fn clear_app_tokens(&self) -> Result<usize, String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE custom_apps SET portal_token = NULL WHERE portal_token IS NOT NULL",
+            [],
+        )
+        .map_err(|e| format!("cannot clear app tokens: {e}"))
     }
 
     pub fn delete_app(&self, id: &str) -> Result<(), String> {
@@ -493,6 +525,48 @@ impl DbState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_010_adds_portal_token() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATION_001).unwrap();
+        conn.execute_batch(MIGRATION_010).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(custom_apps)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(cols.iter().any(|c| c == "portal_token"));
+    }
+
+    fn tiny_db() -> DbState {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATION_001).unwrap();
+        conn.execute_batch(MIGRATION_010).unwrap();
+        DbState(Mutex::new(conn))
+    }
+
+    #[test]
+    fn app_token_round_trip_and_clear() {
+        let db = tiny_db();
+        let app = db
+            .register_app(RegisterAppInput {
+                display_name: "Game".into(),
+                target_exe: "game.exe".into(),
+                match_strategy: "exact_exe".into(),
+                clip_duration_seconds: None,
+                is_wine_proton: None,
+            })
+            .unwrap();
+        db.set_app_token(&app.id, "tok-1").unwrap();
+        assert_eq!(
+            db.list_custom_apps().unwrap()[0].portal_token.as_deref(),
+            Some("tok-1")
+        );
+        assert_eq!(db.clear_app_tokens().unwrap(), 1);
+        assert!(db.list_custom_apps().unwrap()[0].portal_token.is_none());
+    }
 
     #[test]
     fn migration_009_renames_engine_keys() {

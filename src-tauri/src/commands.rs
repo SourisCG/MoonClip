@@ -121,6 +121,10 @@ pub(crate) struct StartOverrides {
     /// Full Custom payloads for the "Probar" button (validated, not persisted).
     pub custom_encoder: Option<CustomEncoder>,
     pub custom_video: Option<CustomVideo>,
+    /// Capture overrides for a registered game (window + its portal token).
+    pub window: Option<String>,
+    pub portal_token: Option<String>,
+    pub app_id: Option<String>,
 }
 
 /// Validate Custom JSON payloads before persisting: unknown encoder ids,
@@ -331,7 +335,10 @@ pub(crate) async fn build_capture_config(
         bitrate_kbps: bitrate,
         out_height,
         monitor: selected.map(|m| m.name.clone()).unwrap_or_default(),
-        window: setting_str(&db, "capture_window", ""),
+        window: overrides
+            .window
+            .clone()
+            .unwrap_or_else(|| setting_str(&db, "capture_window", "")),
         desktop_device: devices::resolve_obs_device_id(
             &setting_str(&db, "desktop_device", "default_output"),
             true,
@@ -364,7 +371,11 @@ pub(crate) async fn build_capture_config(
         vendor: video::vendor().await,
         base_width,
         base_height,
-        portal_restore_token: setting_str(&db, "engine_restore_token", ""),
+        portal_restore_token: overrides
+            .portal_token
+            .clone()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| setting_str(&db, "engine_restore_token", "")),
         custom_encoder,
         custom_video,
         obs_bin: Some(obs_bin),
@@ -432,7 +443,13 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     };
     if let Some(token) = engine.read_restore_token().await {
         let db = app.state::<DbState>();
-        let _ = db.set_setting("engine_restore_token", &token);
+        // Per-game token: the picker appears once per registered game.
+        if let Some(app_id) = &overrides.app_id {
+            let _ = db.set_app_token(app_id, &token);
+        } else {
+            // Monitor mode keeps the global screen token.
+            let _ = db.set_setting("engine_restore_token", &token);
+        }
         engine.note("screen token updated");
     }
     {
@@ -843,7 +860,147 @@ pub async fn start_buffer(app: AppHandle) -> Result<EngineStatus, String> {
             return Err("buffer already running".into());
         }
     }
-    start_engine(&app, &StartOverrides::default()).await
+    manual_start(&app).await
+}
+
+/// Start button / hotkey fallback: the running registered game's OBS window
+/// capture by default; Full screen (monitor) only when the user chose it.
+/// Never records the screen silently.
+async fn manual_start(app: &AppHandle) -> Result<EngineStatus, String> {
+    let db = app.state::<DbState>();
+    let mode = setting_str(&db, "capture_mode", "window");
+    let matched = {
+        let st = app.state::<AppState>();
+        let g = st.game.lock().await;
+        g.current.clone()
+    }
+    .or_else(|| {
+        let apps = db.list_custom_apps().unwrap_or_default();
+        os::matched_app(&apps)
+    });
+    let overrides = match matched {
+        Some(row) => StartOverrides {
+            window: (mode != "monitor").then(|| row.id.clone()),
+            portal_token: row.portal_token.clone(),
+            app_id: Some(row.id.clone()),
+            ..Default::default()
+        },
+        None if mode == "monitor" => StartOverrides::default(),
+        None => {
+            return Err(
+                "no registered game is running: open the game, or switch to Full screen in Settings > Video"
+                    .into(),
+            )
+        }
+    };
+    let res = start_engine(app, &overrides).await?;
+    let st = app.state::<AppState>();
+    st.game.lock().await.auto_started = false;
+    Ok(res)
+}
+
+/// Poller tick: is a registered app running? Start/stop the buffer and emit
+/// the game-changed event for the status chip.
+pub(crate) async fn poll_games(app: &AppHandle) {
+    let db = app.state::<DbState>();
+    let apps = db.list_custom_apps().unwrap_or_default();
+    let matched = os::matched_app(&apps);
+    let st = app.state::<AppState>();
+    let running = st.recorder.lock().await.is_some();
+    let mode = setting_str(&db, "capture_mode", "window");
+
+    let changed = {
+        let mut g = st.game.lock().await;
+        let before = g.current.as_ref().map(|a| a.id.clone());
+        let after = matched.as_ref().map(|a| a.id.clone());
+        g.current = matched.clone();
+        if matched.is_none() && g.auto_started {
+            g.missing_ticks += 1;
+        } else {
+            g.missing_ticks = 0;
+        }
+        before != after
+    };
+    if changed {
+        let name = matched.as_ref().map(|a| a.display_name.clone());
+        match &name {
+            Some(n) => eprintln!("[moonclip] game: {n}"),
+            None => eprintln!("[moonclip] game: none"),
+        }
+        let _ = app.emit("moonclip://game-changed", &name);
+    }
+
+    match (&matched, running) {
+        (Some(row), false) => {
+            let overrides = StartOverrides {
+                window: (mode != "monitor").then(|| row.id.clone()),
+                portal_token: row.portal_token.clone(),
+                app_id: Some(row.id.clone()),
+                ..Default::default()
+            };
+            match start_engine(app, &overrides).await {
+                Ok(_) => {
+                    st.game.lock().await.auto_started = true;
+                }
+                Err(e) => eprintln!("[moonclip] auto start failed: {e}"),
+            }
+        }
+        (None, true) => {
+            let stop = {
+                let g = st.game.lock().await;
+                g.auto_started && g.missing_ticks >= 2
+            };
+            if stop {
+                if let Err(e) = stop_engine(app).await {
+                    eprintln!("[moonclip] auto stop failed: {e}");
+                }
+                st.game.lock().await.auto_started = false;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Registered game currently running (null when none) for the status chip.
+/// One row per running executable for the Games picker (no duplicates).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunningApp {
+    pub name: String,
+    pub exe: String,
+}
+
+#[tauri::command]
+pub fn running_apps() -> Vec<RunningApp> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<RunningApp> = Vec::new();
+    for p in os::running_processes() {
+        let base = p
+            .exe
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&p.exe)
+            .to_string();
+        let low = base.to_lowercase();
+        if low.is_empty() || low.starts_with("moonclip") || !seen.insert(low) {
+            continue;
+        }
+        let name = base
+            .trim_end_matches(".exe")
+            .replace(['_', '-'], " ");
+        out.push(RunningApp { name, exe: base });
+        if out.len() >= 200 {
+            break;
+        }
+    }
+    out.sort_by_key(|a| a.name.to_lowercase());
+    out
+}
+
+#[tauri::command]
+pub async fn current_game(app: AppHandle) -> Option<String> {
+    let st = app.state::<AppState>();
+    let g = st.game.lock().await;
+    g.current.as_ref().map(|a| a.display_name.clone())
 }
 
 #[tauri::command]
@@ -1045,7 +1202,15 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     }
     let t_tail_elapsed = t_tail.elapsed();
     let t_db = std::time::Instant::now();
-    let clip = db.insert_clip(&file_name, &thumb_name, "Unknown", secs_ms, size)?;
+    let game_title = {
+        let st = app.state::<AppState>();
+        let g = st.game.lock().await;
+        g.current
+            .as_ref()
+            .map(|a| a.display_name.clone())
+            .unwrap_or_else(|| "Unknown".to_string())
+    };
+    let clip = db.insert_clip(&file_name, &thumb_name, &game_title, secs_ms, size)?;
     eprintln!(
         "[moonclip] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
         t_total.elapsed(),
@@ -1105,11 +1270,18 @@ pub(crate) async fn handle_hotkey(app: AppHandle, shortcut: String, pressed_at: 
     let running = guard.is_some();
     drop(guard);
     if !running {
-        notify(
-            &app,
-            "Búfer detenido — pulsa Start para grabar",
-            "Buffer stopped — press Start to record",
-        );
+        match manual_start(&app).await {
+            Ok(_) => notify(
+                &app,
+                "Búfer iniciado — vuelve a pulsar para guardar",
+                "Buffer started — press again to save",
+            ),
+            Err(e) => notify(
+                &app,
+                &format!("No se pudo iniciar: {e}"),
+                &format!("Could not start: {e}"),
+            ),
+        }
         return;
     }
     match do_save_clip(&app).await {

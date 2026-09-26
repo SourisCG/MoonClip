@@ -6,6 +6,7 @@ pub mod binary;
 pub mod devices;
 pub mod engine;
 pub mod open;
+pub mod procs;
 pub mod paths;
 pub mod video;
 

@@ -2,6 +2,7 @@
 // Detection / editor logic lands in later phases.
 
 use std::sync::Mutex;
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -50,32 +51,221 @@ fn stored_hotkey(app: &tauri::AppHandle) -> String {
         .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
 }
 
-/// Modifier-less shortcuts are restricted to function keys and a few
-/// dedicated keys, so a plain letter can never hijack system-wide input.
-fn is_allowed_single_key(key: &str) -> bool {
-    let k = key.to_ascii_uppercase();
-    if let Some(num) = k.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()) {
-        return (1..=12).contains(&num);
-    }
-    matches!(k.as_str(), "PRINTSCREEN" | "PAUSE")
+/// Function keys (and the two dedicated keys) may be used without modifiers;
+/// everything else needs at least one modifier so a plain letter can never
+/// hijack system-wide input.
+fn is_allowed_single_code(code: Code) -> bool {
+    matches!(
+        code,
+        Code::F1
+            | Code::F2
+            | Code::F3
+            | Code::F4
+            | Code::F5
+            | Code::F6
+            | Code::F7
+            | Code::F8
+            | Code::F9
+            | Code::F10
+            | Code::F11
+            | Code::F12
+            | Code::PrintScreen
+            | Code::Pause
+    )
 }
 
-/// Parse + canonicalize a shortcut string, enforcing the single-key rule.
-fn normalize_hotkey(input: &str) -> Result<String, String> {
-    use std::str::FromStr;
-    use tauri_plugin_global_shortcut::Shortcut;
+fn letter_code(c: char) -> Option<Code> {
+    Some(match c.to_ascii_uppercase() {
+        'A' => Code::KeyA,
+        'B' => Code::KeyB,
+        'C' => Code::KeyC,
+        'D' => Code::KeyD,
+        'E' => Code::KeyE,
+        'F' => Code::KeyF,
+        'G' => Code::KeyG,
+        'H' => Code::KeyH,
+        'I' => Code::KeyI,
+        'J' => Code::KeyJ,
+        'K' => Code::KeyK,
+        'L' => Code::KeyL,
+        'M' => Code::KeyM,
+        'N' => Code::KeyN,
+        'O' => Code::KeyO,
+        'P' => Code::KeyP,
+        'Q' => Code::KeyQ,
+        'R' => Code::KeyR,
+        'S' => Code::KeyS,
+        'T' => Code::KeyT,
+        'U' => Code::KeyU,
+        'V' => Code::KeyV,
+        'W' => Code::KeyW,
+        'X' => Code::KeyX,
+        'Y' => Code::KeyY,
+        'Z' => Code::KeyZ,
+        _ => return None,
+    })
+}
 
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err("empty shortcut".into());
+fn digit_code(c: char) -> Option<Code> {
+    Some(match c {
+        '0' => Code::Digit0,
+        '1' => Code::Digit1,
+        '2' => Code::Digit2,
+        '3' => Code::Digit3,
+        '4' => Code::Digit4,
+        '5' => Code::Digit5,
+        '6' => Code::Digit6,
+        '7' => Code::Digit7,
+        '8' => Code::Digit8,
+        '9' => Code::Digit9,
+        _ => return None,
+    })
+}
+
+/// Key token to `Code`: accepts the UI names (`KeyG`, `Digit1`, `F8`) and
+/// plain forms (`g`, `1`), plus the named navigation/editing keys.
+fn parse_code(token: &str) -> Option<Code> {
+    let t = token.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "printscreen" | "print" => return Some(Code::PrintScreen),
+        "pause" => return Some(Code::Pause),
+        "space" | "spacebar" => return Some(Code::Space),
+        "enter" | "return" => return Some(Code::Enter),
+        "escape" | "esc" => return Some(Code::Escape),
+        "tab" => return Some(Code::Tab),
+        "backspace" => return Some(Code::Backspace),
+        "delete" | "del" => return Some(Code::Delete),
+        "insert" | "ins" => return Some(Code::Insert),
+        "home" => return Some(Code::Home),
+        "end" => return Some(Code::End),
+        "pageup" => return Some(Code::PageUp),
+        "pagedown" => return Some(Code::PageDown),
+        "up" | "arrowup" => return Some(Code::ArrowUp),
+        "down" | "arrowdown" => return Some(Code::ArrowDown),
+        "left" | "arrowleft" => return Some(Code::ArrowLeft),
+        "right" | "arrowright" => return Some(Code::ArrowRight),
+        "minus" => return Some(Code::Minus),
+        "equal" => return Some(Code::Equal),
+        "bracketleft" => return Some(Code::BracketLeft),
+        "bracketright" => return Some(Code::BracketRight),
+        "semicolon" => return Some(Code::Semicolon),
+        "quote" => return Some(Code::Quote),
+        "backquote" => return Some(Code::Backquote),
+        "comma" => return Some(Code::Comma),
+        "period" => return Some(Code::Period),
+        "slash" => return Some(Code::Slash),
+        "backslash" => return Some(Code::Backslash),
+        _ => {}
     }
-    let shortcut = Shortcut::from_str(trimmed).map_err(|e| e.to_string())?;
-    if shortcut.mods.is_empty() && !is_allowed_single_key(&shortcut.key.to_string()) {
+    if let Some(n) = t.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
+        return match n {
+            1 => Some(Code::F1),
+            2 => Some(Code::F2),
+            3 => Some(Code::F3),
+            4 => Some(Code::F4),
+            5 => Some(Code::F5),
+            6 => Some(Code::F6),
+            7 => Some(Code::F7),
+            8 => Some(Code::F8),
+            9 => Some(Code::F9),
+            10 => Some(Code::F10),
+            11 => Some(Code::F11),
+            12 => Some(Code::F12),
+            13 => Some(Code::F13),
+            14 => Some(Code::F14),
+            15 => Some(Code::F15),
+            16 => Some(Code::F16),
+            17 => Some(Code::F17),
+            18 => Some(Code::F18),
+            19 => Some(Code::F19),
+            20 => Some(Code::F20),
+            21 => Some(Code::F21),
+            22 => Some(Code::F22),
+            23 => Some(Code::F23),
+            24 => Some(Code::F24),
+            _ => None,
+        };
+    }
+    if let Some(rest) = t.strip_prefix("key") {
+        if rest.len() == 1 {
+            return letter_code(rest.chars().next()?);
+        }
+    }
+    if let Some(rest) = t.strip_prefix("digit") {
+        if rest.len() == 1 {
+            return digit_code(rest.chars().next()?);
+        }
+    }
+    if let Some(rest) = t.strip_prefix("numpad") {
+        if rest.len() == 1 {
+            let c = rest.chars().next()?;
+            return Some(match c {
+                '0' => Code::Numpad0,
+                '1' => Code::Numpad1,
+                '2' => Code::Numpad2,
+                '3' => Code::Numpad3,
+                '4' => Code::Numpad4,
+                '5' => Code::Numpad5,
+                '6' => Code::Numpad6,
+                '7' => Code::Numpad7,
+                '8' => Code::Numpad8,
+                '9' => Code::Numpad9,
+                _ => return None,
+            });
+        }
+    }
+    if t.len() == 1 {
+        let c = t.chars().next()?;
+        if let Some(code) = letter_code(c) {
+            return Some(code);
+        }
+        if let Some(code) = digit_code(c) {
+            return Some(code);
+        }
+    }
+    None
+}
+
+/// Parse + canonicalize a shortcut (any modifier/key spelling) and enforce the
+/// single-key rule. Canonical output comes from the plugin's own formatter, so
+/// it always round-trips through register/unregister.
+fn parse_combo(input: &str) -> Result<Shortcut, String> {
+    let mut mods = Modifiers::empty();
+    let mut key: Option<Code> = None;
+    for raw in input.split('+') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        match token.to_ascii_lowercase().as_str() {
+            "control" | "ctrl" => mods |= Modifiers::CONTROL,
+            "alt" | "option" => mods |= Modifiers::ALT,
+            "shift" => mods |= Modifiers::SHIFT,
+            "super" | "meta" | "cmd" | "command" | "win" => mods |= Modifiers::SUPER,
+            _ => {
+                if key.is_some() {
+                    return Err(format!("{input}: only one key is allowed"));
+                }
+                key = Some(
+                    parse_code(token).ok_or_else(|| format!("{input}: unknown key '{token}'"))?,
+                );
+            }
+        }
+    }
+    let code = key.ok_or_else(|| format!("{input}: missing key"))?;
+    if mods.is_empty() && !is_allowed_single_code(code) {
         return Err(format!(
-            "{trimmed}: needs a modifier (Ctrl/Alt/Shift/Super) — only function keys can be used alone"
+            "{input}: needs a modifier (Ctrl/Alt/Shift/Super) — only function keys can be used alone"
         ));
     }
-    Ok(shortcut.into_string())
+    Ok(Shortcut::new(
+        if mods.is_empty() { None } else { Some(mods) },
+        code,
+    ))
+}
+
+fn normalize_hotkey(input: &str) -> Result<String, String> {
+    parse_combo(input).map(|s| s.into_string())
 }
 
 /// Register the persisted hotkey. If it cannot be registered (taken by
@@ -85,17 +275,30 @@ fn register_stored_hotkey(app: &tauri::AppHandle) {
 
     let stored = stored_hotkey(app);
     let gs = app.global_shortcut();
-    let _ = gs.unregister(stored.as_str());
-    match gs.register(stored.as_str()) {
-        Ok(()) => eprintln!("[moonclip] global shortcut {stored} registered"),
+    let canonical = match parse_combo(&stored) {
+        Ok(s) => s.into_string(),
+        Err(e) => {
+            eprintln!("[moonclip] stored hotkey '{stored}' invalid ({e}); using {DEFAULT_HOTKEY}");
+            match parse_combo(DEFAULT_HOTKEY) {
+                Ok(s) => s.into_string(),
+                Err(_) => DEFAULT_HOTKEY.to_string(),
+            }
+        }
+    };
+    let _ = gs.unregister(canonical.as_str());
+    match gs.register(canonical.as_str()) {
+        Ok(()) => eprintln!("[moonclip] global shortcut {canonical} registered"),
         Err(e) => {
             eprintln!(
-                "[moonclip] could not register {stored} ({e}); falling back to {DEFAULT_HOTKEY}"
+                "[moonclip] could not register {canonical} ({e}); falling back to {DEFAULT_HOTKEY}"
             );
-            let _ = gs.unregister(DEFAULT_HOTKEY);
-            match gs.register(DEFAULT_HOTKEY) {
-                Ok(()) => eprintln!("[moonclip] global shortcut {DEFAULT_HOTKEY} registered"),
-                Err(e) => eprintln!("[moonclip] could not register {DEFAULT_HOTKEY}: {e}"),
+            if let Ok(fallback) = parse_combo(DEFAULT_HOTKEY) {
+                let fallback = fallback.into_string();
+                let _ = gs.unregister(fallback.as_str());
+                match gs.register(fallback.as_str()) {
+                    Ok(()) => eprintln!("[moonclip] global shortcut {fallback} registered"),
+                    Err(e) => eprintln!("[moonclip] could not register {fallback}: {e}"),
+                }
             }
         }
     }
@@ -106,8 +309,8 @@ fn get_hotkey(app: tauri::AppHandle) -> String {
     stored_hotkey(&app)
 }
 
-/// Change the clip hotkey: canonicalize, re-register (restoring the previous
-/// binding if the new one fails) and persist. Returns the canonical string.
+/// Change the clip hotkey: canonicalize (any spelling), re-register
+/// (restoring the previous binding if the new one fails) and persist.
 #[tauri::command]
 fn set_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<String, String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -244,6 +447,23 @@ pub fn run() {
             app.manage(db);
             app.manage(state::AppState::default());
 
+            // One-time: drop per-game portal tokens saved by the reverted
+            // V4 experiment (a stale monitor token would silently capture the
+            // whole screen instead of the game window).
+            {
+                let db = app.state::<storage::DbState>();
+                let done = db
+                    .get_settings()
+                    .ok()
+                    .and_then(|s| s.get("engine_token_reset_v1").cloned())
+                    .unwrap_or_default();
+                if done != "1" {
+                    let cleared = db.clear_app_tokens().unwrap_or(0);
+                    let _ = db.set_setting("engine_token_reset_v1", "1");
+                    eprintln!("[moonclip] cleared {cleared} stale per-game portal tokens");
+                }
+            }
+
             // --- Global shortcut (configurable, default F9) ---
             register_stored_hotkey(app.handle());
 
@@ -251,6 +471,14 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 commands::backfill_durations(&handle).await;
+            });
+            // Registered-game poller: simplest Medal-style autopilot.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    commands::poll_games(&handle).await;
+                }
             });
             // Backend liveness watchdog: the webview (and its engine_status
             // poll) is paused while the window is hidden to tray, so a dead
@@ -308,6 +536,8 @@ pub fn run() {
             commands::stop_buffer,
             commands::clear_portal_token,
             commands::engine_status,
+            commands::current_game,
+            commands::running_apps,
             commands::save_clip_now,
             commands::audio_levels,
             commands::audio_peaks,
@@ -327,30 +557,36 @@ pub fn run() {
 
 #[cfg(test)]
 mod hotkey_tests {
-    use super::{is_allowed_single_key, normalize_hotkey};
+    use super::{normalize_hotkey, parse_combo};
 
     #[test]
-    fn canonicalizes_valid_shortcuts() {
-        assert_eq!(normalize_hotkey("f9").unwrap(), "F9");
-        assert_eq!(
-            normalize_hotkey(" Ctrl + Shift + KeyS ").unwrap(),
-            "shift+control+KeyS"
-        );
+    fn modifier_aliases_are_equivalent() {
+        let want = normalize_hotkey("control+KeyG").unwrap();
+        for alias in ["ctrl+KeyG", "Control+KeyG", "control+g", "ctrl+g"] {
+            assert_eq!(normalize_hotkey(alias).unwrap(), want, "{alias}");
+        }
+        assert!(normalize_hotkey("super+KeyM").is_ok());
+        assert!(normalize_hotkey("cmd+shift+Digit1").is_ok());
     }
 
     #[test]
-    fn rejects_invalid_and_bare_letters() {
-        assert!(normalize_hotkey("").is_err());
-        assert!(normalize_hotkey("KeyS").is_err());
-        assert!(normalize_hotkey("not-a-key").is_err());
+    fn function_keys_work_alone() {
+        for combo in ["F8", "f8", "F12", "printscreen", "Pause"] {
+            assert!(parse_combo(combo).is_ok(), "{combo}");
+        }
     }
 
     #[test]
-    fn allows_function_and_special_singles() {
-        assert_eq!(normalize_hotkey("F8").unwrap(), "F8");
-        assert_eq!(normalize_hotkey("PrintScreen").unwrap(), "PrintScreen");
-        assert!(is_allowed_single_key("F12"));
-        assert!(!is_allowed_single_key("F13"));
-        assert!(!is_allowed_single_key("KeyS"));
+    fn dangerous_or_invalid_combos_are_rejected() {
+        for combo in ["g", "1", "control+KeyG+KeyH", "control+nope", "control", ""] {
+            assert!(parse_combo(combo).is_err(), "{combo} must be rejected");
+        }
+    }
+
+    #[test]
+    fn canonical_form_is_stable() {
+        let once = normalize_hotkey("ctrl+shift+KeyM").unwrap();
+        let twice = normalize_hotkey(&once).unwrap();
+        assert_eq!(once, twice);
     }
 }

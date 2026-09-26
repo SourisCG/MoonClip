@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCustomApps } from "../../hooks/useCustomApps";
+import type { RunningApp } from "../../types";
 
 const STRATEGIES = ["exact_exe", "cmdline_contains", "window_title", "wine_target"];
 
@@ -13,6 +15,37 @@ export function AppManager() {
   const [exe, setExe] = useState("");
   const [strategy, setStrategy] = useState(STRATEGIES[0]);
   const [formError, setFormError] = useState<string | null>(null);
+  const [running, setRunning] = useState<RunningApp[]>([]);
+
+  const refreshRunning = useCallback(async () => {
+    try {
+      setRunning(await invoke<RunningApp[]>("running_apps"));
+    } catch {
+      setRunning([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRunning();
+    const id = window.setInterval(() => void refreshRunning(), 5000);
+    return () => window.clearInterval(id);
+  }, [refreshRunning]);
+
+  const addRunning = async (r: RunningApp) => {
+    setFormError(null);
+    try {
+      await registerApp({
+        display_name: r.name,
+        target_exe: r.exe,
+        match_strategy: r.exe.toLowerCase().endsWith(".exe") ? "wine_target" : "exact_exe",
+      });
+      await refreshRunning();
+    } catch (e) {
+      setFormError(String(e));
+    }
+  };
+
+  const registered = new Set(apps.map((a) => a.target_exe.toLowerCase()));
 
   const submit = async () => {
     setFormError(null);
@@ -37,6 +70,51 @@ export function AppManager() {
 
   return (
     <div className="max-w-2xl space-y-4">
+      <div>
+        <div className="mb-2 flex items-center gap-2">
+          <h4 className="text-sm font-semibold text-slate-200">{t("games.running")}</h4>
+          <button
+            onClick={() => void refreshRunning()}
+            className="ml-auto inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-slate-200"
+          >
+            <RefreshCw size={12} /> {t("games.refresh")}
+          </button>
+        </div>
+        {running.length === 0 ? (
+          <p className="text-xs text-slate-500">{t("games.empty_running")}</p>
+        ) : (
+          <ul className="max-h-56 space-y-1 overflow-y-auto pr-1">
+            {running.map((r) => {
+              const already = registered.has(r.exe.toLowerCase());
+              return (
+                <li
+                  key={`${r.exe}:${r.name}`}
+                  className="flex items-center gap-3 rounded-lg border border-white/5 bg-black/20 px-3 py-1.5"
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-[11px] font-semibold text-slate-300">
+                    {r.name.trim().charAt(0).toUpperCase() || "?"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-slate-200">{r.name}</p>
+                    <p className="truncate font-mono text-[11px] text-slate-500">{r.exe}</p>
+                  </div>
+                  {already ? (
+                    <span className="text-xs text-cyan-300">{t("games.registered")}</span>
+                  ) : (
+                    <button
+                      onClick={() => void addRunning(r)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200 transition hover:bg-cyan-500/20"
+                    >
+                      <Plus size={13} /> {t("games.register_btn")}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-white/5 bg-black/30 p-3">
         <input
           className={`${input} w-full sm:flex-1`}

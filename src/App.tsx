@@ -12,12 +12,14 @@ import { GalleryView } from "./components/gallery/GalleryView";
 import { useClips } from "./hooks/useClips";
 import { useEngine } from "./hooks/useEngine";
 import { useLocale } from "./hooks/useLocale";
+import { useCurrentGame } from "./hooks/useCurrentGame";
 
 type View = "clips" | "games" | "settings";
 
 export default function App() {
   const { t } = useTranslation();
   const { locale, setLocale } = useLocale();
+  const currentGame = useCurrentGame();
   const [view, setView] = useState<View>("clips");
   const { clips, refresh: refreshClips } = useClips();
   const [galleryTick, setGalleryTick] = useState(0);
@@ -118,10 +120,12 @@ export default function App() {
                     <p className="font-medium text-slate-300">
                       {status.running ? t("rec.recording") : t("status.standby")}
                     </p>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="truncate text-[11px] text-slate-500">
                       {status.running
-                        ? `${status.backend} · ${t("rec.tracks", { n: status.tracks_linked })}`
-                        : t("status.shortcut", { hotkey })}
+                        ? `${currentGame ?? status.backend} · ${t("rec.tracks", { n: status.tracks_linked })}`
+                        : currentGame
+                          ? t("game.running", { name: currentGame })
+                          : t("status.shortcut", { hotkey })}
                     </p>
                   </div>
                 </div>

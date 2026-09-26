@@ -27,6 +27,8 @@ pub struct CustomApp {
     pub clip_duration_seconds: Option<i64>,
     pub icon_path: Option<String>,
     pub is_wine_proton: bool,
+    /// Wayland portal restore token for this registered game's window.
+    pub portal_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

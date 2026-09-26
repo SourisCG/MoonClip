@@ -39,6 +39,10 @@
     "portal_screen": "Pantalla (Portal del sistema)",
     "portal_note": "Aún sin pantalla elegida: el selector del sistema (Portal) se abrirá una vez al primer inicio.",
     "portal_ready": "Pantalla elegida (Portal del sistema).",
+    "capture_mode": "Objetivo de captura",
+    "capture_mode_hint": "Ventana del juego sigue al juego registrado (recomendado). Pantalla completa usa la pantalla del portal que elegiste.",
+    "capture_mode_window": "Ventana del juego",
+    "capture_mode_monitor": "Pantalla completa",
     "portal_change": "Cambiar pantalla…",
     "badge_recommended": "Recomendado",
     "badge_experimental": "Experimental",
@@ -148,7 +152,15 @@
       "ok": "Bóveda OK: guardar → leer → borrar funcionó."
     }
   },
+  "game": {
+    "running": "{{name}} en ejecución"
+  },
   "games": {
+    "running": "En ejecución",
+    "refresh": "Actualizar",
+    "register_btn": "Añadir",
+    "registered": "Registrado",
+    "empty_running": "No se detectan apps en ejecución.",
     "name_ph": "Nombre visible (ej. Minecraft)",
     "exe_ph": "Ejecutable objetivo (ej. javaw.exe)",
     "add": "Registrar",

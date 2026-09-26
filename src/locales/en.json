@@ -39,6 +39,10 @@
     "portal_screen": "Screen (system Portal)",
     "portal_note": "No screen chosen yet: the system picker (Portal) opens once on the first start.",
     "portal_ready": "Screen chosen (system Portal).",
+    "capture_mode": "Capture target",
+    "capture_mode_hint": "Game window follows the registered game (recommended). Full screen uses the portal screen you picked.",
+    "capture_mode_window": "Game window",
+    "capture_mode_monitor": "Full screen",
     "portal_change": "Change screen…",
     "badge_recommended": "Recommended",
     "badge_experimental": "Experimental",
@@ -149,7 +153,15 @@
       "ok": "Vault OK: store → read → delete succeeded."
     }
   },
+  "game": {
+    "running": "{{name}} running"
+  },
   "games": {
+    "running": "Running now",
+    "refresh": "Refresh",
+    "register_btn": "Add",
+    "registered": "Registered",
+    "empty_running": "No running apps detected.",
     "name_ph": "Display name (e.g. Minecraft)",
     "exe_ph": "Target exe (e.g. javaw.exe)",
     "add": "Register",

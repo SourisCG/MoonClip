@@ -36,6 +36,7 @@ export interface CustomApp {
   clip_duration_seconds?: number | null;
   icon_path?: string | null;
   is_wine_proton: boolean;
+  portal_token?: string | null;
 }
 
 export interface RegisterAppInput {
@@ -247,4 +248,10 @@ export interface SystemMemory {
 export interface SettingPair {
   key: string;
   value: string;
+}
+
+/** Mirrors Rust RunningApp (registered-app picker). */
+export interface RunningApp {
+  name: string;
+  exe: string;
 }
