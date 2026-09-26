@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -166,6 +166,18 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
   const { clips, loading, refresh, toggleFavorite, deleteClip, purgeMissing } = useClips();
   const [lastError, setLastError] = useState<string | null>(null);
   const [purged, setPurged] = useState<number | null>(null);
+  const [gameFilter, setGameFilter] = useState<string>("all");
+
+  // Game filter (only shown when the library has more than one title).
+  const games = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of clips) {
+      const g = c.game_title?.trim();
+      if (g && g !== "Unknown") set.add(g);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [clips]);
+  const shown = gameFilter === "all" ? clips : clips.filter((c) => c.game_title === gameFilter);
 
   useEffect(() => {
     if (refreshToken > 0) void refresh();
@@ -232,12 +244,29 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
         {purged !== null && !lastError && (
           <p className="flex-1 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
         )}
-        <button onClick={onPurge} className="ml-auto text-xs text-slate-500 transition hover:text-slate-200" title={t("gallery.purge")}>
-          {t("gallery.purge")}
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {games.length > 1 && (
+            <select
+              value={gameFilter}
+              onChange={(e) => setGameFilter(e.target.value)}
+              title={t("gallery.filter_game")}
+              className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+            >
+              <option value="all">{t("gallery.all_games")}</option>
+              {games.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          )}
+          <button onClick={onPurge} className="text-xs text-slate-500 transition hover:text-slate-200" title={t("gallery.purge")}>
+            {t("gallery.purge")}
+          </button>
+        </div>
       </div>
       <ul className="mt-2 space-y-2">
-        {clips.map((c) => (
+        {shown.map((c) => (
           <ClipRow key={c.id} clip={c} actions={actions} />
         ))}
       </ul>

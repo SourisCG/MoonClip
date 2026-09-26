@@ -97,6 +97,12 @@ pub fn decide(state: &mut AutoState, input: AutoInput) -> AutoAction {
     }
 }
 
+/// Effective clip seconds: explicit override (Probar) > the duration the
+/// user chose for this game > the global setting. Clamped like the setting.
+pub fn effective_duration(override_s: Option<u32>, game_s: Option<u32>, global_s: u32) -> u32 {
+    override_s.or(game_s).unwrap_or(global_s).clamp(5, 3600)
+}
+
 /// Pick the game the worker should track: registered rows win, then known
 /// manifest sources, then the first GPU-owning window candidate. Fallback
 /// (unknown) entries are returned too so the UI can prompt, but they never
@@ -269,6 +275,15 @@ mod tests {
             ),
             AutoAction::None
         );
+    }
+
+    #[test]
+    fn duration_precedence_is_override_game_global() {
+        assert_eq!(effective_duration(Some(15), Some(45), 30), 15);
+        assert_eq!(effective_duration(None, Some(45), 30), 45);
+        assert_eq!(effective_duration(None, None, 30), 30);
+        assert_eq!(effective_duration(None, None, 1), 5);
+        assert_eq!(effective_duration(None, None, 99_999), 3600);
     }
 
     #[test]

@@ -195,10 +195,11 @@ pub(crate) async fn build_capture_config(
 ) -> Result<CaptureConfig, String> {
     let db = app.state::<DbState>();
     let output_dir = db.clips_dir()?;
-    let duration_seconds = overrides
-        .duration_seconds
-        .or_else(|| overrides.game.as_ref().and_then(|g| g.duration_seconds))
-        .unwrap_or_else(|| buffer_seconds(&db) as u32);
+    let duration_seconds = os::shared::detect::auto::effective_duration(
+        overrides.duration_seconds,
+        overrides.game.as_ref().and_then(|g| g.duration_seconds),
+        buffer_seconds(&db) as u32,
+    );
 
     // Legacy `video_codec=x264` (old CPU option) maps to h264 + cpu encoder.
     let stored_codec = setting_str(&db, "video_codec", "h264");
@@ -1209,7 +1210,16 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     }
     let t_tail_elapsed = t_tail.elapsed();
     let t_db = std::time::Instant::now();
-    let clip = db.insert_clip(&file_name, &thumb_name, "Unknown", secs_ms, size)?;
+    let game_title = {
+        let st = app.state::<AppState>();
+        let det = st.detect.lock().await;
+        det.current
+            .as_ref()
+            .map(|g| g.title.clone())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| "Unknown".to_string())
+    };
+    let clip = db.insert_clip(&file_name, &thumb_name, &game_title, secs_ms, size)?;
     eprintln!(
         "[moonclip] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
         t_total.elapsed(),

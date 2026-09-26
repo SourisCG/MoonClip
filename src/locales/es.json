@@ -15,7 +15,9 @@
     "hear_mic": "Escuchar pista del micrófono",
     "reveal": "Mostrar en carpeta",
     "purge": "Limpiar faltantes",
-    "purged": "{{count}} entradas faltantes eliminadas"
+    "purged": "{{count}} entradas faltantes eliminadas",
+    "all_games": "Todos los juegos",
+    "filter_game": "Filtrar por juego"
   },
   "audio": {
     "title": "Audio de captura",
