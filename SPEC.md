@@ -20,16 +20,17 @@
 
 ## Doc map
 
-- `docs/01_ARCHITECTURE.md` — rules, stack, tree, IPC contract.
-- `docs/02_CAPTURE_ENGINE.md` — embedded OBS engine: isolation, anti-cheat sources, profile/scene writers, obs-cmd contract, 3-track audio, quality ladder, hardware test.
+- `docs/01_ARCHITECTURE.md` — rules, stack, tree, IPC contract. (Phase 0)
+- `docs/02_CAPTURE_ENGINE.md` — embedded OBS engine: isolation, anti-cheat sources, profile/scene writers, obs-cmd contract, 3-track audio, quality ladder, hardware test. (Phase 3)
 - `docs/03_GAME_DETECTION.md` — GPU FD filter, Wine cmdline + blacklist, `SteamAppId` + `.acf`, Minecraft/Prism/Bedrock, Heroic/Epic/Battle.net/Xbox, `custom_apps` + picker + matcher. (Phase 4)
 - `docs/04_EDITOR_PIPELINE.md` — lazy `ClipEditor`, Wavesurfer Regions, FFmpeg sidecar (lossless/vertical/remix), keyframe note. (Phase 5)
-- `docs/05_STORAGE_SECURITY.md` — SQLite relative paths, `clips`/`custom_apps`/`settings`, ghost-clip reconcile, LRU prune, `keyring`.
+- `docs/05_STORAGE_SECURITY.md` — SQLite relative paths, `clips`/`custom_apps`/`settings`, ghost-clip reconcile, LRU prune, `keyring`. (Phase 2)
 - `docs/06_SOCIAL_INTEGRATIONS.md` — Drive PKCE + resumable + public link, Discord/Twitter/YouTube/TikTok, IG/FB deferred. (Phase 6, platform-neutral)
-- `docs/07_UI_MOONCLIP.md` — palette, pausable starfield, glass layout, i18n, WebView2/WebKit notes, tray/taskbar icons.
+- `docs/07_UI_MOONCLIP.md` — palette, pausable starfield, glass layout, i18n, WebView2/WebKit notes, tray/taskbar icons. (Phase 1)
 - `docs/08_CI_CD_DISTRIBUTION.md` — `nsis/msi/appimage/deb/rpm` (+`msix` later), signing/MS Store/WinGet/Flathub. (Phase 7)
-- `docs/09_WINDOWS_HANDOFF.md` — **start here on Windows**: toolchain, stub inventory + contracts, acceptance, checklist.
-- `docs/THIRD_PARTY.md` — GSR pin + ship matrix + scaler-patch schedule.
+- `docs/09_WINDOWS_HANDOFF.md` — **start here on Windows**: toolchain, stub inventory + contracts, acceptance, checklist. (Phase 3-win)
+- `docs/10_DEPENDENCIES.md` — shipped components, generated system-lib table, optional hardware-decode matrix per GPU, per-distro package names, audit script. (Phase 8)
+- `docs/THIRD_PARTY.md` — licenses + ship matrix (GSR is gone; embedded OBS engine ships instead).
 - `docs/ROADMAP_PHASES.md` — phased acceptance checklists.
 - `docs/PROGRESS.md` — build log (single source of truth for status).
 

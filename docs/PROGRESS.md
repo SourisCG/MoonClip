@@ -1,18 +1,24 @@
 # PROGRESS — MoonClip build log
 
 Single source of truth for phase status. Updated at the end of every phase.
-Details per phase live in `ROADMAP_PHASES.md`; technical specs in `01_*`–`08_*`.
+Canonical phase numbers live in `ROADMAP_PHASES.md`; technical specs in `01_*`–`10_*`.
 
 | Phase | Scope | Status | Commit | Acceptance |
 |---|---|---|---|---|
 | 0 | Bare scaffold (Tauri v2 + React-TS + Tailwind v3) + `docs/` spec | ✅ done | `6965fac` (squashed in) | `pnpm build` + `cargo check` green |
 | 1 | Tray + F9 hotkey + glass UI + starfield + i18n ES/EN | ✅ done | `6965fac` | F9 fires globally, tray hide/show works |
 | 1-fixes | Frameless custom topbar + MoonLit CSS logo + smooth starfield + F9 dedupe | ✅ done | `8e4b5c1` | Single-count verified by user, no tray glitch |
-| license | GPL-3.0-only (required by gpu-screen-recorder) | ✅ done | `2b99add` | Verbatim LICENSE + metadata + README |
+| license | GPL-3.0-only | ✅ done | `2b99add` | Verbatim LICENSE + metadata + README |
 | 2 | rusqlite persistence (relative paths) + keyring secrets + settings UI | ✅ done | `c72edba` | CRUD, vault OK, folder picker fixed |
-| 3 | Capture engine Linux (GSR embedded, 3-track mix-first, gains, ladder, 30/60fps, monitor select) | ✅ done (Linux) | `5ffd70d`+ui | F9 → `.mp4` 3×aac, thumbs, durations, gains — user-verified |
-| 3-win | Capture engine Windows trip (ffmpeg `gfxcapture` WGC 0-copy + WASAPI, AMF/QSV/x264, same behaviors) | ✅ done (code, HW-verified; user in-game F9 pass pending) | `7078a13`→rewrite | See `09_WINDOWS_HANDOFF.md`; e2e-tested on RTX 3060, A/V ±1 frame |
+| 2-security | Vault-only secrets, ephemeral ws password, LRU quota, boot reconcile, per-game folders, CSP/WAL hardening | ✅ done | `2dba167`→`4ee698c` | Secrets never in the DB; prune never touches favorites; reconcile never deletes files |
+| 3 | Capture engine Linux (embedded OBS, 3-track mix-first, gains, ladder, 30/60fps, monitor select) | ✅ done (Linux) | `5ffd70d`+ui | F9 → `.mp4` 3×aac, thumbs, durations, gains — user-verified |
+| 3-win | Windows engine track (WGC 0-copy + WASAPI, AMF/QSV/x264, same behaviors) | ✅ done (code, HW-verified; in-game F9 pass pending) | `7078a13`→rewrite | See `09_WINDOWS_HANDOFF.md`; e2e-tested on RTX 3060, A/V ±1 frame |
 | 3-ui | Transparent tray icon, i18n codec labels, opener perms, disk note | ✅ done | `7c5d733` (batch) | user-verified pending |
+| 4 | Game detection + launchers + custom apps | ✅ done | `e956ebe`, `d39ec45` | Browser windows/title suffixes never fake a game (live-verified) |
+| 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | ✅ done | `b67080e`, `3067a4c`, `367a8bf` | E1 lossless + 3 tracks; export E2E 1 video + 1 audio |
+| 6 | Drive + social sharing | 🚧 Drive done; Discord/Twitter/YouTube/TikTok pending | `4b3668b`→`5cd62ac` | Drive public link + cloud-only clips verified |
+| 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
+| 8 | Distribution & dependencies (decode matrix, audit, any-PC fallbacks) | 🚧 in progress | `f62e6d3`→`425aab2` | Decode notice + dependency audit shipped; bundles pending |
 
 ## Cross-platform gate (project rule)
 
@@ -20,10 +26,6 @@ Any phase with per-OS code is implemented and tested on Linux first, then
 **tested on Windows immediately before the phase is closed** — and likewise
 in reverse whenever needed. No phase closes with an untested platform stub.
 Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
-| 4 | Game detection + launchers + custom apps | ⬜ pending | — | Native + Wine/Proton + Minecraft detected |
-| 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | 🚧 in progress | — | E1 lossless <1s + precise exact + 3 tracks; E6 RAM baseline + 1 audio export |
-| 6 | Drive + social sharing | ⬜ pending | — | Public link copied + notified |
-| 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
 
 ## Log
 
