@@ -56,6 +56,38 @@ function TimeLabel({ total }: { total: number }) {
   );
 }
 
+/** TEMP diagnostic: numeric readout used to debug wave/playhead sync from
+ *  screenshots. Remove once the alignment is confirmed. */
+function SyncDebug({
+  plates,
+  spanMs,
+}: {
+  plates: { id: string; startMs: number; durationMs: number; from: number; to: number }[];
+  spanMs: number;
+}) {
+  const ms = useEditorStore((s) => s.playheadMs);
+  const project = useEditorStore((s) => s.project);
+  const seg = project ? segmentAt(project.segments, ms) : null;
+  if (!project || !seg) return null;
+  const buf = sourceMsFor(seg, ms) / 1000;
+  return (
+    <div className="flex items-center gap-2 overflow-hidden border-t border-white/5 bg-black/60 px-3 py-0.5">
+      <span className="shrink-0 font-mono text-[9px] text-fuchsia-300/90">
+        SYNC ph {fmt(ms)} · clip@{fmt(seg.timelineStartMs)} buf {buf.toFixed(2)}s · zoom{" "}
+        {(spanMs / 1000).toFixed(1)}s
+      </span>
+      <span className="truncate font-mono text-[9px] text-slate-500">
+        {plates
+          .map(
+            (p) =>
+              `${p.id.slice(0, 4)} ${fmt(p.startMs)}-${fmt(p.startMs + p.durationMs)} f${p.from.toFixed(2)}..${p.to.toFixed(2)}`,
+          )
+          .join(" | ")}
+      </span>
+    </div>
+  );
+}
+
 /** Scrub bar under the preview: click/drag anywhere to move the playhead. */
 function ScrubBar({
   total,
@@ -918,7 +950,11 @@ export default function EditorApp({
             <ZoomIn size={15} />
           </button>
           <button
-            onClick={() => setVisibleMs((v) => Math.min(Math.max(total * 1.2, 5000), v * 1.6))}
+            // Cap the zoom-out (~4x the project): unbounded growth left the
+            // timeline at 20+ minutes with everything as a 2 px sliver.
+            onClick={() =>
+              setVisibleMs((v) => Math.min(Math.max(total * 4 + 5000, 5000), v * 1.6))
+            }
             className={iconBtn}
             title={t("editor.zoom_out")}
           >
@@ -1544,6 +1580,9 @@ export default function EditorApp({
           {library.filter((c) => c.exists).length} clips
         </span>
       </div>
+
+      {/* TEMP diagnostic: numbers to verify wave/playhead sync from a capture */}
+      <SyncDebug plates={plates} spanMs={Math.max(5000, visibleMs)} />
 
       {/* Timeline */}
       <div className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">

@@ -148,7 +148,14 @@ function Lane({
 function Ruler({ visibleEnd }: { visibleEnd: number }) {
   const { range, valueToPixels, sidebarWidth } = useTimelineContext();
   const span = range.end - range.start;
-  const stepMs = span > 60_000 ? 10_000 : span > 20_000 ? 5_000 : span > 8_000 ? 2_000 : 1_000;
+  // Pick a step that keeps labels ~70 px apart at the CURRENT zoom: fixed
+  // 10 s steps turned the ruler into an unreadable mush on long spans.
+  const widthPx = Math.max(1, valueToPixels(span));
+  const minStep = (span / widthPx) * 70;
+  const stepMs =
+    [1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000].find(
+      (s) => s >= minStep,
+    ) ?? 600_000;
   const ticks: number[] = [];
   for (let t = 0; t <= visibleEnd; t += stepMs) ticks.push(t);
   return (
@@ -303,7 +310,8 @@ function Inner({
                       return (
                         <div
                           key={pl.id}
-                          className="absolute bottom-0 top-0 overflow-hidden"
+                          // ring = TEMP visual check: must match the clip bar
+                          className="absolute bottom-0 top-0 overflow-hidden ring-1 ring-fuchsia-500/40"
                           style={{ left, width }}
                         >
                           <WaveCanvas
