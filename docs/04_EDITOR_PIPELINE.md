@@ -48,7 +48,10 @@ Two separate pieces, by design:
   `http://127.0.0.1:<ephemeral>/m/<token>` with HTTP range support. The
   server starts on the first media request (never at boot), binds loopback
   only and serves exclusively paths the backend registered.
-- **Audio (single clock)**: the 3 tracks (Mix/Game/Mic) are extracted once
+- **Audio (single clock, stem remix)**: track 1 of a recording is the SUM of
+  Game+Mic, so the editor never plays/export it: playback and export use the
+  Game and Mic stems with `master x game x mic` (project-level track gains,
+  live). The 3 tracks (Mix/Game/Mic) are extracted once
   per clip to `~/.cache/MoonClip/editor/<session>/`, decoded to AudioBuffers
   and scheduled on ONE `AudioContext` (`src/editor/audioEngine.ts`): every
   segment/track is an `AudioBufferSourceNode` through per-segment and per-track

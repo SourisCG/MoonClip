@@ -215,37 +215,52 @@ pub fn concat_file(paths: &[PathBuf]) -> String {
         .join("\n")
 }
 
-/// Audio filtergraph: every segment contributes its available stems at its
-/// timeline position, gains preserved (`normalize=0`), then a single track.
+/// Audio filtergraph for the stem remix. Track 1 of a recording is the SUM of
+/// Game+Mic, so for multi-track sources only Game/Mic are used (playing both
+/// copies was the doubled-audio bug); single-track sources use their only
+/// track. Every contribution carries master x track gain at its timeline
+/// position and everything is summed into ONE AAC track (Medal parity).
 /// Returns the graph and whether any audio exists.
 pub fn audio_filter(
     segments: &[Segment],
     input_index: &[usize],
     tracks_per_input: &[usize],
     total_ms: i64,
+    master: f64,
+    gain_game: f64,
+    gain_mic: f64,
 ) -> (String, bool) {
     let mut chains: Vec<String> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
     for (i, seg) in segments.iter().enumerate() {
         let idx = input_index[i];
         let tracks = tracks_per_input[i].min(3);
-        let gains = [seg.gain_mix, seg.gain_game, seg.gain_mic];
-        let start = seg.timeline_start_ms.max(0);
         if tracks == 0 {
             continue;
         }
-        for (t, gain) in gains.iter().enumerate().take(tracks) {
-            let label = format!("a{i}_{t}");
-            let gain = gain.clamp(0.0, 4.0);
+        // (stream index, gain) pairs for this source.
+        let sources: Vec<(usize, f64)> = if tracks == 1 {
+            vec![(0, master)]
+        } else {
+            let mut v = vec![(1, master * gain_game)];
+            if tracks >= 3 {
+                v.push((2, master * gain_mic));
+            }
+            v
+        };
+        let start = seg.timeline_start_ms.max(0);
+        for (stream, gain) in sources {
+            let label = format!("a{i}_{stream}");
             let delay = if start > 0 {
                 format!(",adelay={}|{}", start, start)
             } else {
                 String::new()
             };
             chains.push(format!(
-                "[{idx}:a:{t}]atrim=start={}:end={},asetpts=PTS-STARTPTS,volume={gain:.3}{delay}[{label}]",
+                "[{idx}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,volume={:.3}{delay}[{label}]",
                 secs(seg.in_ms),
                 secs(seg.out_ms),
+                gain.clamp(0.0, 4.0),
             ));
             labels.push(format!("[{label}]"));
         }
@@ -512,8 +527,15 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
             sources[idx].6
         })
         .collect();
-    let (filter, has_audio) =
-        audio_filter(&project.segments, &input_index, &tracks_per_input, total_ms);
+    let (filter, has_audio) = audio_filter(
+        &project.segments,
+        &input_index,
+        &tracks_per_input,
+        total_ms,
+        project.gain_master,
+        project.gain_game,
+        project.gain_mic,
+    );
 
     // Text overlays (E3a): drawtext over the joined video, one filter each.
     let texts: Vec<&crate::editor::project::Overlay> = project
@@ -733,21 +755,40 @@ mod tests {
     }
 
     #[test]
-    fn audio_filter_mixes_three_stems_with_gains_and_delay() {
+    fn audio_filter_remixes_stems_and_never_track_one() {
         let mut s = seg(1000, 2500);
         s.timeline_start_ms = 500;
-        s.gain_mic = 1.5;
-        let (graph, has) = audio_filter(&[s], &[1], &[3], 3000);
+        let (graph, has) = audio_filter(&[s], &[1], &[3], 3000, 1.0, 0.8, 1.5);
         assert!(has);
-        assert!(graph.contains("[1:a:0]atrim=start=1.000:end=2.500"));
-        assert!(graph.contains("volume=1.500,adelay=500|500[a0_2]"));
-        assert!(graph.contains("amix=inputs=3:duration=longest:normalize=0"));
+        // Track 1 of a recording is the SUM of Game+Mic: never played.
+        assert!(!graph.contains("[1:a:0]"), "{graph}");
+        assert!(graph.contains("[1:a:1]atrim=start=1.000:end=2.500"));
+        assert!(graph.contains("volume=0.800,adelay=500|500[a0_1]"), "{graph}");
+        assert!(graph.contains("volume=1.500,adelay=500|500[a0_2]"), "{graph}");
+        assert!(graph.contains("amix=inputs=2:duration=longest:normalize=0"), "{graph}");
         assert!(graph.contains("atrim=0:3.000"));
     }
 
     #[test]
+    fn audio_filter_single_track_uses_master_gain() {
+        let (graph, has) = audio_filter(&[seg(0, 1000)], &[1], &[1], 1000, 0.5, 1.0, 1.0);
+        assert!(has);
+        assert!(graph.contains("[1:a:0]"), "{graph}");
+        assert!(graph.contains("volume=0.500"), "{graph}");
+    }
+
+    #[test]
+    fn audio_filter_two_tracks_use_game_only() {
+        let (graph, has) = audio_filter(&[seg(0, 1000)], &[1], &[2], 1000, 1.0, 0.5, 1.0);
+        assert!(has);
+        assert!(graph.contains("[1:a:1]"), "{graph}");
+        assert!(!graph.contains("[1:a:2]"), "{graph}");
+        assert!(!graph.contains("[1:a:0]"), "{graph}");
+    }
+
+    #[test]
     fn audio_filter_without_tracks_reports_no_audio() {
-        let (graph, has) = audio_filter(&[seg(0, 1000)], &[1], &[0], 1000);
+        let (graph, has) = audio_filter(&[seg(0, 1000)], &[1], &[0], 1000, 1.0, 1.0, 1.0);
         assert!(!has);
         assert!(graph.is_empty());
     }
@@ -852,7 +893,7 @@ mod tests {
 
         // Stage B: mix the three stems into ONE track.
         let out = dir.join("out.mp4");
-        let (filter, has) = audio_filter(&[seg(1000, 2500)], &[1], &[3], 1500);
+        let (filter, has) = audio_filter(&[seg(1000, 2500)], &[1], &[3], 1500, 1.0, 1.0, 1.0);
         assert!(has);
         let ok = tokio::process::Command::new(&ff)
             .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])

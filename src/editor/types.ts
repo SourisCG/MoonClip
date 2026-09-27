@@ -57,6 +57,11 @@ export interface EditProject {
   id: string;
   name: string;
   sourceClipId: string;
+  /** Track mix: master scales the stem mix; Game/Mic are the stems. Track 1
+   *  of the recording is the SUM of both and is never played. */
+  gainMaster: number;
+  gainGame: number;
+  gainMic: number;
   output: OutputSettings;
   segments: Segment[];
   audioTracks: AudioTrack[];

@@ -27,6 +27,7 @@ interface EditorState {
   pxPerSecond: number;
 
   setProject: (project: EditProject) => void;
+  setProjectGain: (field: "gainMaster" | "gainGame" | "gainMic", value: number) => void;
   setSources: (sources: EditorSourceInfo[]) => void;
   upsertSource: (source: EditorSourceInfo) => void;
   addSegmentFromSource: (source: EditorSourceInfo, atMs: number | null) => void;
@@ -68,6 +69,11 @@ export const useEditorStore = create<EditorState>()(
             ? { kind: "segment", id: project.segments[0].id }
             : null;
           s.playheadMs = 0;
+        }),
+
+      setProjectGain: (field, value) =>
+        set((s) => {
+          if (s.project) s.project[field] = Math.max(0, Math.min(4, value));
         }),
 
       setSources: (sources) =>

@@ -228,9 +228,6 @@ export default function EditorApp({
   const playing = useEditorStore((s) => s.playing);
   const playhead = useEditorStore((s) => s.playheadMs);
   const total = project ? projectDurationMs(project) : 0;
-  const selectedSegment =
-    project?.segments.find((s) => selection?.kind === "segment" && s.id === selection.id) ??
-    null;
   const selectedOverlay =
     project?.overlays.find((o) => selection?.kind === "overlay" && o.id === selection.id) ??
     null;
@@ -287,13 +284,13 @@ export default function EditorApp({
     return engineRef.current;
   }, []);
 
-  const gainsOf = useCallback(
-    (seg: Segment) => ({
-      mix: seg.gainMix,
-      game: seg.gainGame,
-      mic: seg.gainMic,
+  const trackGains = useMemo(
+    () => ({
+      master: project?.gainMaster ?? 1,
+      game: project?.gainGame ?? 1,
+      mic: project?.gainMic ?? 1,
     }),
-    [],
+    [project?.gainMaster, project?.gainGame, project?.gainMic],
   );
 
   /** Decode every source used by the project so playback never stalls. */
@@ -430,10 +427,17 @@ export default function EditorApp({
     setVideoClock(!hasAudio);
     syncVideo(ms, true);
     if (hasAudio) {
-      await engine.play(p.segments, ms, gainsOf);
-      await engine.resume();
+      if (engine.canResumeAt(ms)) {
+        // Same position: keep the schedule, just unpause (stable stream).
+        await engine.resume();
+      } else {
+        await engine.play(p.segments, ms, trackGains);
+      }
       const v = videoRef.current;
-      if (v) v.muted = true;
+      if (v) {
+        v.muted = true;
+        v.volume = 1;
+      }
     } else {
       const v = videoRef.current;
       if (v) {
@@ -442,7 +446,7 @@ export default function EditorApp({
       }
     }
     useEditorStore.getState().setPlaying(true);
-  }, [decodeProject, gainsOf, syncVideo]);
+  }, [decodeProject, trackGains, syncVideo]);
 
   const toggle = useCallback(() => {
     if (useEditorStore.getState().playing) pause();
@@ -457,9 +461,9 @@ export default function EditorApp({
       const wasPlaying = useEditorStore.getState().playing;
       useEditorStore.getState().setPlayhead(target);
       syncVideo(target, wasPlaying);
-      void engineRef.current?.seek(target, p.segments, wasPlaying, gainsOf);
+      void engineRef.current?.seek(target, p.segments, wasPlaying, trackGains);
     },
-    [gainsOf, syncVideo],
+    [trackGains, syncVideo],
   );
 
   // Single clock: the playhead always follows the audio (or the video when the
@@ -497,16 +501,21 @@ export default function EditorApp({
     return () => cancelAnimationFrame(raf);
   }, [playing, videoClock, syncVideo, pause]);
 
-  // Live track gains (shared GainNodes, no reschedule).
+  // Live track mix (shared GainNodes, no reschedule ever).
   useEffect(() => {
     const engine = engineRef.current;
-    if (!engine || !selectedSegment) return;
-    engine.setTrackVolume("mix", Math.min(2, selectedSegment.gainMix));
-    engine.setTrackVolume("game", Math.min(2, selectedSegment.gainGame));
-    engine.setTrackVolume("mic", Math.min(2, selectedSegment.gainMic));
+    engine?.setGains(trackGains);
     const v = videoRef.current;
-    if (v && videoClock) v.volume = Math.min(1, Math.max(0, selectedSegment.gainMix));
-  }, [selectedSegment, videoClock, session]);
+    if (!v) return;
+    if (videoClock) {
+      // Fallback: single-track audio comes from the video itself.
+      v.muted = false;
+      v.volume = Math.min(1, Math.max(0, trackGains.master));
+    } else {
+      // Invariant: the engine is the only audio source.
+      v.muted = true;
+    }
+  }, [trackGains, videoClock, session]);
 
   // Frame size (font scaling / overlay coordinates).
   useEffect(() => {
@@ -646,11 +655,11 @@ export default function EditorApp({
 
   const iconBtn =
     "rounded-lg border border-white/10 bg-white/5 p-2 text-slate-300 transition hover:bg-white/10 disabled:opacity-40";
-  type GainField = "gainMix" | "gainGame" | "gainMic";
-  const gains: [string, GainField, string][] = [
-    ["mix", "gainMix", t("editor.mix")],
-    ["game", "gainGame", t("editor.game")],
-    ["mic", "gainMic", t("editor.mic")],
+  type GainField = "gainMaster" | "gainGame" | "gainMic";
+  const trackSliders: [GainField, string][] = [
+    ["gainMaster", t("editor.mix")],
+    ["gainGame", t("editor.game")],
+    ["gainMic", t("editor.mic")],
   ];
   const visibleOverlays = project.overlays.filter(
     (o) =>
@@ -844,32 +853,35 @@ export default function EditorApp({
             <Volume2 size={12} /> {t("editor.audio")}
           </p>
           <p className="text-[10px] leading-snug text-slate-600">{t("editor.mix_hint")}</p>
-          {!selectedSegment && <p className="text-[11px] text-slate-600">{t("editor.no_clip")}</p>}
-          {selectedSegment &&
-            gains.map(([key, field, label]) => (
-              <label key={key} className="space-y-1 text-[11px] text-slate-400">
+          {trackSliders.map(([field, label]) => {
+            const disabled = field !== "gainMaster" && stems.length <= 1;
+            return (
+              <label
+                key={field}
+                className={`space-y-1 text-[11px] ${disabled ? "opacity-40" : "text-slate-400"}`}
+              >
                 <span className="flex items-center gap-1">
                   {label}
                   <span className="ml-auto font-mono">
-                    {Math.round(selectedSegment[field] * 100)}%
+                    {Math.round(project[field] * 100)}%
                   </span>
                 </span>
                 <input
                   type="range"
                   min={0}
                   max={200}
-                  value={Math.round(selectedSegment[field] * 100)}
+                  disabled={disabled}
+                  value={Math.round(project[field] * 100)}
                   onChange={(e) =>
                     useEditorStore
                       .getState()
-                      .updateSegment(selectedSegment.id, {
-                        [field]: Number(e.target.value) / 100,
-                      })
+                      .setProjectGain(field, Number(e.target.value) / 100)
                   }
                   className="w-full accent-cyan-400"
                 />
               </label>
-            ))}
+            );
+          })}
           <p className="mt-auto text-[10px] leading-relaxed text-slate-600">
             {t("editor.shortcuts")}
           </p>

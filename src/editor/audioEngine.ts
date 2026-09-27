@@ -44,23 +44,28 @@ export function computePeaks(buffer: AudioBuffer, buckets = 900): number[][] {
 }
 
 /** How far the (muted) video is allowed to drift before a corrective seek. */
-export const VIDEO_SYNC_TOLERANCE_MS = 120;
+export const VIDEO_SYNC_TOLERANCE_MS = 60;
+
+/** Project track mix (Master scales the Game+Mic stems). */
+export interface TrackGains {
+  master: number;
+  game: number;
+  mic: number;
+}
 
 export class AudioTimeline {
   private ctx: AudioContext;
   private master: GainNode;
-  private trackGains = new Map<string, GainNode>();
+  private game: GainNode;
+  private mic: GainNode;
   private sources = new Map<string, DecodedSource>();
   private nodes: AudioBufferSourceNode[] = [];
-  private segGains: GainNode[] = [];
 
   /** Timeline ms at `t0`; playback position = base + (ctx.now - t0). */
   private baseMs = 0;
   private t0 = 0;
   private started = false;
   private paused = true;
-
-  private trackVolume: Record<string, number> = { mix: 1, game: 1, mic: 1 };
 
   constructor() {
     const Ctor =
@@ -70,12 +75,12 @@ export class AudioTimeline {
     this.master = this.ctx.createGain();
     this.master.gain.value = 1;
     this.master.connect(this.ctx.destination);
-    for (const label of ["mix", "game", "mic"]) {
-      const g = this.ctx.createGain();
-      g.gain.value = this.trackVolume[label] ?? 1;
-      g.connect(this.master);
-      this.trackGains.set(label, g);
-    }
+    this.game = this.ctx.createGain();
+    this.game.gain.value = 1;
+    this.game.connect(this.master);
+    this.mic = this.ctx.createGain();
+    this.mic.gain.value = 1;
+    this.mic.connect(this.master);
   }
 
   get sampleRate(): number {
@@ -127,51 +132,54 @@ export class AudioTimeline {
     return (this.sources.get(clipId)?.stems.length ?? 0) > 0;
   }
 
-  /** Live per-track gain (0..2). Applies to scheduled and future nodes. */
-  setTrackVolume(label: string, value: number) {
-    this.trackVolume[label] = value;
-    const g = this.trackGains.get(label);
-    if (g) g.gain.value = value;
+  /** Live track mix. Shared GainNodes, so no reschedule is ever needed. */
+  setGains(gains: TrackGains) {
+    this.master.gain.value = Math.max(0, Math.min(4, gains.master));
+    this.game.gain.value = Math.max(0, Math.min(4, gains.game));
+    this.mic.gain.value = Math.max(0, Math.min(4, gains.mic));
   }
 
-  /** Schedule every segment from `fromMs` and start the clock. */
-  async play(
-    segments: Segment[],
-    fromMs: number,
-    gainsOf: (segment: Segment) => Record<string, number>,
-  ): Promise<void> {
+  /** True when the paused schedule is exactly at `ms` (resume without rebuild). */
+  canResumeAt(ms: number): boolean {
+    return this.started && this.paused && Math.abs(this.baseMs - ms) < 1;
+  }
+
+  /** Schedule every segment from `fromMs` and start the clock. Track 1 of a
+   *  recording is the sum of Game+Mic, so only the stems are scheduled. */
+  async play(segments: Segment[], fromMs: number, gains: TrackGains): Promise<void> {
     this.stopNodes();
     await this.ctx.resume();
+    this.setGains(gains);
     const lookahead = 0.06;
     this.t0 = this.ctx.currentTime + lookahead;
     this.baseMs = fromMs;
     for (const seg of segments) {
       const decoded = this.sources.get(seg.sourceClipId);
       if (!decoded || decoded.stems.length === 0) continue;
-      const segEnd = seg.timelineStartMs + Math.max(0, seg.outMs - seg.inMs) / Math.max(0.05, seg.speed);
+      const segEnd =
+        seg.timelineStartMs + Math.max(0, seg.outMs - seg.inMs) / Math.max(0.05, seg.speed);
       if (segEnd <= fromMs) continue;
-      const gains = gainsOf(seg);
-      // A single-stem clip is its own mix; keep the label mapping sane.
-      const single = decoded.stems.length === 1;
-      for (const stem of decoded.stems) {
-        const label = single ? "mix" : stem.label;
-        // Per-segment gain only: the shared track GainNode applies the live
-        // Mix/Game/Mic volume, so adjusting it never needs a reschedule.
-        const gain = this.ctx.createGain();
-        gain.gain.value = gains[label] ?? 1;
-        gain.connect(this.trackGains.get(label) ?? this.master);
+      // Multi-stem sources: Game/Mic only (the Mix stem duplicates them).
+      const wanted =
+        decoded.stems.length > 1
+          ? decoded.stems.filter((s) => s.label === "game" || s.label === "mic")
+          : decoded.stems;
+      for (const stem of wanted) {
+        const target = decoded.stems.length > 1
+          ? stem.label === "mic"
+            ? this.mic
+            : this.game
+          : this.master;
         const src = this.ctx.createBufferSource();
         src.buffer = stem.buffer;
         src.playbackRate.value = seg.speed;
-        src.connect(gain);
+        src.connect(target);
 
-        // Where in the source and when in the context this piece starts.
         const inside = fromMs > seg.timelineStartMs;
         const consumedMs = inside ? fromMs - seg.timelineStartMs : 0;
         const sourceOffset = (seg.inMs + consumedMs) / 1000;
         const sourceRemaining = Math.max(0, seg.outMs - (seg.inMs + consumedMs)) / 1000;
-        const when =
-          this.t0 + Math.max(0, seg.timelineStartMs - fromMs) / 1000;
+        const when = this.t0 + Math.max(0, seg.timelineStartMs - fromMs) / 1000;
         if (sourceRemaining <= 0.01) continue;
         try {
           src.start(when, sourceOffset, sourceRemaining);
@@ -179,7 +187,6 @@ export class AudioTimeline {
           continue;
         }
         this.nodes.push(src);
-        this.segGains.push(gain);
       }
     }
     this.started = true;
@@ -207,13 +214,13 @@ export class AudioTimeline {
     ms: number,
     segments: Segment[],
     keepPlaying: boolean,
-    gainsOf: (segment: Segment) => Record<string, number>,
+    gains: TrackGains,
   ): Promise<void> {
     this.stopNodes();
     this.started = false;
     this.paused = true;
     if (keepPlaying) {
-      await this.play(segments, ms, gainsOf);
+      await this.play(segments, ms, gains);
     } else {
       this.baseMs = ms;
     }
@@ -239,14 +246,12 @@ export class AudioTimeline {
       n.disconnect();
     }
     this.nodes = [];
-    for (const g of this.segGains) g.disconnect();
-    this.segGains = [];
   }
 
   dispose() {
     this.stopNodes();
-    for (const g of this.trackGains.values()) g.disconnect();
-    this.trackGains.clear();
+    this.game.disconnect();
+    this.mic.disconnect();
     this.master.disconnect();
     void this.ctx.close().catch(() => {});
     this.sources.clear();

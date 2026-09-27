@@ -183,6 +183,15 @@ pub struct EditProject {
     pub id: String,
     pub name: String,
     pub source_clip_id: String,
+    /// Track mix: `gain_master` multiplies the stem mix, and Game/Mic are the
+    /// individual stems. Track 1 of the recording (Mix) is the SUM of both, so
+    /// it is never played alongside them (that caused doubled audio).
+    #[serde(default = "default_gain")]
+    pub gain_master: f64,
+    #[serde(default = "default_gain")]
+    pub gain_game: f64,
+    #[serde(default = "default_gain")]
+    pub gain_mic: f64,
     #[serde(default)]
     pub output: OutputSettings,
     pub segments: Vec<Segment>,
@@ -208,10 +217,13 @@ impl EditProject {
 /// Fresh single-segment project for a clip.
 pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProject {
     EditProject {
-        version: 1,
+        version: 2,
         id: uuid::Uuid::new_v4().to_string(),
         name: name.to_string(),
         source_clip_id: clip_id.to_string(),
+        gain_master: 1.0,
+        gain_game: 1.0,
+        gain_mic: 1.0,
         output: OutputSettings::default(),
         segments: vec![Segment {
             id: uuid::Uuid::new_v4().to_string(),
@@ -235,21 +247,42 @@ pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProje
     }
 }
 
-/// Fix projects saved before the mix/stem defaults were corrected: with all
-/// three gains at 1.0 the preview played the same audio twice (track 1 is the
-/// pre-mixed Game+Mic). Returns true when something changed.
-pub fn normalize_default_gains(project: &mut EditProject) -> bool {
+/// Projects saved before the track gains moved to the project level carry
+/// them per segment (and the old default was "mix only", which in the new
+/// model would silence the stems since the Mix track is no longer played).
+/// Adopt the first segment's values, then make sure a mix-only project ends
+/// up as Game+Mic so it still sounds like before. Returns true when changed.
+pub fn migrate_gains(project: &mut EditProject) -> bool {
     let mut changed = false;
-    for seg in &mut project.segments {
-        if (seg.gain_mix - 1.0).abs() < f64::EPSILON
-            && (seg.gain_game - 1.0).abs() < f64::EPSILON
-            && (seg.gain_mic - 1.0).abs() < f64::EPSILON
-        {
-            seg.gain_game = 0.0;
-            seg.gain_mic = 0.0;
-            changed = true;
+    let mut master = project.gain_master;
+    let mut game = project.gain_game;
+    let mut mic = project.gain_mic;
+    // v1 projects carried the gains per segment; v2 moved them to the project.
+    if project.version < 2 {
+        if let Some(seg) = project.segments.first() {
+            let legacy = (seg.gain_mix, seg.gain_game, seg.gain_mic);
+            if (legacy.0 - 1.0).abs() > f64::EPSILON
+                || (legacy.1 - 1.0).abs() > f64::EPSILON
+                || (legacy.2 - 1.0).abs() > f64::EPSILON
+            {
+                master = legacy.0;
+                game = legacy.1;
+                mic = legacy.2;
+            }
         }
+        project.version = 2;
+        changed = true;
     }
+    // Old "mix only" default (mix=1, stems 0): the same audio is now
+    // Game+Mic, so enable the stems.
+    if master > 0.0 && game <= 0.0 && mic <= 0.0 {
+        game = 1.0;
+        mic = 1.0;
+        changed = true;
+    }
+    project.gain_master = master.clamp(0.0, 4.0);
+    project.gain_game = game.clamp(0.0, 4.0);
+    project.gain_mic = mic.clamp(0.0, 4.0);
     changed
 }
 
@@ -282,26 +315,48 @@ mod tests {
     }
 
     #[test]
-    fn normalization_fixes_old_all_one_projects_only() {
+    fn migration_adopts_segment_gains_and_enables_stems_for_mix_only() {
         let mut p = default_project("c", "n", 1000);
-        p.segments[0].gain_game = 1.0;
-        p.segments[0].gain_mic = 1.0;
-        assert!(normalize_default_gains(&mut p));
-        assert_eq!(p.segments[0].gain_game, 0.0);
-        assert_eq!(p.segments[0].gain_mic, 0.0);
-        // Already-fine projects are untouched.
-        assert!(!normalize_default_gains(&mut p));
-        // Deliberate remixes survive.
-        p.segments[0].gain_game = 0.5;
-        assert!(!normalize_default_gains(&mut p));
+        p.version = 1;
+        // Old default: mix only (track 1 = game+mic baked).
+        p.segments[0].gain_mix = 1.0;
+        p.segments[0].gain_game = 0.0;
+        p.segments[0].gain_mic = 0.0;
+        assert!(migrate_gains(&mut p));
+        assert_eq!(p.gain_master, 1.0);
+        assert_eq!(p.gain_game, 1.0);
+        assert_eq!(p.gain_mic, 1.0);
+        assert!(!migrate_gains(&mut p));
+        // A deliberate stem remix survives (adopted as-is).
+        p.gain_game = 0.3;
+        p.gain_mic = 1.4;
+        assert!(!migrate_gains(&mut p));
+        assert_eq!(p.gain_game, 0.3);
+        assert_eq!(p.gain_mic, 1.4);
     }
 
     #[test]
-    fn default_project_plays_the_mix_not_the_stems() {
+    fn migration_adopts_legacy_segment_values_once() {
+        let mut p = default_project("c", "n", 1000);
+        p.version = 1;
+        p.gain_master = 1.0;
+        p.gain_game = 1.0;
+        p.gain_mic = 1.0;
+        p.segments[0].gain_mix = 0.5;
+        p.segments[0].gain_game = 1.2;
+        p.segments[0].gain_mic = 0.0;
+        assert!(migrate_gains(&mut p));
+        assert_eq!(p.gain_master, 0.5);
+        assert_eq!(p.gain_game, 1.2);
+        assert_eq!(p.gain_mic, 0.0);
+    }
+
+    #[test]
+    fn default_project_uses_the_stems_with_full_gains() {
         let p = default_project("c", "n", 1000);
-        assert_eq!(p.segments[0].gain_mix, 1.0);
-        assert_eq!(p.segments[0].gain_game, 0.0);
-        assert_eq!(p.segments[0].gain_mic, 0.0);
+        assert_eq!(p.gain_master, 1.0);
+        assert_eq!(p.gain_game, 1.0);
+        assert_eq!(p.gain_mic, 1.0);
     }
 
     #[test]

@@ -353,8 +353,8 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
                 .to_string();
             project::default_project(clip_id, &name, clip.duration_ms)
         });
-        if project::normalize_default_gains(&mut project) {
-            eprintln!("[moonclip] editor: normalized legacy gain defaults for {clip_id}");
+        if project::migrate_gains(&mut project) {
+            eprintln!("[moonclip] editor: migrated legacy track gains for {clip_id}");
             let _ = save_project(app, &project);
         }
         let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(app)?;
