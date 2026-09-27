@@ -61,6 +61,43 @@ impl DriveClient {
         }
     }
 
+    /// The file when it still exists and is not trashed; `None` when gone.
+    pub async fn live_file(&self, file_id: &str) -> Result<Option<DriveFile>, String> {
+        let response = self
+            .http
+            .get(format!(
+                "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,trashed",
+                self.api,
+                urlencoding::encode(file_id)
+            ))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| format!("Drive request failed: {e}"))?;
+        match response.status().as_u16() {
+            404 => Ok(None),
+            status if (200..300).contains(&status) => {
+                let text = response.text().await.unwrap_or_default();
+                let value: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|e| format!("cannot decode the Drive file: {e}"))?;
+                if value
+                    .get("trashed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    return Ok(None);
+                }
+                serde_json::from_value(value)
+                    .map(Some)
+                    .map_err(|e| format!("unexpected Drive file: {e}"))
+            }
+            status => {
+                let text = response.text().await.unwrap_or_default();
+                Err(format!("Drive rejected the request ({status}): {text}"))
+            }
+        }
+    }
+
     /// Raw fields (webViewLink and friends are not in DriveFile).
     pub async fn raw_file(
         &self,
@@ -518,6 +555,36 @@ mod tests {
         assert_eq!(uploaded.id, "f1");
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn live_file_reports_gone_and_trashed_as_none() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            // 200 alive
+            let alive = server.recv().unwrap();
+            alive
+                .respond(tiny_http::Response::from_string(
+                    r#"{"id":"f1","name":"clip.mp4","mimeType":"video/mp4","trashed":false}"#,
+                ))
+                .unwrap();
+            // 200 but trashed
+            let trashed = server.recv().unwrap();
+            trashed
+                .respond(tiny_http::Response::from_string(
+                    r#"{"id":"f2","name":"old.mp4","mimeType":"video/mp4","trashed":true}"#,
+                ))
+                .unwrap();
+            // 404
+            let gone = server.recv().unwrap();
+            gone.respond(tiny_http::Response::empty(404)).unwrap();
+        });
+        let client = DriveClient::with_base(format!("http://127.0.0.1:{port}"), "tok");
+        assert!(client.live_file("f1").await.unwrap().is_some());
+        assert!(client.live_file("f2").await.unwrap().is_none());
+        assert!(client.live_file("f3").await.unwrap().is_none());
+        handle.join().unwrap();
     }
 
     #[tokio::test]

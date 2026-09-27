@@ -100,6 +100,7 @@ pub async fn drive_upload_clip(
     clip_id: String,
     make_public: bool,
     delete_local: bool,
+    replace: bool,
 ) -> Result<DriveUploadResult, String> {
     let client = super::drive_client_for(&app).await?;
     let db = app.state::<DbState>();
@@ -114,32 +115,37 @@ pub async fn drive_upload_clip(
         .next()
         .ok_or("bad clip file name")?
         .to_string();
-    // Already in Drive (cloud clip): never upload a duplicate; reuse the
-    // remote file and only update the link state when asked.
-    if clip.cloud {
-        if let Some(file_id) = clip.drive_file_id.as_deref().filter(|id| !id.is_empty()) {
+
+    let existing = clip.drive_file_id.clone().filter(|id| !id.is_empty());
+    if let Some(file_id) = existing {
+        if replace {
+            // Explicit replace: trash the old copy so the name stays free.
+            client.trash_file(&file_id).await?;
+            db.clear_clip_drive(&clip_id)?;
+        } else if let Some(file) = client.live_file(&file_id).await? {
+            // Already in Drive: NEVER upload a duplicate. Only the link state
+            // (or deleting the local copy) may change.
             let mut web_link = clip.drive_web_url.clone();
             if make_public && web_link.is_none() {
-                client.set_public(file_id).await?;
-                web_link = client
-                    .raw_file(file_id, "webViewLink")
-                    .await
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("webViewLink")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string)
-                    });
-                db.set_clip_cloud(&clip_id, file_id, web_link.as_deref())?;
+                client.set_public(&file_id).await?;
+                web_link = web_view_link(&client, &file_id).await;
+                db.set_clip_drive(&clip_id, &file_id, web_link.as_deref())?;
+            }
+            if delete_local && !clip.cloud {
+                delete_local_video(&db, &clip).await;
+                db.set_clip_cloud(&clip_id, &file_id, web_link.as_deref())?;
             }
             return Ok(DriveUploadResult {
-                file_id: file_id.to_string(),
-                name: bare_name,
+                file_id,
+                name: file.name,
                 web_link,
             });
+        } else {
+            // Gone from Drive: forget the ids and upload fresh.
+            db.clear_clip_drive(&clip_id)?;
         }
     }
+
     let base = db.clips_dir()?;
     let path = crate::commands::validated_media_path(&base, &clip.file_name)?;
     let folder = if clip.folder.trim().is_empty() {
@@ -147,10 +153,9 @@ pub async fn drive_upload_clip(
     } else {
         clip.folder.clone()
     };
-    let name = bare_name;
     let root = root_folder(&db, &client).await?;
     let parent = remote_folder(&db, &client, &root, &folder).await?;
-    let name = unique_remote_name(&client, &parent, &name).await?;
+    let name = unique_remote_name(&client, &parent, &bare_name).await?;
     let emit_app = app.clone();
     let emit_id = clip_id.clone();
     let file = client
@@ -164,24 +169,12 @@ pub async fn drive_upload_clip(
     let mut web_link = None;
     if make_public {
         client.set_public(&file.id).await?;
-        web_link = client
-            .raw_file(&file.id, "webViewLink")
-            .await
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("webViewLink")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            });
+        web_link = web_view_link(&client, &file.id).await;
     }
+    // Always remember the upload so it can never be duplicated.
+    db.set_clip_drive(&clip_id, &file.id, web_link.as_deref())?;
     if delete_local {
-        // Medal-style: keep only the thumbnail locally so the gallery still
-        // renders; the video lives in Drive from now on.
-        if let Err(e) = tokio::fs::remove_file(&path).await {
-            eprintln!("[moonclip] could not delete the local video: {e}");
-        }
-        let db = app.state::<DbState>();
+        delete_local_video(&db, &clip).await;
         db.set_clip_cloud(&clip_id, &file.id, web_link.as_deref())?;
     }
     Ok(DriveUploadResult {
@@ -189,6 +182,30 @@ pub async fn drive_upload_clip(
         name: file.name,
         web_link,
     })
+}
+
+async fn web_view_link(client: &DriveClient, file_id: &str) -> Option<String> {
+    client
+        .raw_file(file_id, "webViewLink")
+        .await
+        .ok()
+        .and_then(|value| {
+            value
+                .get("webViewLink")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+}
+
+/// Medal-style: keep only the thumbnail locally so the gallery still renders.
+async fn delete_local_video(db: &DbState, clip: &ClipRecord) {
+    let Ok(base) = db.clips_dir() else { return };
+    let path = crate::storage::paths::resolve_clip_path(&base, &clip.file_name);
+    if let Err(e) = tokio::fs::remove_file(&path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("[moonclip] could not delete the local video: {e}");
+        }
+    }
 }
 
 /// Browse the app's Drive tree (root when `folder_id` is None).

@@ -208,6 +208,10 @@ function ClipRow({
                 <span className="inline-flex items-center gap-0.5 text-xs text-cyan-300/80">
                   <Cloud size={11} /> {t("gallery.cloud")}
                 </span>
+              ) : clip.drive_file_id ? (
+                <span className="inline-flex items-center gap-0.5 text-xs text-emerald-300/80">
+                  <CloudUpload size={11} /> {t("gallery.uploaded")}
+                </span>
               ) : (
                 !clip.exists && (
                   <span className="text-xs text-amber-400">({t("gallery.missing")})</span>

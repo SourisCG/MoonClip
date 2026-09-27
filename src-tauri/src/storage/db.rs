@@ -766,6 +766,33 @@ impl DbState {
         Ok(())
     }
 
+    /// Remember that a clip lives in Drive (no local deletion involved).
+    pub fn set_clip_drive(
+        &self,
+        id: &str,
+        drive_file_id: &str,
+        drive_web_link: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE clips SET drive_file_id = ?1, drive_web_url = ?2 WHERE id = ?3",
+            params![drive_file_id, drive_web_link, id],
+        )
+        .map_err(|e| format!("cannot store the drive id: {e}"))?;
+        Ok(())
+    }
+
+    /// Forget the Drive ids (the remote file is gone).
+    pub fn clear_clip_drive(&self, id: &str) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE clips SET drive_file_id = NULL, drive_web_url = NULL WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| format!("cannot clear the drive id: {e}"))?;
+        Ok(())
+    }
+
     /// Mark a clip as Drive-only (video deleted after upload) with its ids.
     pub fn set_clip_cloud(
         &self,
@@ -1031,6 +1058,23 @@ mod tests {
         assert_eq!(remaining.len(), 2);
         assert!(!remaining.contains(&old.id));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn drive_ids_round_trip_and_clear() {
+        let db = test_db();
+        let clip = db.insert_clip("a.mp4", "t.jpg", "G", 1000, 10, "").unwrap();
+        db.set_clip_drive(&clip.id, "file-1", None).unwrap();
+        let stored = db.list_clips().unwrap().into_iter().next().unwrap();
+        assert_eq!(stored.drive_file_id.as_deref(), Some("file-1"));
+        assert!(!stored.cloud);
+        db.set_clip_drive(&clip.id, "file-1", Some("https://link")).unwrap();
+        let stored = db.list_clips().unwrap().into_iter().next().unwrap();
+        assert_eq!(stored.drive_web_url.as_deref(), Some("https://link"));
+        db.clear_clip_drive(&clip.id).unwrap();
+        let stored = db.list_clips().unwrap().into_iter().next().unwrap();
+        assert!(stored.drive_file_id.is_none());
+        assert!(stored.drive_web_url.is_none());
     }
 
     #[test]
