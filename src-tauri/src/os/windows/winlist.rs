@@ -6,7 +6,7 @@
 use crate::os::shared::winlist::DesktopWindow;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
+    EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
 };
 
 pub fn list_windows() -> Vec<DesktopWindow> {
@@ -32,9 +32,19 @@ unsafe extern "system" fn collect_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let mut buf = vec![0u16; len as usize + 1];
     let n = GetWindowTextW(hwnd, &mut buf);
     if n > 0 {
+        // The window class doubles as the app id: Explorer windows are
+        // `CabinetWClass` (the matcher excludes them), and the picker stores
+        // the same class in the OBS window target, so the identity check works.
+        let mut class_buf = [0u16; 256];
+        let cn = GetClassNameW(hwnd, &mut class_buf);
+        let app_id = if cn > 0 {
+            String::from_utf16_lossy(&class_buf[..cn as usize])
+        } else {
+            String::new()
+        };
         out.push(DesktopWindow {
             title: String::from_utf16_lossy(&buf[..n as usize]),
-            app_id: String::new(),
+            app_id,
         });
     }
     TRUE

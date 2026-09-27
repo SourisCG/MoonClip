@@ -1066,7 +1066,13 @@ pub(crate) async fn poll_games(app: &AppHandle) {
         windows
             .iter()
             .take(12)
-            .map(|w| w.title.as_str())
+            .map(|w| {
+                if w.app_id.is_empty() {
+                    w.title.clone()
+                } else {
+                    format!("{} [{}]", w.title, w.app_id)
+                }
+            })
             .collect::<Vec<_>>()
             .join(" | ")
     } else {

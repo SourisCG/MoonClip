@@ -47,6 +47,55 @@ pub fn parse_windows_target(target: &str) -> WindowIdentity {
     }
 }
 
+/// Windows/app ids that are never games: file managers whose title is just
+/// the folder name (Dolphin browsing `~/Videos/MoonClip/Overwatch` would
+/// otherwise auto-start Overwatch's buffer).
+const NON_GAME_APP_IDS: &[&str] = &[
+    "dolphin",
+    "org.kde.dolphin",
+    "system-file-manager",
+    "nautilus",
+    "org.gnome.nautilus",
+    "thunar",
+    "nemo",
+    "pcmanfm",
+    "krusader",
+    "org.kde.krusader",
+    "doublecmd",
+    "files",
+    // Windows window classes of Explorer windows.
+    "cabinetwclass",
+    "explorewclass",
+];
+
+/// Is this window a known file manager (never a game)?
+pub fn is_non_game_window(app_id: &str) -> bool {
+    let id = app_id.trim().to_ascii_lowercase();
+    !id.is_empty() && NON_GAME_APP_IDS.contains(&id.as_str())
+}
+
+/// Do the registered and the desktop app ids describe the same app?
+///
+/// The two sources disagree in format for the same window (the picker reads
+/// KDE's restore data: `steam_app_2357570`; KRunner reports the icon name:
+/// `steam_icon_2357570` or `steam`), so this is deliberately tolerant: exact
+/// match, either side containing the other, or the same Steam app id. When
+/// either side is unknown the title decides (historic behavior).
+fn app_id_matches(registered: &str, candidate: &str) -> bool {
+    fn norm(s: &str) -> String {
+        s.trim()
+            .to_ascii_lowercase()
+            .replace("steam_icon_", "steam_")
+            .replace("steam_app_", "steam_")
+    }
+    let a = norm(registered);
+    let b = norm(candidate);
+    if a.is_empty() || b.is_empty() {
+        return true;
+    }
+    a == b || a.contains(&b) || b.contains(&a)
+}
+
 /// Case/space-insensitive title normalization. Titles often change state
 /// ("Game - ", "Game | 1.2", "Game:"), so trailing separators are dropped;
 /// matching then uses prefix-at-word-boundary.
@@ -67,7 +116,19 @@ fn norm(s: &str) -> String {
 /// Does this desktop window match the registered game? Matching is by the
 /// window title learned at registration; games often append state to their
 /// title ("Game - 1.2.3") so a word-boundary prefix also counts.
+///
+/// Two guards keep other apps from faking a game by sharing its title:
+/// file managers (Dolphin/Explorer browsing the game's folder) are excluded
+/// outright, and when both sides report an app id they must be compatible.
 pub fn window_matches(row: &RegisteredInput, w: &DesktopWindow) -> bool {
+    if is_non_game_window(&w.app_id) {
+        return false;
+    }
+    if let Some(registered_id) = row.window_app_id.as_deref() {
+        if !app_id_matches(registered_id, &w.app_id) {
+            return false;
+        }
+    }
     let Some(registered) = row
         .window_title
         .as_deref()
@@ -138,6 +199,94 @@ mod tests {
             title: title.into(),
             app_id: String::new(),
         }
+    }
+
+    #[test]
+    fn file_manager_windows_never_match_even_with_the_same_title() {
+        // Dolphin browsing ~/Videos/MoonClip/Overwatch is titled "Overwatch".
+        let r = row("Overwatch");
+        for app_id in [
+            "dolphin",
+            "org.kde.dolphin",
+            "system-file-manager",
+            "CabinetWClass",
+        ] {
+            assert!(
+                !window_matches(
+                    &r,
+                    &DesktopWindow {
+                        title: "Overwatch".into(),
+                        app_id: app_id.into(),
+                    }
+                ),
+                "file manager {app_id} must not match"
+            );
+        }
+        // The real game window (unknown app id) still matches.
+        assert!(window_matches(
+            &r,
+            &DesktopWindow {
+                title: "Overwatch".into(),
+                app_id: "steam_app_2357570".into(),
+            }
+        ));
+    }
+
+    #[test]
+    fn mismatched_app_ids_reject_a_title_collision() {
+        let mut r = row("Overwatch");
+        r.window_app_id = Some("steam_app_2357570".into());
+        // A video player titled like the game is rejected.
+        assert!(!window_matches(
+            &r,
+            &DesktopWindow {
+                title: "Overwatch".into(),
+                app_id: "mpv".into(),
+            }
+        ));
+        // KRunner reports icon names; the tolerant comparison accepts formats.
+        assert!(window_matches(
+            &r,
+            &DesktopWindow {
+                title: "Overwatch".into(),
+                app_id: "steam_icon_2357570".into(),
+            }
+        ));
+        assert!(window_matches(
+            &r,
+            &DesktopWindow {
+                title: "Overwatch".into(),
+                app_id: "steam".into(),
+            }
+        ));
+        // Unknown ids keep the historic title-only behavior.
+        assert!(window_matches(
+            &r,
+            &DesktopWindow {
+                title: "Overwatch".into(),
+                app_id: String::new(),
+            }
+        ));
+        let mut unknown = row("Overwatch");
+        unknown.window_app_id = None;
+        assert!(window_matches(
+            &unknown,
+            &DesktopWindow {
+                title: "Overwatch".into(),
+                app_id: "whatever".into(),
+            }
+        ));
+    }
+
+    #[test]
+    fn app_id_matching_is_tolerant_but_not_blind() {
+        assert!(app_id_matches("", "dolphin"));
+        assert!(app_id_matches("discord", "discord"));
+        assert!(app_id_matches("com.mojang.minecraft", "com.mojang.minecraft"));
+        assert!(app_id_matches("brave-browser", "brave"));
+        assert!(app_id_matches("steam_app_2357570", "steam_icon_2357570"));
+        assert!(!app_id_matches("steam_app_2357570", "dolphin"));
+        assert!(!app_id_matches("discord", "mpv"));
     }
 
     #[test]
