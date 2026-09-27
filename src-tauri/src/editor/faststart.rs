@@ -5,7 +5,28 @@
 //! big clips). A one-time remux with `-c copy` (no transcode, no GPU) moves
 //! the index to the front; the copy is cached and served by the media URL.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Per-clip single-flight lock: two concurrent player opens (e.g. React
+/// StrictMode effects) must not remux the same clip twice or race on the
+/// `.part` file (observed: one renamed it, the other failed with ENOENT).
+fn clip_locks() -> &'static Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clip_lock(clip_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    clip_locks()
+        .lock()
+        .map(|mut map| {
+            map.entry(clip_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        })
+        .unwrap_or_else(|_| Arc::new(tokio::sync::Mutex::new(())))
+}
 
 /// Does the MP4 put its index (`moov`) before the media data (`mdat`)?
 /// Only the head is scanned: faststart files always have `moov` first.
@@ -40,6 +61,9 @@ pub async fn ensure_faststart_copy(
     }
     let dir = cache_root.join("faststart");
     let dest = dir.join(format!("{clip_id}.mp4"));
+    // Single-flight: the second caller waits and then finds the cached copy.
+    let lock = clip_lock(clip_id);
+    let _guard = lock.lock().await;
     if dest.is_file() {
         return dest;
     }
@@ -47,8 +71,11 @@ pub async fn ensure_faststart_copy(
         eprintln!("[moonclip] faststart: cannot create cache: {e}");
         return src.to_path_buf();
     }
-    let part = dir.join(format!("{clip_id}.part.mp4"));
-    let _ = tokio::fs::remove_file(&part).await;
+    // Unique part name: a stale part from a crashed run can never collide.
+    let part = dir.join(format!(
+        "{clip_id}.{}.part.mp4",
+        uuid::Uuid::new_v4().simple()
+    ));
     let output = tokio::process::Command::new(ffmpeg)
         .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
         .arg(src)
@@ -59,7 +86,13 @@ pub async fn ensure_faststart_copy(
     match output {
         Ok(o) if o.status.success() => {
             if let Err(e) = tokio::fs::rename(&part, &dest).await {
+                // A concurrent process may have won the race (or the cache
+                // was wiped mid-flight); never fall back when dest is there.
+                if dest.is_file() {
+                    return dest;
+                }
                 eprintln!("[moonclip] faststart: cannot finalize the copy: {e}");
+                let _ = tokio::fs::remove_file(&part).await;
                 return src.to_path_buf();
             }
             eprintln!(
@@ -79,6 +112,7 @@ pub async fn ensure_faststart_copy(
         }
         Err(e) => {
             eprintln!("[moonclip] faststart remux could not run: {e}");
+            let _ = tokio::fs::remove_file(&part).await;
             src.to_path_buf()
         }
     }
@@ -126,25 +160,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Live: a non-faststart file gets a copy whose moov is at the front.
-    #[tokio::test]
-    async fn live_remux_moves_moov_to_the_front() {
+    /// Bundled ffmpeg when staged, else None (live tests skip).
+    fn live_ffmpeg() -> Option<PathBuf> {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let ff = manifest
             .join("binaries")
             .join(crate::sidecar::host_triple())
             .join(crate::editor::ffmpeg::sidecar_name());
-        if !ff.exists() {
-            eprintln!("skip: bundled ffmpeg not staged");
-            return;
-        }
-        let dir = std::env::temp_dir().join(format!(
-            "moonclip-faststart-live-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        ff.exists().then_some(ff)
+    }
+
+    /// Non-faststart MP4 fixture (the default muxer writes moov at the end).
+    async fn encode_fixture(ff: &Path, dir: &Path) -> PathBuf {
         let src = dir.join("src.mp4");
-        let ok = tokio::process::Command::new(&ff)
+        let ok = tokio::process::Command::new(ff)
             .args([
                 "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
@@ -155,8 +184,23 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.success(), "fixture encode failed");
-        // Default MP4 muxer writes moov at the end unless +faststart is asked.
         assert!(!is_faststart(&src), "fixture unexpectedly faststart");
+        src
+    }
+
+    /// Live: a non-faststart file gets a copy whose moov is at the front.
+    #[tokio::test]
+    async fn live_remux_moves_moov_to_the_front() {
+        let Some(ff) = live_ffmpeg() else {
+            eprintln!("skip: bundled ffmpeg not staged");
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "moonclip-faststart-live-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = encode_fixture(&ff, &dir).await;
         let copy = ensure_faststart_copy(&ff, &dir, "clip-1", &src).await;
         assert_ne!(copy, src);
         assert!(is_faststart(&copy), "remuxed copy must be faststart");
@@ -165,6 +209,38 @@ mod tests {
         assert_eq!(again, copy);
         cleanup_cache(&dir);
         assert!(!dir.join("faststart").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Live regression: two concurrent player opens for the same clip used to
+    /// race on the shared `.part` file (one rename won, the other failed with
+    /// ENOENT and fell back to the slow original). Both must return the same
+    /// faststart copy now.
+    #[tokio::test]
+    async fn concurrent_calls_share_one_copy() {
+        let Some(ff) = live_ffmpeg() else {
+            eprintln!("skip: bundled ffmpeg not staged");
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "moonclip-faststart-race-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = encode_fixture(&ff, &dir).await;
+        let (a, b) = tokio::join!(
+            ensure_faststart_copy(&ff, &dir, "clip-race", &src),
+            ensure_faststart_copy(&ff, &dir, "clip-race", &src),
+        );
+        assert_eq!(a, b, "both callers must get the same cached copy");
+        assert!(is_faststart(&a));
+        // No leftover parts.
+        let parts: Vec<_> = std::fs::read_dir(dir.join("faststart"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".part."))
+            .collect();
+        assert!(parts.is_empty(), "no .part files may survive");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
