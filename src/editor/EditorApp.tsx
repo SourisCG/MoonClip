@@ -183,6 +183,49 @@ function OverlayView({
   );
 }
 
+/** Per-track level meters (own rAF, direct DOM writes: no React re-renders). */
+function LevelMeters({
+  engineRef,
+  labels,
+}: {
+  engineRef: React.MutableRefObject<AudioTimeline | null>;
+  labels: [string, string];
+}) {
+  const bars = useRef<(HTMLElement | null)[]>([]);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const engine = engineRef.current;
+      const l = engine ? engine.levels() : { game: 0, mic: 0 };
+      const vals = [l.game, l.mic];
+      vals.forEach((v, i) => {
+        const el = bars.current[i];
+        if (el) el.style.width = `${Math.min(100, Math.round(v * 160))}%`;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [engineRef]);
+  return (
+    <div className="space-y-1">
+      {labels.map((label, i) => (
+        <div key={label} className="flex items-center gap-2 text-[10px] text-slate-500">
+          <span className="w-12 shrink-0">{label}</span>
+          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+            <span
+              ref={(el) => {
+                bars.current[i] = el;
+              }}
+              className="block h-full w-0 rounded-full bg-emerald-400/80 transition-[width] duration-75"
+            />
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Renders an overlay only while the playhead is inside its range (or it is
  *  selected). Subscribing here — instead of in the editor root — keeps the
  *  whole editor from re-rendering on every clock tick. */
@@ -891,6 +934,14 @@ export default function EditorApp({
             <Volume2 size={12} /> {t("editor.audio")}
           </p>
           <p className="text-[10px] leading-snug text-slate-600">{t("editor.mix_hint")}</p>
+          <p className="font-mono text-[10px] text-slate-500">
+            {videoClock
+              ? t("editor.mode_video")
+              : t("editor.mode_stems", {
+                  stems: stems.map((s) => s.label).join("+") || "—",
+                })}
+          </p>
+          <LevelMeters engineRef={engineRef} labels={[t("editor.game"), t("editor.mic")]} />
           {trackSliders.map(([field, label]) => {
             const disabled = field !== "gainMaster" && stems.length <= 1;
             return (

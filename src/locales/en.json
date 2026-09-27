@@ -206,6 +206,8 @@
     "text_color": "Color",
     "text_stroke": "Stroke",
     "text_opacity": "Opacity",
+    "mode_video": "Mode: video audio (stems could not be decoded)",
+    "mode_stems": "Mode: stems ({{stems}})",
     "shortcuts": "Space: play · Ctrl+K: split · Ctrl+D: duplicate · Del: delete · Ctrl+Z: undo",
     "export_title": "Export clip",
     "resolution": "Resolution",

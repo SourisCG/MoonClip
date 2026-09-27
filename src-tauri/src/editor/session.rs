@@ -165,7 +165,9 @@ pub fn parse_audio_track_count(stderr: &str) -> usize {
 pub const TRACK_LABELS: [&str; 3] = ["mix", "game", "mic"];
 
 /// Extract the clip's audio streams as playable stems (mix/game/mic by order).
-/// URLs are session-scoped so `close` releases them with the temp dir.
+/// PCM WAV on purpose: `decodeAudioData` can never fail on it and it has no
+/// codec priming, so the stems stay sample-exact. URLs are session-scoped so
+/// `close` releases them with the temp dir.
 async fn extract_stems(
     ffmpeg: &Path,
     input: &Path,
@@ -175,11 +177,22 @@ async fn extract_stems(
 ) -> Result<Vec<AudioTrackInfo>, String> {
     let mut tracks = Vec::new();
     for (i, label) in TRACK_LABELS.iter().enumerate().take(track_count) {
-        let out = dir.join(format!("stem_{i}.m4a"));
+        let out = dir.join(format!("stem_{i}.wav"));
         let status = tokio::process::Command::new(ffmpeg)
             .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
             .arg(input)
-            .args(["-map", &format!("0:a:{i}"), "-c:a", "aac", "-b:a", "192k"])
+            .args([
+                "-map",
+                &format!("0:a:{i}"),
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-f",
+                "wav",
+            ])
             .arg(&out)
             .status()
             .await

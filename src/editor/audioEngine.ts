@@ -55,6 +55,9 @@ export class AudioTimeline {
   private master: GainNode;
   private game: GainNode;
   private mic: GainNode;
+  private analyserGame: AnalyserNode;
+  private analyserMic: AnalyserNode;
+  private levelBuf: Float32Array<ArrayBuffer>;
   private sources = new Map<string, DecodedSource>();
   private nodes: AudioBufferSourceNode[] = [];
 
@@ -78,6 +81,25 @@ export class AudioTimeline {
     this.mic = this.ctx.createGain();
     this.mic.gain.value = 1;
     this.mic.connect(this.master);
+    // Level meters (diagnostics + UI): the analysers tap the track nodes.
+    this.analyserGame = this.ctx.createAnalyser();
+    this.analyserGame.fftSize = 256;
+    this.game.connect(this.analyserGame);
+    this.analyserMic = this.ctx.createAnalyser();
+    this.analyserMic.fftSize = 256;
+    this.mic.connect(this.analyserMic);
+    this.levelBuf = new Float32Array(new ArrayBuffer(this.analyserGame.fftSize * 4));
+  }
+
+  /** Live RMS per track (0..1) for the level meters. */
+  levels(): { game: number; mic: number } {
+    const rms = (a: AnalyserNode) => {
+      a.getFloatTimeDomainData(this.levelBuf);
+      let sum = 0;
+      for (let i = 0; i < this.levelBuf.length; i++) sum += this.levelBuf[i] * this.levelBuf[i];
+      return Math.sqrt(sum / this.levelBuf.length);
+    };
+    return { game: rms(this.analyserGame), mic: rms(this.analyserMic) };
   }
 
   get sampleRate(): number {

@@ -52,7 +52,8 @@ Two separate pieces, by design:
   Game+Mic, so the editor never plays/export it: playback and export use the
   Game and Mic stems with `master x game x mic` (project-level track gains,
   live). The 3 tracks (Mix/Game/Mic) are extracted once
-  per clip to `~/.cache/MoonClip/editor/<session>/`, decoded to AudioBuffers
+  per clip to `~/.cache/MoonClip/editor/<session>/` as PCM WAV (guaranteed
+  `decodeAudioData`, no codec priming), decoded to AudioBuffers
   and scheduled on ONE `AudioContext` (`src/editor/audioEngine.ts`): every
   segment/track is an `AudioBufferSourceNode` through per-segment and per-track
   `GainNode`s, so Mix/Game/Mic are fully modifiable live and cuts between
