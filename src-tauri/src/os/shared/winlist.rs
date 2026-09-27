@@ -74,6 +74,43 @@ pub fn is_non_game_window(app_id: &str) -> bool {
     !id.is_empty() && NON_GAME_APP_IDS.contains(&id.as_str())
 }
 
+/// Apps that append their name to the window title ("Overwatch - Brave",
+/// "Overwatch — Dolphin"). KRunner reports an EMPTY app id for most of them
+/// (Brave, Steam, Discord, VS Code), so the app-id guards cannot catch a
+/// browser tab whose page happens to be titled like a registered game.
+const NON_GAME_TITLE_SUFFIXES: &[&str] = &[
+    "brave",
+    "google chrome",
+    "chromium",
+    "firefox",
+    "mozilla firefox",
+    "vivaldi",
+    "opera",
+    "microsoft edge",
+    "librewolf",
+    "zen browser",
+    "dolphin",
+    "discord",
+    "visual studio code",
+    "kwrite",
+    "kate",
+    "spotify",
+    "thunderbird",
+    "steam",
+];
+
+/// Does the title end with " - <known non-game app>"? Checked before any
+/// matching so a browser tab titled like a game never starts the buffer.
+/// Games append STATE ("Terraria - 1.4.4.9"), which is not in the list.
+fn is_non_game_title(title: &str) -> bool {
+    let normalized = norm(title);
+    NON_GAME_TITLE_SUFFIXES.iter().any(|app| {
+        normalized.ends_with(&format!(" - {app}"))
+            || normalized.ends_with(&format!(" — {app}"))
+            || normalized.ends_with(&format!(" – {app}"))
+    })
+}
+
 /// Do the registered and the desktop app ids describe the same app?
 ///
 /// The two sources disagree in format for the same window (the picker reads
@@ -121,7 +158,7 @@ fn norm(s: &str) -> String {
 /// file managers (Dolphin/Explorer browsing the game's folder) are excluded
 /// outright, and when both sides report an app id they must be compatible.
 pub fn window_matches(row: &RegisteredInput, w: &DesktopWindow) -> bool {
-    if is_non_game_window(&w.app_id) {
+    if is_non_game_window(&w.app_id) || is_non_game_title(&w.title) {
         return false;
     }
     if let Some(registered_id) = row.window_app_id.as_deref() {
@@ -199,6 +236,33 @@ mod tests {
             title: title.into(),
             app_id: String::new(),
         }
+    }
+
+    #[test]
+    fn app_name_suffixes_never_match_a_game_title() {
+        // KRunner reports an empty app id for Brave/Discord/VS Code, so the
+        // suffix check is what keeps a browser tab from faking a game.
+        let r = row("Overwatch");
+        assert!(!window_matches(&r, &win("Overwatch - Brave")));
+        assert!(!window_matches(&r, &win("Overwatch — Dolphin")));
+        assert!(!window_matches(&r, &win("Overwatch - Discord")));
+        assert!(!window_matches(&r, &win("Overwatch - Visual Studio Code")));
+        assert!(!window_matches(&r, &win("Overwatch – Firefox")));
+        // Exact title and game-state suffixes still match.
+        assert!(window_matches(&r, &win("Overwatch")));
+        assert!(window_matches(&row("Terraria"), &win("Terraria - 1.4.4.9")));
+        assert!(window_matches(&row("Steam"), &win("Steam")));
+        // The list is suffix-anchored, not substring.
+        assert!(window_matches(&row("Brave"), &win("Brave")));
+    }
+
+    #[test]
+    fn non_game_title_detection_is_case_and_space_insensitive() {
+        assert!(is_non_game_title("Overwatch   -   BRAVE"));
+        assert!(is_non_game_title("Something — dolphin"));
+        assert!(!is_non_game_title("Terraria - 1.4.4.9"));
+        assert!(!is_non_game_title("Overwatch"));
+        assert!(!is_non_game_title("My Brave Game"));
     }
 
     #[test]
