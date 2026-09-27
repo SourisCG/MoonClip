@@ -5,14 +5,18 @@ import { thumbnailUrl } from "../../lib/media";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   Clapperboard,
+  CloudUpload,
   FolderOpen,
   Gamepad2,
+  HardDriveDownload,
   Pencil,
   Scissors,
   Star,
   Trash2,
   Wand2,
 } from "lucide-react";
+import { DriveBrowser } from "./DriveBrowser";
+import { ShareDialog } from "./ShareDialog";
 import { TrimPanel } from "./TrimPanel";
 import { useClips } from "../../hooks/useClips";
 import { useRegisteredInputs } from "../../hooks/useRegisteredInputs";
@@ -121,6 +125,7 @@ interface RowActions {
   onTrim: (clip: ClipMetadata) => void;
   onAdvancedEdit: (clip: ClipMetadata) => void;
   onRename: (clip: ClipMetadata, name: string) => void;
+  onShare: (clip: ClipMetadata) => void;
   onError: (msg: string) => void;
   onSuccess: () => void;
 }
@@ -211,6 +216,13 @@ function ClipRow({
               <Pencil size={15} />
             </button>
             <button
+              onClick={() => actions.onShare(clip)}
+              className={`${iconBtn} text-cyan-300/80 hover:text-cyan-200`}
+              title={t("share.title")}
+            >
+              <CloudUpload size={15} />
+            </button>
+            <button
               onClick={() => actions.onTrim(clip)}
               className={iconBtn}
               title={t("trim.title")}
@@ -259,6 +271,8 @@ export function GalleryView({
   const [lastError, setLastError] = useState<string | null>(null);
   const [purged, setPurged] = useState<number | null>(null);
   const [trimClip, setTrimClip] = useState<ClipMetadata | null>(null);
+  const [shareClip, setShareClip] = useState<ClipMetadata | null>(null);
+  const [showDrive, setShowDrive] = useState(false);
   const [group, setGroup] = useState<string>(
     () => localStorage.getItem(GROUP_KEY) ?? "all",
   );
@@ -324,6 +338,7 @@ export function GalleryView({
         () => setLastError(null),
         (e) => fail(String(e)),
       ),
+    onShare: (clip) => setShareClip(clip),
     onError: fail,
     onSuccess: () => setLastError(null),
   };
@@ -372,6 +387,15 @@ export function GalleryView({
 
   return (
     <>
+      {shareClip && <ShareDialog clip={shareClip} onClose={() => setShareClip(null)} />}
+      {showDrive && (
+        <DriveBrowser
+          onClose={() => setShowDrive(false)}
+          onDownloaded={() => {
+            void refresh();
+          }}
+        />
+      )}
       {trimClip && (
         <TrimPanel
           clip={trimClip}
@@ -423,7 +447,14 @@ export function GalleryView({
             {purged !== null && !lastError && (
               <p className="flex-1 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
             )}
-            <button onClick={onPurge} className="ml-auto text-xs text-slate-500 transition hover:text-slate-200" title={t("gallery.purge")}>
+            <button
+              onClick={() => setShowDrive(true)}
+              className="ml-auto inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-cyan-200"
+              title={t("drive.title")}
+            >
+              <HardDriveDownload size={12} /> {t("drive.browse")}
+            </button>
+            <button onClick={onPurge} className="text-xs text-slate-500 transition hover:text-slate-200" title={t("gallery.purge")}>
               {t("gallery.purge")}
             </button>
           </div>

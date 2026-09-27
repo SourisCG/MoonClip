@@ -153,6 +153,26 @@
     "hotkey_reset": "Restablecer F9",
     "hotkey_needs_mod": "Usa un modificador (Ctrl/Alt/Shift/Super) o una tecla de función (F1–F12)."
   },
+  "share": {
+    "title": "Compartir clip",
+    "drive_upload": "Subir a Google Drive",
+    "public": "Hacer público (cualquiera con el link)",
+    "public_note": "El link funcionará para cualquier persona.",
+    "private_note": "Privado: solo tu cuenta puede verlo.",
+    "uploading": "Subiendo…",
+    "upload_done": "Subido a Drive",
+    "copy_link": "Copiar link",
+    "copied": "Link copiado"
+  },
+  "drive": {
+    "title": "Google Drive",
+    "browse": "Drive",
+    "loading": "Cargando…",
+    "empty": "No hay nada aquí todavía.",
+    "download": "Descargar",
+    "downloading": "Descargando…",
+    "root": "MoonClip"
+  },
   "accounts": {
     "title": "Cuentas",
     "drive": "Google Drive",

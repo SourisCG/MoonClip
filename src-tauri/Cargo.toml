@@ -31,7 +31,7 @@ keyring = "2"
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
 image = "0.25"
-tokio = { version = "1", features = ["process", "time", "rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["process", "time", "rt-multi-thread", "macros", "fs", "io-util"] }
 rodio = "0.21"
 # obs-websocket v5 client (control plane for the embedded OBS). No default
 # features: plain ws:// on localhost, no TLS.
@@ -42,6 +42,7 @@ tiny_http = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
 urlencoding = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }

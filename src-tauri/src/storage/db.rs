@@ -744,6 +744,29 @@ impl DbState {
         Ok(())
     }
 
+    /// Remember the Drive folder mirroring a local game folder.
+    pub fn upsert_drive_folder(&self, folder: &str, drive_id: &str, name: &str) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO drive_folders (folder, drive_id, name) VALUES (?1, ?2, ?3)
+             ON CONFLICT(folder) DO UPDATE SET drive_id = excluded.drive_id, name = excluded.name",
+            params![folder, drive_id, name],
+        )
+        .map_err(|e| format!("cannot store the drive folder: {e}"))?;
+        Ok(())
+    }
+
+    pub fn drive_folder(&self, folder: &str) -> Result<Option<String>, String> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT drive_id FROM drive_folders WHERE folder = ?1",
+            params![folder],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("cannot read the drive folder: {e}"))
+    }
+
     /// Forget the Drive mirror (disconnect): the next connect re-creates it.
     pub fn clear_drive_folders(&self) -> Result<(), String> {
         let conn = self.lock()?;

@@ -6,6 +6,7 @@
 //! Config lives OUTSIDE the repository: `social.json` in the app data dir
 //! (env vars win over the file). See `social.example.json`.
 
+pub mod commands;
 pub mod drive;
 pub mod google;
 pub mod oauth;
@@ -153,7 +154,8 @@ pub async fn connect_google_drive(app: AppHandle) -> Result<SocialStatus, String
     let access = google::access_token(google::Provider::Drive, &client).await?;
     {
         let db = app.state::<DbState>();
-        drive::ensure_root_folder(&db, &access).await?;
+        let drive_client = drive::DriveClient::new(access);
+        drive::ensure_root_folder(&db, &drive_client).await?;
     }
     social_status(app)
 }

@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::storage::DbState;
 
 const API: &str = "https://www.googleapis.com/drive/v3";
+const UPLOAD_API: &str = "https://www.googleapis.com/upload/drive/v3";
 const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const ROOT_FOLDER_NAME: &str = "MoonClip";
+/// Resumable upload chunk (Google requires multiples of 256 KiB).
+const CHUNK: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriveFile {
@@ -34,6 +37,7 @@ pub struct DriveClient {
     http: reqwest::Client,
     token: String,
     api: String,
+    upload_api: String,
 }
 
 impl DriveClient {
@@ -42,6 +46,7 @@ impl DriveClient {
             http: reqwest::Client::new(),
             token: token.into(),
             api: API.to_string(),
+            upload_api: UPLOAD_API.to_string(),
         }
     }
 
@@ -51,8 +56,247 @@ impl DriveClient {
         Self {
             http: reqwest::Client::new(),
             token: token.into(),
-            api: base,
+            api: base.clone(),
+            upload_api: base,
         }
+    }
+
+    /// Raw fields (webViewLink and friends are not in DriveFile).
+    pub async fn raw_file(
+        &self,
+        file_id: &str,
+        fields: &str,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!(
+            "{}/files/{}?fields={}",
+            self.api,
+            urlencoding::encode(file_id),
+            urlencoding::encode(fields),
+        );
+        self.get_json(&url).await
+    }
+
+    pub async fn get_file(&self, file_id: &str, fields: &str) -> Result<DriveFile, String> {
+        let url = format!(
+            "{}/files/{}?fields={}",
+            self.api,
+            urlencoding::encode(file_id),
+            urlencoding::encode(fields),
+        );
+        let value = self.get_json(&url).await?;
+        serde_json::from_value(value).map_err(|e| format!("unexpected file: {e}"))
+    }
+
+    /// Direct children of a folder (optionally folders only).
+    pub async fn list_children(
+        &self,
+        parent: &str,
+        folders_only: bool,
+    ) -> Result<Vec<DriveFile>, String> {
+        let escaped = parent.replace('\'', "\\'");
+        let mut query = format!("'{escaped}' in parents and trashed = false");
+        if folders_only {
+            query.push_str(&format!(" and mimeType = '{FOLDER_MIME}'"));
+        }
+        self.list(
+            &query,
+            "files(id,name,mimeType,size,modifiedTime,thumbnailLink)",
+        )
+        .await
+    }
+
+    /// First file with this exact name inside `parent` (for dedupe).
+    pub async fn find_file(
+        &self,
+        name: &str,
+        parent: &str,
+    ) -> Result<Option<DriveFile>, String> {
+        let escaped = name.replace('\'', "\\'");
+        let query = format!(
+            "name = '{escaped}' and '{parent}' in parents and trashed = false"
+        );
+        let files = self
+            .list(&query, "files(id,name,mimeType,size,modifiedTime)")
+            .await?;
+        Ok(files.into_iter().next())
+    }
+
+    /// Anyone-with-the-link read access (Medal-style public link).
+    pub async fn set_public(&self, file_id: &str) -> Result<(), String> {
+        let response = self
+            .http
+            .post(format!("{}/files/{}/permissions", self.api, file_id))
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({"role": "reader", "type": "anyone"}))
+            .send()
+            .await
+            .map_err(|e| format!("Drive request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("cannot make the file public ({status}): {text}"));
+        }
+        Ok(())
+    }
+
+    /// Resumable upload with progress. Retries a chunk once on transport
+    /// errors and resumes from the server-reported range on 308 responses.
+    pub async fn upload_file(
+        &self,
+        path: &std::path::Path,
+        name: &str,
+        parent: &str,
+        mime: &str,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<DriveFile, String> {
+        use tokio::io::AsyncReadExt;
+        let total = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| format!("cannot stat {}: {e}", path.display()))?
+            .len();
+        let session = self.initiate_upload(name, parent, mime, total).await?;
+        let mut file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        let mut buf = vec![0u8; CHUNK];
+        let mut sent = 0u64;
+        while sent < total {
+            let n = file
+                .read(&mut buf)
+                .await
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            if n == 0 {
+                break;
+            }
+            let chunk_base = sent;
+            let chunk_end = chunk_base + n as u64;
+            let mut offset = 0usize;
+            let mut retried = false;
+            loop {
+                let response = self
+                    .http
+                    .put(&session)
+                    .bearer_auth(&self.token)
+                    .header(
+                        "Content-Range",
+                        format!("bytes {}-{}/{total}", chunk_base + offset as u64, chunk_end - 1),
+                    )
+                    .body(buf[offset..n].to_vec())
+                    .send()
+                    .await;
+                match response {
+                    Ok(r) if r.status().as_u16() == 308 => {
+                        // Resume from what the server actually received: the
+                        // unsent tail of THIS chunk is resent with a new range.
+                        let acked = r
+                            .headers()
+                            .get("range")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.strip_prefix("bytes=0-"))
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .map(|last| last + 1)
+                            .unwrap_or(chunk_end);
+                        progress(acked.min(total), total);
+                        if acked >= chunk_end {
+                            sent = chunk_end;
+                            break;
+                        }
+                        offset = (acked.saturating_sub(chunk_base)) as usize;
+                    }
+                    Ok(r) if r.status().is_success() => {
+                        progress(total, total);
+                        let text = r.text().await.unwrap_or_default();
+                        return serde_json::from_str(&text)
+                            .map_err(|e| format!("cannot decode the uploaded file: {e}"));
+                    }
+                    Ok(r) => {
+                        let status = r.status();
+                        let text = r.text().await.unwrap_or_default();
+                        return Err(format!("upload failed ({status}): {text}"));
+                    }
+                    Err(e) if !retried => {
+                        retried = true;
+                        eprintln!("[moonclip] upload chunk retry: {e}");
+                    }
+                    Err(e) => return Err(format!("upload failed: {e}")),
+                }
+            }
+        }
+        Err("upload finished without a Drive response".into())
+    }
+
+    async fn initiate_upload(
+        &self,
+        name: &str,
+        parent: &str,
+        mime: &str,
+        total: u64,
+    ) -> Result<String, String> {
+        let response = self
+            .http
+            .post(format!(
+                "{}/files?uploadType=resumable&fields=id,name,mimeType,size,modifiedTime",
+                self.upload_api
+            ))
+            .bearer_auth(&self.token)
+            .header("X-Upload-Content-Type", mime)
+            .header("X-Upload-Content-Length", total)
+            .json(&serde_json::json!({"name": name, "parents": [parent]}))
+            .send()
+            .await
+            .map_err(|e| format!("Drive request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("cannot start the upload ({status}): {text}"));
+        }
+        response
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .ok_or_else(|| "Drive did not return an upload session".to_string())
+    }
+
+    /// Stream a file to `dest` with progress.
+    pub async fn download_file(
+        &self,
+        file_id: &str,
+        dest: &std::path::Path,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<(), String> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let response = self
+            .http
+            .get(format!("{}/files/{}?alt=media", self.api, file_id))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| format!("Drive request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("download failed ({status}): {text}"));
+        }
+        let total = response.content_length().unwrap_or(0);
+        let mut out = tokio::fs::File::create(dest)
+            .await
+            .map_err(|e| format!("cannot create {}: {e}", dest.display()))?;
+        let mut stream = response.bytes_stream();
+        let mut sent = 0u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("download interrupted: {e}"))?;
+            out.write_all(&chunk)
+                .await
+                .map_err(|e| format!("cannot write {}: {e}", dest.display()))?;
+            sent += chunk.len() as u64;
+            progress(sent, total);
+        }
+        out.flush()
+            .await
+            .map_err(|e| format!("cannot flush {}: {e}", dest.display()))?;
+        Ok(())
     }
 
     async fn get_json(&self, url: &str) -> Result<serde_json::Value, String> {
@@ -149,8 +393,7 @@ impl DriveClient {
 }
 
 /// Ensure the `MoonClip` root folder exists and persist its id.
-pub async fn ensure_root_folder(db: &DbState, access_token: &str) -> Result<String, String> {
-    let client = DriveClient::new(access_token);
+pub async fn ensure_root_folder(db: &DbState, client: &DriveClient) -> Result<String, String> {
     let id = client.root_folder_id().await?;
     db.set_setting("drive_root_folder_id", &id)?;
     Ok(id)
@@ -187,5 +430,102 @@ mod tests {
         let folder = client.ensure_folder("MoonClip", None).await.unwrap();
         assert_eq!(folder.id, "folder-1");
         handle.join().unwrap();
+    }
+
+    /// A partial 308 must resume exactly where the server stopped, not drop
+    /// the rest of the chunk.
+    #[tokio::test]
+    async fn upload_resumes_from_the_server_reported_range() {
+        let dir = std::env::temp_dir().join(format!(
+            "moonclip-upload-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("clip.mp4");
+        std::fs::write(&file, b"0123456789ab").unwrap(); // 12 bytes
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            // 1) initiate -> 200 + Location
+            let init = server.recv().unwrap();
+            assert_eq!(init.method(), &tiny_http::Method::Post);
+            init.respond(
+                tiny_http::Response::empty(200).with_header(
+                    tiny_http::Header::from_bytes(
+                        &b"Location"[..],
+                        format!("http://127.0.0.1:{port}/session").into_bytes(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+            // 2) first PUT: only 4 bytes stored -> 308 with Range
+            let mut first = server.recv().unwrap();
+            let mut body = Vec::new();
+            first.as_reader().read_to_end(&mut body).unwrap();
+            assert_eq!(body, b"0123456789ab");
+            first
+                .respond(
+                    tiny_http::Response::empty(308)
+                        .with_header(
+                            tiny_http::Header::from_bytes(&b"Range"[..], &b"bytes=0-3"[..])
+                                .unwrap(),
+                        ),
+                )
+                .unwrap();
+            // 3) second PUT: must resume at byte 4 with the tail
+            let mut second = server.recv().unwrap();
+            let range = second
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Content-Range"))
+                .map(|h| h.value.as_str().to_string())
+                .unwrap();
+            assert_eq!(range, "bytes 4-11/12");
+            let mut tail = Vec::new();
+            second.as_reader().read_to_end(&mut tail).unwrap();
+            assert_eq!(tail, b"456789ab");
+            second
+                .respond(tiny_http::Response::from_string(
+                    r#"{"id":"f1","name":"clip.mp4","mimeType":"video/mp4"}"#,
+                ))
+                .unwrap();
+        });
+        let client = DriveClient::with_base(format!("http://127.0.0.1:{port}"), "tok");
+        let uploaded = client
+            .upload_file(&file, "clip.mp4", "parent-1", "video/mp4", |_, _| {})
+            .await
+            .unwrap();
+        assert_eq!(uploaded.id, "f1");
+        handle.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn download_streams_the_body_to_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "moonclip-download-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("out.mp4");
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let request = server.recv().unwrap();
+            assert!(request.url().contains("alt=media"));
+            request
+                .respond(tiny_http::Response::from_string("hello-drive"))
+                .unwrap();
+        });
+        let client = DriveClient::with_base(format!("http://127.0.0.1:{port}"), "tok");
+        client
+            .download_file("file-1", &dest, |_, _| {})
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hello-drive");
+        handle.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

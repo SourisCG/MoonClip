@@ -3008,6 +3008,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
+ "futures-util",
  "image",
  "keyring",
  "nix 0.29.0",
