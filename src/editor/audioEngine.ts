@@ -190,6 +190,11 @@ export class AudioTimeline {
       const segEnd =
         seg.timelineStartMs + Math.max(0, seg.outMs - seg.inMs) / Math.max(0.05, seg.speed);
       if (segEnd <= fromMs) continue;
+      diag(
+        `seg ${seg.id.slice(0, 8)} src=${seg.sourceClipId.slice(0, 8)} ` +
+          `tl=${Math.round(seg.timelineStartMs)} in=${Math.round(seg.inMs)} ` +
+          `out=${Math.round(seg.outMs)} speed=${seg.speed}`,
+      );
       // Multi-stem sources: Game/Mic only (the Mix stem duplicates them).
       const wanted =
         decoded.stems.length > 1

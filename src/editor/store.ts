@@ -55,6 +55,23 @@ interface EditorState {
 
 const clamped = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
 
+/** Enforce non-overlapping segments: earlier starts win; on an exact tie the
+ *  just-dropped segment (`pinnedId`) stays and the other is pushed right.
+ *  Overlaps made two clips play at once (doubled audio) while the preview
+ *  could only show one of them. */
+function resolveOverlaps(segments: Segment[], pinnedId?: string) {
+  segments.sort(
+    (a, b) =>
+      a.timelineStartMs - b.timelineStartMs ||
+      (a.id === pinnedId ? -1 : b.id === pinnedId ? 1 : 0),
+  );
+  let cursor = 0;
+  for (const seg of segments) {
+    if (seg.timelineStartMs < cursor) seg.timelineStartMs = cursor;
+    cursor = seg.timelineStartMs + segmentDurationMs(seg);
+  }
+}
+
 export const useEditorStore = create<EditorState>()(
   temporal(
     immer((set) => ({
@@ -132,6 +149,7 @@ export const useEditorStore = create<EditorState>()(
             vignette: 0,
           };
           p.segments.push(seg);
+          resolveOverlaps(p.segments, seg.id);
           s.selection = { kind: "segment", id: seg.id };
         }),
 
@@ -191,14 +209,18 @@ export const useEditorStore = create<EditorState>()(
 
       moveSegment: (id, timelineStartMs) =>
         set((s) => {
-          const seg = s.project?.segments.find((x) => x.id === id);
-          if (seg) seg.timelineStartMs = Math.max(0, Math.round(timelineStartMs));
+          const p = s.project;
+          const seg = p?.segments.find((x) => x.id === id);
+          if (!p || !seg) return;
+          seg.timelineStartMs = Math.max(0, Math.round(timelineStartMs));
+          resolveOverlaps(p.segments, id);
         }),
 
       trimSegment: (id, edge, timelineMs) =>
         set((s) => {
-          const seg = s.project?.segments.find((x) => x.id === id);
-          if (!seg) return;
+          const p = s.project;
+          const seg = p?.segments.find((x) => x.id === id);
+          if (!p || !seg) return;
           const speed = Math.max(0.05, seg.speed);
           if (edge === "start") {
             // Timeline ms -> source ms at the new start; keep >=30 frames-ish.
@@ -216,6 +238,7 @@ export const useEditorStore = create<EditorState>()(
             );
             seg.outMs = nextOut;
           }
+          resolveOverlaps(p.segments, id);
         }),
 
       splitAtPlayhead: () =>

@@ -180,7 +180,7 @@ function Playhead() {
 function Inner({
   rows,
   stems,
-  plate,
+  plates,
   visibleEnd,
   onSeek,
   onScrubStart,
@@ -188,7 +188,7 @@ function Inner({
 }: {
   rows: (RowDefinition & { label?: string })[];
   stems: { label: string; peaks: number[][] }[];
-  plate: { width: number; offset: number };
+  plates: { id: string; left: number; width: number; from: number; to: number }[];
   visibleEnd: number;
   onSeek: (ms: number) => void;
   onScrubStart: () => void;
@@ -264,25 +264,18 @@ function Inner({
             {idx >= audioStart &&
               (() => {
                 const stem = stems[idx - audioStart];
+                const color = ["#0891b2", "#22c55e", "#f59e0b"][idx - audioStart] ?? "#0891b2";
                 return (
-                  <div
-                    className={
-                      stem
-                        ? "h-full"
-                        : "h-full w-full opacity-15"
-                    }
-                    style={
-                      stem && plate.width > 0
-                        ? { width: plate.width, marginLeft: plate.offset }
-                        : undefined
-                    }
-                  >
-                    <WaveCanvas
-                      peaks={stem?.peaks}
-                      color={
-                        ["#0891b2", "#22c55e", "#f59e0b"][idx - audioStart] ?? "#0891b2"
-                      }
-                    />
+                  <div className="relative h-full w-full">
+                    {plates.map((pl) => (
+                      <div
+                        key={pl.id}
+                        className="absolute bottom-0 top-0 overflow-hidden"
+                        style={{ left: pl.left, width: pl.width }}
+                      >
+                        <WaveCanvas peaks={stem?.peaks} color={color} from={pl.from} to={pl.to} />
+                      </div>
+                    ))}
                   </div>
                 );
               })()}
@@ -299,7 +292,7 @@ function Inner({
 export function TimelineView({
   audioTracks,
   stems,
-  plate,
+  plates,
   visibleEnd,
   onVisibleEnd,
   onSeek,
@@ -308,7 +301,7 @@ export function TimelineView({
 }: {
   audioTracks: EditorAudioTrack[];
   stems: { label: string; peaks: number[][] }[];
-  plate: { width: number; offset: number };
+  plates: { id: string; left: number; width: number; from: number; to: number }[];
   visibleEnd: number;
   onVisibleEnd: (ms: number) => void;
   onSeek: (ms: number) => void;
@@ -371,7 +364,7 @@ export function TimelineView({
       <Inner
         rows={rows}
         stems={stems}
-        plate={plate}
+        plates={plates}
         visibleEnd={visibleEnd}
         onSeek={onSeek}
         onScrubStart={onScrubStart}

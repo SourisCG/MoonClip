@@ -1,13 +1,19 @@
 import { useEffect, useRef } from "react";
 
 /** Draws precomputed min/max peaks on a canvas (no media element, no own
- *  progress: the timeline playhead is the only position indicator). */
+ *  progress: the timeline playhead is the only position indicator).
+ *  `from`/`to` are fractions of the source: a segment draws only its own
+ *  [inMs, outMs] window, so each clip gets a bounded canvas. */
 export function WaveCanvas({
   peaks,
   color = "#0891b2",
+  from = 0,
+  to = 1,
 }: {
   peaks: number[][] | undefined;
   color?: string;
+  from?: number;
+  to?: number;
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
@@ -30,15 +36,19 @@ export function WaveCanvas({
       if (!peaks || peaks.length === 0 || peaks[0].length === 0) return;
       const chans = peaks.length;
       const per = peaks[0].length / 2;
-      const barW = Math.max(1, width / per);
+      const first = Math.max(0, Math.min(per - 1, Math.floor(from * per)));
+      const last = Math.max(first + 1, Math.min(per, Math.ceil(to * per)));
+      const count = last - first;
+      const barW = Math.max(1, width / count);
       const band = height / chans;
       ctx.fillStyle = color;
       for (let c = 0; c < chans; c++) {
         const center = (c + 0.5) * band;
         const half = band / 2 - 1;
-        for (let p = 0; p < per; p++) {
-          const max = peaks[c][p * 2] ?? 0;
-          const min = peaks[c][p * 2 + 1] ?? 0;
+        for (let p = 0; p < count; p++) {
+          const idx = first + p;
+          const max = peaks[c][idx * 2] ?? 0;
+          const min = peaks[c][idx * 2 + 1] ?? 0;
           const top = center - max * half;
           const bottom = center - min * half;
           ctx.fillRect(
@@ -54,7 +64,7 @@ export function WaveCanvas({
     const ro = new ResizeObserver(draw);
     if (parent) ro.observe(parent);
     return () => ro.disconnect();
-  }, [peaks, color]);
+  }, [peaks, color, from, to]);
 
   return <canvas ref={ref} className="block h-full w-full" />;
 }

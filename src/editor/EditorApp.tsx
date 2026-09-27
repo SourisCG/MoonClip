@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   Copy,
   Download,
-  Film,
   Loader2,
   Pause,
   Play,
@@ -468,18 +467,28 @@ export default function EditorApp({
     return () => ro.disconnect();
   }, [session]);
 
-  const plate = useMemo(() => {
-    if (!project || !waveSourceId) return { width: 0, offset: 0 };
+  // One waveform plate PER SEGMENT (a source can appear many times): the box
+  // is the segment's place on the timeline and the canvas draws only that
+  // segment's [inMs, outMs] window of the source, so every clip gets its own
+  // waveform (a single plate per source left later clips blank).
+  const plates = useMemo(() => {
+    if (!project || !waveSourceId) return [];
     const source = useEditorStore.getState().sources[waveSourceId];
-    const first = project.segments
-      .filter((s) => s.sourceClipId === waveSourceId)
-      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
-    if (!source || !first || laneWidth <= 0) return { width: 0, offset: 0 };
+    if (!source || laneWidth <= 0) return [];
     const pxPerMs = laneWidth / Math.max(1000, visibleMs);
-    return {
-      width: Math.max(8, source.durationMs * pxPerMs),
-      offset: (first.timelineStartMs - first.inMs) * pxPerMs,
-    };
+    return project.segments
+      .filter((s) => s.sourceClipId === waveSourceId)
+      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)
+      .map((seg) => {
+        const dur = Math.max(1, source.durationMs);
+        return {
+          id: seg.id,
+          left: seg.timelineStartMs * pxPerMs,
+          width: Math.max(2, segmentDurationMs(seg) * pxPerMs),
+          from: Math.min(1, Math.max(0, seg.inMs / dur)),
+          to: Math.min(1, Math.max(0, seg.outMs / dur)),
+        };
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, waveSourceId, laneWidth, visibleMs, session]);
 
@@ -532,6 +541,7 @@ export default function EditorApp({
       const needsSrc = videoSegRef.current?.sourceClipId !== seg.sourceClipId || !v.src;
       if (needsSrc) {
         videoSegRef.current = seg;
+        lastCorrectionRef.current = performance.now();
         v.playbackRate = Math.max(0.25, Math.min(4, seg.speed));
         v.src = source.videoUrl;
         v.load();
@@ -546,6 +556,12 @@ export default function EditorApp({
       if (videoSegRef.current?.id !== seg.id) {
         videoSegRef.current = seg;
         v.playbackRate = Math.max(0.25, Math.min(4, seg.speed));
+        if (playing) {
+          // Same-source cut: hard-seek right away instead of waiting for the
+          // 1 s drift correction, so the picture follows the audio instantly.
+          lastCorrectionRef.current = performance.now();
+          scheduleVideoSeek(targetSec);
+        }
       }
       if (!playing) {
         // Paused scrub: follow the playhead, coalesced per frame.
@@ -615,7 +631,9 @@ export default function EditorApp({
       const wasPlaying = useEditorStore.getState().playing;
       useEditorStore.getState().setPlayhead(target);
       const segUnder = segmentAt(p.segments, target);
-      useEditorStore.getState().setActiveSource(segUnder?.sourceClipId ?? null);
+      const srcId = segUnder?.sourceClipId ?? null;
+      useEditorStore.getState().setActiveSource(srcId);
+      setStems(engineRef.current?.peaksFor(srcId ?? "") ?? []);
       syncVideo(target, wasPlaying);
       void engineRef.current?.seek(target, p.segments, wasPlaying, trackGains);
     },
@@ -648,6 +666,7 @@ export default function EditorApp({
       const srcId = seg?.sourceClipId ?? null;
       if (srcId !== useEditorStore.getState().activeSourceId) {
         useEditorStore.getState().setActiveSource(srcId);
+        setStems(engine?.peaksFor(srcId ?? "") ?? []);
       }
       if (!videoClock) syncVideo(ms, true);
       const end = projectDurationMs(p);
@@ -907,37 +926,76 @@ export default function EditorApp({
       <div className="flex min-h-0 flex-1">
         {/* Tool rail */}
         <aside className="flex w-56 shrink-0 flex-col gap-3 overflow-y-auto border-r border-white/10 p-3">
+          {/* Audio first: it is the panel people actually touch, and it must
+              never be pushed off-screen by the clip-adjustment sliders. */}
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            <Film size={12} /> {t("editor.add_clip")}
+            <Volume2 size={12} /> {t("editor.audio")}
           </p>
-          <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
-            {library.filter((c) => c.exists).length === 0 && (
-              <p className="text-[10px] text-slate-600">{t("editor.no_clips")}</p>
-            )}
-            {library
-              .filter((c) => c.exists)
-              .slice(0, 40)
-              .map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => void addClip(c)}
-                  className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-2 py-1 text-left text-[11px] text-slate-200 transition hover:bg-cyan-500/15"
-                  title={c.file_name}
-                >
-                  <Plus size={12} className="shrink-0 text-cyan-300" />
-                  <span className="min-w-0 flex-1 truncate">{c.game_title}</span>
-                  <span className="font-mono text-[10px] text-slate-500">
-                    {fmt(c.duration_ms)}
+          <p className="text-[10px] leading-snug text-slate-600">{t("editor.mix_hint")}</p>
+          <p className="font-mono text-[10px] text-slate-500">
+            {videoClock
+              ? t("editor.mode_video")
+              : t("editor.mode_stems", {
+                  stems: stems.map((s) => s.label).join("+") || "—",
+                })}
+          </p>
+          <LevelMeters engineRef={engineRef} labels={[t("editor.game"), t("editor.mic")]} />
+          {project.gainMaster <= 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100">
+              <span className="min-w-0 flex-1">{t("editor.master_zero")}</span>
+              <button
+                onClick={() =>
+                  useEditorStore.getState().setProjectGain("gainMaster", 1)
+                }
+                className="rounded border border-amber-300/40 bg-amber-300/20 px-2 py-0.5 font-semibold"
+              >
+                {t("editor.master_reset")}
+              </button>
+            </div>
+          )}
+          {trackSliders.map(([field, label]) => {
+            const disabled = field !== "gainMaster" && stems.length <= 1;
+            return (
+              <label
+                key={field}
+                className={`space-y-1 text-[11px] ${disabled ? "opacity-40" : "text-slate-400"}`}
+              >
+                <span className="flex items-center gap-1">
+                  {label}
+                  <span className="ml-auto font-mono">
+                    {Math.round(project[field] * 100)}%
                   </span>
-                </button>
-              ))}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  disabled={disabled}
+                  value={Math.round(project[field] * 100)}
+                  onChange={(e) =>
+                    useEditorStore
+                      .getState()
+                      .setProjectGain(field, Number(e.target.value) / 100)
+                  }
+                  className="w-full accent-cyan-400"
+                />
+              </label>
+            );
+          })}
+          <div className="mt-1 flex gap-2">
+            <button
+              onClick={() => setShowLibrary(true)}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+            >
+              <Plus size={13} /> {t("editor.add_clip")}
+            </button>
+            <button
+              onClick={addText}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-400/20"
+            >
+              <Type size={13} /> {t("editor.add_text")}
+            </button>
           </div>
-          <button
-            onClick={addText}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-400/20"
-          >
-            <Type size={13} /> {t("editor.add_text")}
-          </button>
 
           {selectedOverlay && (
             <div className="space-y-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-2">
@@ -1046,8 +1104,11 @@ export default function EditorApp({
           )}
 
           {selectedSegment && (
-            <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-2">
-              <p className="text-[11px] font-semibold text-slate-300">{t("editor.adjust")}</p>
+            <details className="rounded-lg border border-white/10 bg-black/20">
+              <summary className="cursor-pointer select-none px-2 py-1.5 text-[11px] font-semibold text-slate-300 [&::-webkit-details-marker]:hidden">
+                {t("editor.adjust")}
+              </summary>
+              <div className="space-y-2 p-2 pt-0">
               <Adjust
                 label={t("editor.zoom")}
                 value={selectedSegment.zoom}
@@ -1207,63 +1268,10 @@ export default function EditorApp({
               >
                 {t("editor.reset")}
               </button>
-            </div>
+              </div>
+            </details>
           )}
 
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            <Volume2 size={12} /> {t("editor.audio")}
-          </p>
-          <p className="text-[10px] leading-snug text-slate-600">{t("editor.mix_hint")}</p>
-          <p className="font-mono text-[10px] text-slate-500">
-            {videoClock
-              ? t("editor.mode_video")
-              : t("editor.mode_stems", {
-                  stems: stems.map((s) => s.label).join("+") || "—",
-                })}
-          </p>
-          <LevelMeters engineRef={engineRef} labels={[t("editor.game"), t("editor.mic")]} />
-          {project.gainMaster <= 0 && (
-            <div className="flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100">
-              <span className="min-w-0 flex-1">{t("editor.master_zero")}</span>
-              <button
-                onClick={() =>
-                  useEditorStore.getState().setProjectGain("gainMaster", 1)
-                }
-                className="rounded border border-amber-300/40 bg-amber-300/20 px-2 py-0.5 font-semibold"
-              >
-                {t("editor.master_reset")}
-              </button>
-            </div>
-          )}
-          {trackSliders.map(([field, label]) => {
-            const disabled = field !== "gainMaster" && stems.length <= 1;
-            return (
-              <label
-                key={field}
-                className={`space-y-1 text-[11px] ${disabled ? "opacity-40" : "text-slate-400"}`}
-              >
-                <span className="flex items-center gap-1">
-                  {label}
-                  <span className="ml-auto font-mono">
-                    {Math.round(project[field] * 100)}%
-                  </span>
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={200}
-                  disabled={disabled}
-                  value={Math.round(project[field] * 100)}
-                  onChange={(e) =>
-                    useEditorStore
-                      .getState()
-                      .setProjectGain(field, Number(e.target.value) / 100)
-                  }
-                  className="w-full accent-cyan-400"
-                />
-              </label>
-            );
-          })}
           <p className="mt-auto text-[10px] leading-relaxed text-slate-600">
             {t("editor.shortcuts")}
           </p>
@@ -1281,12 +1289,16 @@ export default function EditorApp({
               }}
               onClick={toggle}
             >
+              {/* Transport state is owned by play()/pause() only: the video
+                  fires pause on every src swap/load, and reacting to it froze
+                  the playhead while the audio engine kept playing. */}
               <video
                 ref={videoRef}
                 muted
                 preload="auto"
-                onPlay={() => useEditorStore.getState().setPlaying(true)}
-                onPause={() => useEditorStore.getState().setPlaying(false)}
+                onEnded={() => {
+                  if (videoClock) pause();
+                }}
                 className="h-full w-full cursor-pointer object-contain"
                 style={
                   selectedSegment
@@ -1471,7 +1483,7 @@ export default function EditorApp({
         <TimelineView
           audioTracks={session.audioTracks}
           stems={stems}
-          plate={plate}
+          plates={plates}
           visibleEnd={visibleMs}
           onVisibleEnd={(ms) => setVisibleMs(Math.max(1000, ms))}
           onSeek={seek}
