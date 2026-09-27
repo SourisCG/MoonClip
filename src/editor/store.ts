@@ -1,19 +1,41 @@
 import { create } from "zustand";
 import { temporal } from "zundo";
 import { immer } from "zustand/middleware/immer";
-import type { EditProject, OutputSettings, Segment } from "./types";
-import { projectDurationMs, segmentDurationMs } from "./types";
+import type {
+  EditProject,
+  EditorSourceInfo,
+  OutputSettings,
+  Overlay,
+  Segment,
+} from "./types";
+import { defaultTextOverlay, projectDurationMs, segmentDurationMs } from "./types";
+
+export type Selection =
+  | { kind: "segment"; id: string }
+  | { kind: "overlay"; id: string }
+  | null;
 
 interface EditorState {
   /** Loaded session result; null until the backend session is open. */
   project: EditProject | null;
-  selectedSegmentId: string | null;
+  /** Media (video URL + stems) per source clip; not part of undo. */
+  sources: Record<string, EditorSourceInfo>;
+  selection: Selection;
   playheadMs: number;
   playing: boolean;
   /** Timeline zoom, pixels per second. */
   pxPerSecond: number;
 
   setProject: (project: EditProject) => void;
+  setSources: (sources: EditorSourceInfo[]) => void;
+  upsertSource: (source: EditorSourceInfo) => void;
+  addSegmentFromSource: (source: EditorSourceInfo, atMs: number | null) => void;
+  addTextOverlay: (startMs: number, durationMs: number) => void;
+  updateOverlay: (id: string, patch: Partial<Overlay>) => void;
+  moveOverlay: (id: string, startMs: number) => void;
+  resizeOverlay: (id: string, durationMs: number) => void;
+  deleteOverlay: (id: string) => void;
+  select: (selection: Selection) => void;
   setOutput: (patch: Partial<OutputSettings>) => void;
   updateSegment: (id: string, patch: Partial<Segment>) => void;
   moveSegment: (id: string, timelineStartMs: number) => void;
@@ -21,7 +43,6 @@ interface EditorState {
   splitAtPlayhead: () => void;
   duplicateSegment: (id: string) => void;
   deleteSegment: (id: string) => void;
-  selectSegment: (id: string | null) => void;
   setPlayhead: (ms: number) => void;
   setPlaying: (playing: boolean) => void;
   setPxPerSecond: (px: number) => void;
@@ -34,7 +55,8 @@ export const useEditorStore = create<EditorState>()(
   temporal(
     immer((set) => ({
       project: null,
-      selectedSegmentId: null,
+      sources: {},
+      selection: null,
       playheadMs: 0,
       playing: false,
       pxPerSecond: 60,
@@ -42,8 +64,81 @@ export const useEditorStore = create<EditorState>()(
       setProject: (project) =>
         set((s) => {
           s.project = project;
-          s.selectedSegmentId = project.segments[0]?.id ?? null;
+          s.selection = project.segments[0]
+            ? { kind: "segment", id: project.segments[0].id }
+            : null;
           s.playheadMs = 0;
+        }),
+
+      setSources: (sources) =>
+        set((s) => {
+          s.sources = Object.fromEntries(sources.map((x) => [x.clipId, x]));
+        }),
+
+      upsertSource: (source) =>
+        set((s) => {
+          s.sources[source.clipId] = source;
+        }),
+
+      addSegmentFromSource: (source, atMs) =>
+        set((s) => {
+          const p = s.project;
+          if (!p) return;
+          const end = p.segments.reduce(
+            (max, seg) => Math.max(max, seg.timelineStartMs + segmentDurationMs(seg)),
+            0,
+          );
+          const seg: Segment = {
+            id: crypto.randomUUID(),
+            sourceClipId: source.clipId,
+            inMs: 0,
+            outMs: source.durationMs,
+            timelineStartMs: atMs ?? end,
+            speed: 1,
+            freezeAtMs: 0,
+            freezeMs: 0,
+            gainMix: 1,
+            gainGame: 1,
+            gainMic: 1,
+          };
+          p.segments.push(seg);
+          s.selection = { kind: "segment", id: seg.id };
+        }),
+
+      addTextOverlay: (startMs, durationMs) =>
+        set((s) => {
+          const p = s.project;
+          if (!p) return;
+          const overlay = defaultTextOverlay(startMs, durationMs);
+          p.overlays.push(overlay);
+          s.selection = { kind: "overlay", id: overlay.id };
+        }),
+
+      updateOverlay: (id, patch) =>
+        set((s) => {
+          const o = s.project?.overlays.find((x) => x.id === id);
+          if (o) Object.assign(o, patch);
+        }),
+
+      moveOverlay: (id, startMs) =>
+        set((s) => {
+          const o = s.project?.overlays.find((x) => x.id === id);
+          if (o) o.startMs = Math.max(0, Math.round(startMs));
+        }),
+
+      resizeOverlay: (id, durationMs) =>
+        set((s) => {
+          const o = s.project?.overlays.find((x) => x.id === id);
+          if (o) o.durationMs = Math.max(200, Math.round(durationMs));
+        }),
+
+      deleteOverlay: (id) =>
+        set((s) => {
+          if (!s.project) return;
+          s.project.overlays = s.project.overlays.filter((x) => x.id !== id);
+          if (s.selection?.kind === "overlay" && s.selection.id === id) {
+            s.selection = null;
+          }
         }),
 
       setOutput: (patch) =>
@@ -109,7 +204,7 @@ export const useEditorStore = create<EditorState>()(
           };
           p.segments[idx] = { ...seg, outMs: sourceSplit };
           p.segments.splice(idx + 1, 0, right);
-          s.selectedSegmentId = right.id;
+          s.selection = { kind: "segment", id: right.id };
         }),
 
       duplicateSegment: (id) =>
@@ -123,21 +218,23 @@ export const useEditorStore = create<EditorState>()(
             timelineStartMs: seg.timelineStartMs + segmentDurationMs(seg),
           };
           p.segments.push(copy);
-          s.selectedSegmentId = copy.id;
+          s.selection = { kind: "segment", id: copy.id };
         }),
 
       deleteSegment: (id) =>
         set((s) => {
           if (!s.project) return;
           s.project.segments = s.project.segments.filter((x) => x.id !== id);
-          if (s.selectedSegmentId === id) {
-            s.selectedSegmentId = s.project.segments[0]?.id ?? null;
+          if (s.selection?.kind === "segment" && s.selection.id === id) {
+            s.selection = s.project.segments[0]
+              ? { kind: "segment", id: s.project.segments[0].id }
+              : null;
           }
         }),
 
-      selectSegment: (id) =>
+      select: (selection) =>
         set((s) => {
-          s.selectedSegmentId = id;
+          s.selection = selection;
         }),
 
       setPlayhead: (ms) =>
@@ -158,7 +255,8 @@ export const useEditorStore = create<EditorState>()(
       resetEditor: () =>
         set((s) => {
           s.project = null;
-          s.selectedSegmentId = null;
+          s.sources = {};
+          s.selection = null;
           s.playheadMs = 0;
           s.playing = false;
         }),

@@ -537,6 +537,7 @@ pub fn run() {
             commands::editor_close,
             commands::editor_load_project,
             commands::editor_save_project,
+            commands::editor_add_source,
             commands::editor_export,
             commands::editor_cancel_export,
             commands::open_clip_external,

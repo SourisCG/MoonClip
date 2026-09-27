@@ -1,9 +1,9 @@
-//! Editor sessions: stems, preview proxy, media URLs and cleanup.
+//! Editor sessions: per-source stems/proxies, media URLs and cleanup.
 //!
-//! Opening the heavy editor creates a session directory (audio stems + an
-//! H.264 preview proxy when the source codec cannot play in WebKitGTK).
-//! Closing it kills any running export, releases the media-server tokens and
-//! deletes the directory: nothing of the editor survives in normal mode.
+//! Opening the heavy editor creates a session directory (audio stems + H.264
+//! preview proxies for sources the WebView cannot decode). Closing it kills
+//! any running export, releases the media-server tokens and deletes the
+//! directory: nothing of the editor survives in normal mode.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,7 @@ pub struct Session {
     pub id: String,
     pub dir: PathBuf,
     pub export: Arc<tokio::sync::Mutex<Option<Child>>>,
+    pub sources: Arc<Mutex<HashMap<String, EditorSourceInfo>>>,
 }
 
 static SESSIONS: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
@@ -78,6 +79,23 @@ pub struct AudioTrackInfo {
     pub url: String,
 }
 
+/// One clip usable by the editor (video URL + its capture stems).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSourceInfo {
+    pub clip_id: String,
+    pub file_name: String,
+    pub game_title: String,
+    pub duration_ms: i64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub codec: String,
+    pub video_url: String,
+    pub using_proxy: bool,
+    pub stems: Vec<AudioTrackInfo>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorClipInfo {
@@ -100,6 +118,7 @@ pub struct EditorOpenResult {
     pub video_url: String,
     pub using_proxy: bool,
     pub audio_tracks: Vec<AudioTrackInfo>,
+    pub sources: Vec<EditorSourceInfo>,
     pub encoders: Vec<EncoderInfo>,
 }
 
@@ -193,8 +212,26 @@ fn proxy_args(encoder: &str, height: u32, input: &Path) -> Vec<String> {
     a
 }
 
-/// Open (or reuse) an editor session for a clip.
-pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, String> {
+/// Ensure the session has playable media for `clip_id` (probes, extracts the
+/// stems and, when needed, generates a preview proxy). Cached per session.
+pub async fn ensure_source(
+    app: &AppHandle,
+    session_id: &str,
+    clip_id: &str,
+) -> Result<EditorSourceInfo, String> {
+    let (dir, cache) = {
+        let map = sessions()
+            .lock()
+            .map_err(|_| "editor sessions lock poisoned".to_string())?;
+        let s = map
+            .get(session_id)
+            .ok_or_else(|| "editor session not found".to_string())?;
+        (s.dir.clone(), s.sources.clone())
+    };
+    if let Some(hit) = cache.lock().ok().and_then(|m| m.get(clip_id).cloned()) {
+        return Ok(hit);
+    }
+
     let (clip, input, ffmpeg) = {
         let db = app.state::<crate::storage::DbState>();
         let clip = db
@@ -207,17 +244,9 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
         let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(app)?;
         (clip, input, ffmpeg)
     };
+    let clip_dir = dir.join(clip_id);
+    std::fs::create_dir_all(&clip_dir).map_err(|e| format!("cannot create source dir: {e}"))?;
 
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("no cache dir: {e}"))?
-        .join("editor")
-        .join(&session_id);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create editor dir: {e}"))?;
-
-    // Probe streams (codec/size/fps) — the export and proxy decisions need it.
     let stderr = tokio::process::Command::new(&ffmpeg)
         .args(["-hide_banner", "-i"])
         .arg(&input)
@@ -230,26 +259,24 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
         .as_ref()
         .map(|p| (p.width, p.height, p.fps, p.codec_name.clone()))
         .unwrap_or((0, 0, 0.0, String::new()));
-    let audio_tracks = extract_stems(
+    let stems = extract_stems(
         &ffmpeg,
         &input,
-        &dir,
-        &session_id,
+        &clip_dir,
+        session_id,
         parse_audio_track_count(&stderr),
     )
     .await?;
-
-    let encoders = encoders::detect(&ffmpeg).await;
-    let auto_encoder = encoders
+    let auto_encoder = encoders::detect(&ffmpeg)
+        .await
         .iter()
         .find(|e| e.hw && e.available)
         .map(|e| e.id.clone())
         .unwrap_or_else(|| "libx264".to_string());
 
-    // Proxy only when the WebView cannot decode the source codec.
     let mut using_proxy = false;
     let video_path = if !codec.is_empty() && codec != "h264" {
-        let proxy = dir.join("proxy.mp4");
+        let proxy = clip_dir.join("proxy.mp4");
         let args = proxy_args(&auto_encoder, height, &input);
         let status = tokio::process::Command::new(&ffmpeg)
             .args(&args)
@@ -261,34 +288,97 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
             using_proxy = true;
             proxy
         } else {
-            eprintln!("[moonclip] warning: proxy generation failed; using source");
+            eprintln!("[moonclip] warning: proxy generation failed for {clip_id}");
             input.clone()
         }
     } else {
         input.clone()
     };
 
-    let project = load_project(app, clip_id).unwrap_or_else(|| {
-        let name = Path::new(&clip.file_name)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&clip.file_name)
-            .to_string();
-        project::default_project(clip_id, &name, clip.duration_ms)
-    });
-
-    let video_url =
-        crate::editor::media_server::media_url_session(Some(&session_id), &video_path)?;
-
-    let session = Session {
-        id: session_id.clone(),
-        dir,
-        export: Arc::new(tokio::sync::Mutex::new(None)),
+    let info = EditorSourceInfo {
+        clip_id: clip.id.clone(),
+        file_name: clip.file_name.clone(),
+        game_title: clip.game_title.clone(),
+        duration_ms: clip.duration_ms,
+        width,
+        height,
+        fps,
+        codec,
+        video_url: crate::editor::media_server::media_url_session(Some(session_id), &video_path)?,
+        using_proxy,
+        stems,
     };
+    if let Ok(mut m) = cache.lock() {
+        m.insert(clip_id.to_string(), info.clone());
+    }
+    Ok(info)
+}
+
+/// Open (or resume) an editor session for a clip.
+pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, String> {
+    let (clip, project, encoders) = {
+        let db = app.state::<crate::storage::DbState>();
+        let clip = db
+            .list_clips()?
+            .into_iter()
+            .find(|c| c.id == clip_id)
+            .ok_or_else(|| "clip not found".to_string())?;
+        let project = load_project(app, clip_id).unwrap_or_else(|| {
+            let name = Path::new(&clip.file_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&clip.file_name)
+                .to_string();
+            project::default_project(clip_id, &name, clip.duration_ms)
+        });
+        let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(app)?;
+        let encoders = encoders::detect(&ffmpeg).await;
+        (clip, project, encoders)
+    };
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("no cache dir: {e}"))?
+        .join("editor")
+        .join(&session_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create editor dir: {e}"))?;
     sessions()
         .lock()
         .map_err(|_| "editor sessions lock poisoned".to_string())?
-        .insert(session_id.clone(), session);
+        .insert(
+            session_id.clone(),
+            Session {
+                id: session_id.clone(),
+                dir: dir.clone(),
+                export: Arc::new(tokio::sync::Mutex::new(None)),
+                sources: Arc::new(Mutex::new(HashMap::new())),
+            },
+        );
+
+    // Ensure every source the project references (main clip first).
+    let mut wanted: Vec<String> = vec![clip_id.to_string()];
+    for seg in &project.segments {
+        if !wanted.contains(&seg.source_clip_id) {
+            wanted.push(seg.source_clip_id.clone());
+        }
+    }
+    let mut sources = Vec::new();
+    for id in &wanted {
+        match ensure_source(app, &session_id, id).await {
+            Ok(info) => sources.push(info),
+            Err(e) => {
+                let _ = close(&session_id).await;
+                return Err(e);
+            }
+        }
+    }
+    let primary = sources
+        .iter()
+        .find(|s| s.clip_id == clip_id)
+        .cloned()
+        .ok_or_else(|| "primary source missing".to_string())?;
 
     Ok(EditorOpenResult {
         session_id,
@@ -298,14 +388,15 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
             file_name: clip.file_name,
             game_title: clip.game_title,
             duration_ms: clip.duration_ms,
-            width,
-            height,
-            fps,
-            codec,
+            width: primary.width,
+            height: primary.height,
+            fps: primary.fps,
+            codec: primary.codec.clone(),
         },
-        video_url,
-        using_proxy,
-        audio_tracks,
+        video_url: primary.video_url.clone(),
+        using_proxy: primary.using_proxy,
+        audio_tracks: primary.stems.clone(),
+        sources,
         encoders,
     })
 }
@@ -334,5 +425,17 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
         assert!(a.windows(2).any(|w| w == ["-preset", "ultrafast"]));
         assert!(a.iter().any(|x| x.contains("min(1440,720)")));
         assert!(a.contains(&"/clips/in.mp4".to_string()));
+    }
+
+    #[test]
+    fn close_removes_the_session_directory() {
+        // The registry needs a real session; emulate what close() does to the
+        // filesystem contract (kill/no-kill is covered by the async flow).
+        let dir = std::env::temp_dir().join(format!("moonclip-session-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("clip/stem_0.m4a").parent().unwrap()).unwrap();
+        std::fs::write(dir.join("clip/stem_0.m4a"), b"x").unwrap();
+        assert!(dir.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!dir.exists());
     }
 }

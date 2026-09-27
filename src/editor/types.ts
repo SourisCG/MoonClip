@@ -32,6 +32,26 @@ export interface AudioTrack {
   loopPlayback: boolean;
 }
 
+export interface Overlay {
+  id: string;
+  kind: "text" | "sticker" | "gif" | "image";
+  text?: string | null;
+  asset?: string | null;
+  startMs: number;
+  durationMs: number;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  opacity: number;
+  fontSize: number;
+  color: string;
+  strokeColor: string;
+  strokeWidth: number;
+  shadow: boolean;
+  align: string;
+}
+
 export interface EditProject {
   version: number;
   id: string;
@@ -40,7 +60,7 @@ export interface EditProject {
   output: OutputSettings;
   segments: Segment[];
   audioTracks: AudioTrack[];
-  overlays: unknown[];
+  overlays: Overlay[];
   updatedAt: string;
 }
 
@@ -67,6 +87,20 @@ export interface EncoderInfo {
   available: boolean;
 }
 
+export interface EditorSourceInfo {
+  clipId: string;
+  fileName: string;
+  gameTitle: string;
+  durationMs: number;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+  videoUrl: string;
+  usingProxy: boolean;
+  stems: EditorAudioTrack[];
+}
+
 export interface EditorOpenResult {
   sessionId: string;
   project: EditProject;
@@ -74,6 +108,7 @@ export interface EditorOpenResult {
   videoUrl: string;
   usingProxy: boolean;
   audioTracks: EditorAudioTrack[];
+  sources: EditorSourceInfo[];
   encoders: EncoderInfo[];
 }
 
@@ -89,6 +124,28 @@ export interface EditProgress {
 export function segmentDurationMs(s: Segment): number {
   const base = Math.max(0, s.outMs - s.inMs) / Math.max(0.05, s.speed);
   return Math.round(base + Math.max(0, s.freezeMs));
+}
+
+export function defaultTextOverlay(startMs: number, durationMs: number): Overlay {
+  return {
+    id: crypto.randomUUID(),
+    kind: "text",
+    text: "Texto",
+    asset: null,
+    startMs: Math.max(0, Math.round(startMs)),
+    durationMs: Math.max(300, Math.round(durationMs)),
+    x: 0.5,
+    y: 0.78,
+    scale: 1,
+    rotation: 0,
+    opacity: 1,
+    fontSize: 64,
+    color: "#ffffff",
+    strokeColor: "#000000",
+    strokeWidth: 3,
+    shadow: true,
+    align: "center",
+  };
 }
 
 export function projectDurationMs(p: EditProject): number {

@@ -2586,6 +2586,17 @@ pub async fn editor_export(
     Ok(())
 }
 
+/// Make another gallery clip usable by the editor session: returns its
+/// preview URL (H.264 proxy generated on demand) and its audio stems.
+#[tauri::command]
+pub async fn editor_add_source(
+    app: AppHandle,
+    session_id: String,
+    clip_id: String,
+) -> Result<crate::editor::session::EditorSourceInfo, String> {
+    crate::editor::session::ensure_source(&app, &session_id, &clip_id).await
+}
+
 /// Cancel the running export (if any).
 #[tauri::command]
 pub async fn editor_cancel_export(

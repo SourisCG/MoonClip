@@ -94,7 +94,24 @@ pub struct AudioTrack {
     pub loop_playback: bool,
 }
 
-/// Visual overlay (text/sticker/gif/image); E3.
+fn default_opacity() -> f64 {
+    1.0
+}
+fn default_font_size() -> u32 {
+    64
+}
+fn default_color() -> String {
+    "#ffffff".into()
+}
+fn default_stroke_color() -> String {
+    "#000000".into()
+}
+fn default_text_align() -> String {
+    "center".into()
+}
+
+/// Visual overlay (text/sticker/gif/image). E3a ships text; stickers/GIFs
+/// reuse the same schema.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Overlay {
@@ -107,7 +124,7 @@ pub struct Overlay {
     pub asset: Option<String>,
     pub start_ms: i64,
     pub duration_ms: i64,
-    /// Normalized transform (0..1 position, scale relative to preview width).
+    /// Normalized center position (0..1 of the output frame).
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -116,8 +133,47 @@ pub struct Overlay {
     pub scale: f64,
     #[serde(default)]
     pub rotation: f64,
-    #[serde(default = "default_gain")]
+    #[serde(default = "default_opacity")]
     pub opacity: f64,
+    /// Text style (font size at a 1080p reference height).
+    #[serde(default = "default_font_size")]
+    pub font_size: u32,
+    #[serde(default = "default_color")]
+    pub color: String,
+    #[serde(default = "default_stroke_color")]
+    pub stroke_color: String,
+    #[serde(default)]
+    pub stroke_width: f64,
+    #[serde(default)]
+    pub shadow: bool,
+    #[serde(default = "default_text_align")]
+    pub align: String,
+}
+
+/// New text overlay centered on screen for `duration_ms` at `start_ms`.
+/// The frontend creates overlays; this helper documents the defaults and is
+/// the fixture used by export tests.
+#[allow(dead_code)]
+pub fn default_text_overlay(text: &str, start_ms: i64, duration_ms: i64) -> Overlay {
+    Overlay {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: "text".into(),
+        text: Some(text.into()),
+        asset: None,
+        start_ms: start_ms.max(0),
+        duration_ms: duration_ms.max(200),
+        x: 0.5,
+        y: 0.78,
+        scale: 1.0,
+        rotation: 0.0,
+        opacity: 1.0,
+        font_size: 64,
+        color: default_color(),
+        stroke_color: default_stroke_color(),
+        stroke_width: 3.0,
+        shadow: true,
+        align: "center".into(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

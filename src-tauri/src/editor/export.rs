@@ -128,6 +128,84 @@ pub fn stage_a_args(
     a
 }
 
+/// Bundled font for text overlays (OFL/redistributable). Searches the
+/// packaged resource dir first, then the dev tree, then common system paths.
+pub fn resolve_font(app: &AppHandle) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(res) = app.path().resource_dir() {
+        candidates.push(res.join("fonts").join("DejaVuSans.ttf"));
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fonts")
+            .join("DejaVuSans.ttf"),
+    );
+    candidates.push(PathBuf::from(
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    ));
+    candidates.push(PathBuf::from(
+        "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+    ));
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Escape a value used inside an ffmpeg filter option (`'...'` quoting).
+pub fn escape_filter_value(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Normalize "#RRGGBB"/"RRGGBB" to `0xRRGGBB` (invalid input -> white).
+pub fn color_arg(color: &str) -> String {
+    let hex: String = color
+        .trim_start_matches('#')
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(6)
+        .collect();
+    if hex.len() == 6 {
+        format!("0x{hex}")
+    } else {
+        "0xffffff".to_string()
+    }
+}
+
+/// One `drawtext` filter for a text overlay (position/scale normalized to the
+/// output frame, font size at a 1080p reference).
+pub fn drawtext_filter(
+    overlay: &crate::editor::project::Overlay,
+    out_h: u32,
+    font: &Path,
+    text_file: &Path,
+) -> String {
+    let k = out_h.max(2) as f64 / 1080.0;
+    let scale = overlay.scale.clamp(0.05, 8.0);
+    let fontsize = (overlay.font_size as f64 * k * scale).round().max(8.0) as u32;
+    let borderw = (overlay.stroke_width * k * scale).round().max(0.0) as u32;
+    let opacity = overlay.opacity.clamp(0.0, 1.0);
+    let start = overlay.start_ms.max(0) as f64 / 1000.0;
+    let end = (overlay.start_ms.max(0) + overlay.duration_ms.max(100)) as f64 / 1000.0;
+    let opacity_s = format!("{opacity:.2}");
+    let mut f = format!(
+        "drawtext=fontfile='{}':textfile='{}':enable='between(t,{start:.3},{end:.3})':x=(w*{:.5})-(text_w/2):y=(h*{:.5})-(text_h/2):fontsize={fontsize}:fontcolor={}@{}",
+        escape_filter_value(&font.to_string_lossy()),
+        escape_filter_value(&text_file.to_string_lossy()),
+        overlay.x.clamp(0.0, 1.0),
+        overlay.y.clamp(0.0, 1.0),
+        color_arg(&overlay.color),
+        opacity_s,
+    );
+    if borderw > 0 {
+        f.push_str(&format!(
+            ":borderw={borderw}:bordercolor={}",
+            color_arg(&overlay.stroke_color)
+        ));
+    }
+    if overlay.shadow {
+        f.push_str(":shadowcolor=black@0.6:shadowx=2:shadowy=2");
+    }
+    f
+}
+
 /// concat demuxer file body (one `file '...'` per segment).
 pub fn concat_file(paths: &[PathBuf]) -> String {
     paths
@@ -437,6 +515,31 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
     let (filter, has_audio) =
         audio_filter(&project.segments, &input_index, &tracks_per_input, total_ms);
 
+    // Text overlays (E3a): drawtext over the joined video, one filter each.
+    let texts: Vec<&crate::editor::project::Overlay> = project
+        .overlays
+        .iter()
+        .filter(|o| {
+            o.kind == "text"
+                && o.text
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+        })
+        .collect();
+    let mut vfilters: Vec<String> = Vec::new();
+    if !texts.is_empty() {
+        let font = resolve_font(app).ok_or_else(|| {
+            "no font available for text overlays (expected fonts/DejaVuSans.ttf)".to_string()
+        })?;
+        for (i, o) in texts.iter().enumerate() {
+            let tf = dir.join(format!("text_{i}.txt"));
+            std::fs::write(&tf, o.text.as_deref().unwrap_or(""))
+                .map_err(|e| format!("cannot write overlay text: {e}"))?;
+            vfilters.push(drawtext_filter(o, out_h, &font, &tf));
+        }
+    }
+
     let stem = clips
         .iter()
         .find(|c| c.id == sources[0].0)
@@ -463,14 +566,43 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
         args.push("-i".into());
         args.push(path.to_string_lossy().into_owned());
     }
-    if has_audio {
-        args.extend(["-filter_complex", &filter, "-map", "0:v:0", "-map", "[aout]"].map(String::from));
-    } else {
-        args.extend(["-map", "0:v:0", "-an"].map(String::from));
+    let mut graphs: Vec<String> = Vec::new();
+    if !vfilters.is_empty() {
+        graphs.push(format!("[0:v]{}[vout]", vfilters.join(",")));
     }
-    args.extend(["-c:v", "copy"].map(String::from));
+    if has_audio {
+        graphs.push(filter.clone());
+    }
+    if !graphs.is_empty() {
+        args.push("-filter_complex".into());
+        args.push(graphs.join(";"));
+    }
+    if !vfilters.is_empty() {
+        args.push("-map".into());
+        args.push("[vout]".into());
+    } else {
+        args.push("-map".into());
+        args.push("0:v:0".into());
+    }
+    if has_audio {
+        args.extend(["-map", "[aout]"].map(String::from));
+    }
+    if vfilters.is_empty() {
+        args.extend(["-c:v", "copy"].map(String::from));
+    } else {
+        args.push("-c:v".into());
+        args.push(encoder.clone());
+        args.extend(encoders::quality_args(
+            &encoder,
+            project.output.bitrate_kbps,
+            out_h,
+        ));
+        args.extend(["-pix_fmt", "yuv420p"].map(String::from));
+    }
     if has_audio {
         args.extend(["-c:a", "aac", "-b:a", "192k"].map(String::from));
+    } else {
+        args.push("-an".into());
     }
     if project.output.container != "mkv" {
         args.extend(["-movflags", "+faststart"].map(String::from));
@@ -621,6 +753,37 @@ mod tests {
     }
 
     #[test]
+    fn drawtext_uses_normalized_position_and_scaled_font() {
+        let mut o = crate::editor::project::default_text_overlay("Hola", 1000, 3000);
+        o.x = 0.25;
+        o.y = 0.8;
+        o.font_size = 60;
+        o.stroke_width = 4.0;
+        o.scale = 2.0;
+        let f = drawtext_filter(
+            &o,
+            2160,
+            Path::new("/fonts/DejaVuSans.ttf"),
+            Path::new("/tmp/text_0.txt"),
+        );
+        // 1080p reference: 60px at 2160 -> 120, times scale 2 -> 240
+        assert!(f.contains("fontsize=240"), "{f}");
+        assert!(f.contains("x=(w*0.25000)-(text_w/2)"), "{f}");
+        assert!(f.contains("y=(h*0.80000)-(text_h/2)"), "{f}");
+        assert!(f.contains("between(t,1.000,4.000)"), "{f}");
+        assert!(f.contains("borderw=16"), "{f}");
+        assert!(f.contains("shadowcolor=black@0.6"), "{f}");
+        assert!(f.contains("fontfile='/fonts/DejaVuSans.ttf'"), "{f}");
+    }
+
+    #[test]
+    fn color_and_escape_helpers_are_safe() {
+        assert_eq!(color_arg("#22d3ee"), "0x22d3ee");
+        assert_eq!(color_arg("red"), "0xffffff");
+        assert_eq!(escape_filter_value("/tmp/it's/a.txt"), "/tmp/it\\'s/a.txt");
+    }
+
+    #[test]
     fn concat_file_escapes_quotes() {
         let body = concat_file(&[PathBuf::from("/tmp/a'b.mp4")]);
         assert!(body.contains("a'\\''b"));
@@ -713,6 +876,30 @@ mod tests {
         let text = String::from_utf8_lossy(&stderr.stderr);
         assert_eq!(session::parse_audio_track_count(&text), 1, "{text}");
         assert!(crate::editor::ffmpeg::parse_video_stream_line(&text).is_some());
+
+        // Text overlay: the generated drawtext filter must run with the
+        // bundled font and produce the expected duration.
+        let font = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fonts")
+            .join("DejaVuSans.ttf");
+        assert!(font.is_file(), "vendored font missing");
+        let tf = dir.join("text_0.txt");
+        std::fs::write(&tf, "Hola MoonClip").unwrap();
+        let mut overlay =
+            crate::editor::project::default_text_overlay("Hola MoonClip", 0, 1500);
+        overlay.stroke_width = 4.0;
+        let filter = drawtext_filter(&overlay, 360, &font, &tf);
+        let with_text = dir.join("with_text.mp4");
+        let ok = tokio::process::Command::new(&ff)
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&out)
+            .args(["-vf", &filter, "-c:v", "libx264", "-preset", "ultrafast", "-an"])
+            .arg(&with_text)
+            .status()
+            .await
+            .unwrap();
+        assert!(ok.success(), "drawtext export failed");
+        assert!(with_text.is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
