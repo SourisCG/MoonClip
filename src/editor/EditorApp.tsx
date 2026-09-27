@@ -368,6 +368,7 @@ export default function EditorApp({
   const lastScale = useRef(1);
   const lastRotation = useRef(0);
   const lastTranslate = useRef<[number, number]>([0, 0]);
+  const lastSyncLog = useRef(0);
   const [, forceTick] = useState(0);
 
   const project = useEditorStore((s) => s.project);
@@ -694,6 +695,17 @@ export default function EditorApp({
       }
       useEditorStore.getState().setPlayhead(ms);
       const seg = segmentAt(p.segments, ms);
+      const nowLog = performance.now();
+      if (nowLog - lastSyncLog.current > 1000) {
+        lastSyncLog.current = nowLog;
+        void invoke("editor_log", {
+          message:
+            `sync ph=${Math.round(ms)} engine=${
+              engine && engine.isPlaying() ? Math.round(engine.currentTimeMs()) : -1
+            } video=${v ? v.currentTime.toFixed(2) : "-"} ` +
+            `seg=${seg?.id.slice(0, 6) ?? "-"} start=${seg?.timelineStartMs ?? -1} in=${seg?.inMs ?? -1}`,
+        }).catch(() => {});
+      }
       if (!videoClock) {
         syncVideo(ms, true);
       } else if (v) {
