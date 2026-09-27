@@ -19,7 +19,6 @@ const USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     Drive,
-    #[allow(dead_code)] // wired by the YouTube upload commit
     YouTube,
 }
 

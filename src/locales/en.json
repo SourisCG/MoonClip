@@ -205,11 +205,25 @@
   "accounts": {
     "title": "Accounts",
     "drive": "Google Drive",
+    "youtube": "YouTube",
     "connect": "Connect",
     "disconnect": "Disconnect",
     "connecting": "Waiting for the browser…",
     "connected": "Connected",
     "not_configured": "Not configured (social.json)"
+  },
+  "youtube": {
+    "section": "YouTube",
+    "connect": "Connect YouTube",
+    "title_ph": "Video title",
+    "private": "Private",
+    "unlisted": "Unlisted",
+    "public": "Public",
+    "confirm": "I confirm my content complies with YouTube's community guidelines.",
+    "upload": "Upload to YouTube",
+    "uploaded": "Uploaded to YouTube",
+    "open": "Open in YouTube",
+    "audit_note": "Until the project passes YouTube's audit, the video may stay private."
   },
   "viewer": {
     "hint": "← → navigate · Esc close"

@@ -12,6 +12,7 @@ pub mod drive;
 pub mod google;
 pub mod oauth;
 pub mod token_store;
+pub mod youtube;
 
 use std::path::PathBuf;
 
@@ -19,6 +20,22 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::storage::DbState;
+
+/// Public credentials for a Google provider. YouTube falls back to the Drive
+/// client: it is the same Desktop OAuth client unless the user configured a
+/// dedicated `google_youtube` block.
+pub(crate) fn google_credentials(
+    config: &SocialConfig,
+    provider: google::Provider,
+) -> Option<ClientCredentials> {
+    match provider {
+        google::Provider::Drive => config.google_drive.clone(),
+        google::Provider::YouTube => config
+            .google_youtube
+            .clone()
+            .or_else(|| config.google_drive.clone()),
+    }
+}
 
 /// Authenticated Drive client from the vault (refreshes when needed).
 pub(crate) async fn drive_client_for(app: &AppHandle) -> Result<drive::DriveClient, String> {
@@ -140,9 +157,12 @@ fn provider_status(
 pub fn social_status(app: AppHandle) -> Result<SocialStatus, String> {
     let config = load_config(&app);
     Ok(SocialStatus {
-        google_drive: provider_status(config.google_drive.is_some(), token_store::GOOGLE_DRIVE),
+        google_drive: provider_status(
+            google_credentials(&config, google::Provider::Drive).is_some(),
+            token_store::GOOGLE_DRIVE,
+        ),
         google_youtube: provider_status(
-            config.google_youtube.is_some(),
+            google_credentials(&config, google::Provider::YouTube).is_some(),
             token_store::GOOGLE_YOUTUBE,
         ),
         tiktok: provider_status(
@@ -179,6 +199,23 @@ pub async fn disconnect_google_drive(app: AppHandle) -> Result<SocialStatus, Str
         db.clear_drive_folders()?;
         let _ = db.set_setting("drive_root_folder_id", "");
     }
+    social_status(app)
+}
+
+/// Connect YouTube: same loopback consent as Drive, own token + scope
+/// (`youtube.upload`). Upload-only feature: nothing else is read or written.
+#[tauri::command]
+pub async fn connect_google_youtube(app: AppHandle) -> Result<SocialStatus, String> {
+    let config = load_config(&app);
+    let client = google_credentials(&config, google::Provider::YouTube)
+        .ok_or_else(|| "YouTube is not configured (social.json)".to_string())?;
+    google::connect(&app, google::Provider::YouTube, &client).await?;
+    social_status(app)
+}
+
+#[tauri::command]
+pub async fn disconnect_google_youtube(app: AppHandle) -> Result<SocialStatus, String> {
+    token_store::delete(token_store::GOOGLE_YOUTUBE)?;
     social_status(app)
 }
 

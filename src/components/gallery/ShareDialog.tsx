@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { CloudUpload, Copy, ExternalLink, HardDriveDownload, RefreshCw, Trash2, X } from "lucide-react";
+import { CloudUpload, Copy, ExternalLink, HardDriveDownload, RefreshCw, Trash2, X, SquarePlay } from "lucide-react";
 import type { ClipMetadata } from "../../types";
 import { Modal } from "../Modal";
 
@@ -14,8 +14,27 @@ interface UploadResult {
   web_link: string | null;
 }
 
+interface YouTubeResult {
+  video_id: string;
+  url: string;
+  privacy: string;
+}
+
+interface ProviderStatus {
+  configured: boolean;
+  connected: boolean;
+  account: string;
+}
+
+interface SocialStatus {
+  google_drive: ProviderStatus;
+  google_youtube: ProviderStatus;
+  tiktok: ProviderStatus;
+}
+
 interface Progress {
   clipId: string;
+  provider?: string;
   sent: number;
   total: number;
 }
@@ -23,6 +42,13 @@ interface Progress {
 function bareName(fileName: string) {
   const i = fileName.lastIndexOf("/");
   return i >= 0 ? fileName.slice(i + 1) : fileName;
+}
+
+/** Default YouTube title: the clip name without its extension. */
+function defaultTitle(fileName: string) {
+  const bare = bareName(fileName);
+  const dot = bare.lastIndexOf(".");
+  return (dot > 0 ? bare.slice(0, dot) : bare).slice(0, 100);
 }
 
 /** Google Drive panel for one clip: upload it (opt-in local deletion) or,
@@ -51,6 +77,17 @@ export function ShareDialog({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // YouTube: upload-only (title + fixed #MoonClip #moonclip tags).
+  const [social, setSocial] = useState<SocialStatus | null>(null);
+  const [ytTitle, setYtTitle] = useState(() => defaultTitle(clip.file_name));
+  const [ytPrivacy, setYtPrivacy] = useState("private");
+  const [ytConfirmed, setYtConfirmed] = useState(false);
+  const [ytBusy, setYtBusy] = useState<string | null>(null);
+  const [ytProgress, setYtProgress] = useState<Progress | null>(null);
+  const [ytResult, setYtResult] = useState<YouTubeResult | null>(null);
+  const [ytError, setYtError] = useState<string | null>(null);
+  const [ytCopied, setYtCopied] = useState(false);
+
   const uploaded = !!clip.drive_file_id;
   const cloud = clip.cloud;
 
@@ -58,11 +95,23 @@ export function ShareDialog({
     invoke<Record<string, string>>("get_settings")
       .then((s) => setDeleteLocal(s.share_delete_local === "1"))
       .catch(() => {});
+    invoke<SocialStatus>("social_status").then(setSocial).catch(() => {});
   }, []);
 
   useEffect(() => {
     const unlisten = listen<Progress>("moonclip://upload-progress", (event) => {
       if (event.payload.clipId === clip.id) setProgress(event.payload);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [clip.id]);
+
+  useEffect(() => {
+    const unlisten = listen<Progress>("moonclip://publish-progress", (event) => {
+      if (event.payload.clipId === clip.id && event.payload.provider === "youtube") {
+        setYtProgress(event.payload);
+      }
     });
     return () => {
       void unlisten.then((fn) => fn());
@@ -120,9 +169,57 @@ export function ShareDialog({
     }
   };
 
+  const connectYouTube = async () => {
+    setYtBusy("connect");
+    setYtError(null);
+    try {
+      setSocial(await invoke<SocialStatus>("connect_google_youtube"));
+    } catch (e) {
+      setYtError(String(e));
+    } finally {
+      setYtBusy(null);
+    }
+  };
+
+  const uploadYouTube = async () => {
+    setYtBusy("upload");
+    setYtError(null);
+    setYtProgress(null);
+    setYtResult(null);
+    try {
+      setYtResult(
+        await invoke<YouTubeResult>("youtube_share_clip", {
+          clipId: clip.id,
+          title: ytTitle,
+          privacy: ytPrivacy,
+        }),
+      );
+    } catch (e) {
+      setYtError(String(e));
+    } finally {
+      setYtBusy(null);
+      setYtProgress(null);
+    }
+  };
+
+  const copyYouTube = async () => {
+    if (!ytResult?.url) return;
+    try {
+      await writeText(ytResult.url);
+      setYtCopied(true);
+      setTimeout(() => setYtCopied(false), 2000);
+    } catch (e) {
+      setYtError(String(e));
+    }
+  };
+
   const pct =
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.sent / progress.total) * 100))
+      : null;
+  const ytPct =
+    ytProgress && ytProgress.total > 0
+      ? Math.min(100, Math.round((ytProgress.sent / ytProgress.total) * 100))
       : null;
   const btn =
     "inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50";
@@ -258,6 +355,100 @@ export function ShareDialog({
             </p>
           </div>
         )}
+
+        {/* YouTube: upload-only, title + fixed #MoonClip #moonclip tags. */}
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+            <SquarePlay size={14} /> {t("youtube.section")}
+          </h4>
+          {social && !social.google_youtube.configured ? (
+            <p className="text-[11px] text-slate-500">{t("accounts.not_configured")}</p>
+          ) : social && !social.google_youtube.connected ? (
+            <button
+              onClick={() => void connectYouTube()}
+              disabled={ytBusy !== null}
+              className={btn}
+            >
+              <SquarePlay size={13} />
+              {ytBusy === "connect" ? t("accounts.connecting") : t("youtube.connect")}
+            </button>
+          ) : ytResult ? (
+            <div className="space-y-2">
+              <p className="flex items-center gap-1.5 text-xs text-emerald-300/90">
+                <CloudUpload size={13} /> {t("youtube.uploaded")}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => void copyYouTube()} className={btn}>
+                  <Copy size={13} />
+                  {ytCopied ? t("share.copied") : t("share.copy_link")}
+                </button>
+                <button
+                  onClick={() => void openUrl(ytResult.url).catch(() => {})}
+                  className={btn}
+                >
+                  <ExternalLink size={13} /> {t("youtube.open")}
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">{t("youtube.audit_note")}</p>
+            </div>
+          ) : social ? (
+            <div className="space-y-2">
+              <input
+                value={ytTitle}
+                onChange={(e) => setYtTitle(e.target.value)}
+                maxLength={100}
+                placeholder={t("youtube.title_ph")}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-cyan-500/50"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={ytPrivacy}
+                  onChange={(e) => setYtPrivacy(e.target.value)}
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-cyan-500/50"
+                >
+                  <option value="private">{t("youtube.private")}</option>
+                  <option value="unlisted">{t("youtube.unlisted")}</option>
+                  <option value="public">{t("youtube.public")}</option>
+                </select>
+                <span className="font-mono text-[10px] text-slate-500">
+                  #MoonClip #moonclip
+                </span>
+              </div>
+              <label className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={ytConfirmed}
+                  onChange={(e) => setYtConfirmed(e.target.checked)}
+                  className="mt-0.5"
+                />
+                {t("youtube.confirm")}
+              </label>
+              <button
+                onClick={() => void uploadYouTube()}
+                disabled={ytBusy !== null || !ytConfirmed || !ytTitle.trim()}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-100 transition hover:bg-red-500/20 disabled:opacity-50"
+              >
+                <SquarePlay size={15} />
+                {ytBusy === "upload" ? t("share.uploading") : t("youtube.upload")}
+              </button>
+              {ytBusy === "upload" && (
+                <div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-red-400 transition-all"
+                      style={{ width: `${ytPct ?? 5}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+                    {ytPct !== null ? `${ytPct}%` : "…"}
+                  </p>
+                </div>
+              )}
+              <p className="text-[11px] text-slate-500">{t("youtube.audit_note")}</p>
+            </div>
+          ) : null}
+          {ytError && <p className="mt-2 break-all font-mono text-xs text-red-400">{ytError}</p>}
+        </div>
 
         {error && <p className="mt-3 break-all font-mono text-xs text-red-400">{error}</p>}
       </div>

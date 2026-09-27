@@ -204,11 +204,25 @@
   "accounts": {
     "title": "Cuentas",
     "drive": "Google Drive",
+    "youtube": "YouTube",
     "connect": "Conectar",
     "disconnect": "Desconectar",
     "connecting": "Esperando al navegador…",
     "connected": "Conectado",
     "not_configured": "No configurado (social.json)"
+  },
+  "youtube": {
+    "section": "YouTube",
+    "connect": "Conectar YouTube",
+    "title_ph": "Título del video",
+    "private": "Privado",
+    "unlisted": "No listado",
+    "public": "Público",
+    "confirm": "Confirmo que mi contenido cumple las normas de la comunidad de YouTube.",
+    "upload": "Subir a YouTube",
+    "uploaded": "Subido a YouTube",
+    "open": "Abrir en YouTube",
+    "audit_note": "Hasta que el proyecto pase la auditoría de YouTube, el video puede quedar como privado."
   },
   "viewer": {
     "hint": "← → navegar · Esc cerrar"

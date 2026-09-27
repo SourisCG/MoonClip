@@ -29,6 +29,21 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **YouTube uploads (2026-09-27)** — `social/youtube.rs`: loopback OAuth with
+  the `youtube.upload` scope (own keyring token; falls back to the Drive
+  client when `google_youtube` is absent) and a resumable `videos.insert`
+  (8 MiB chunks, resume from the 308 `Range`, one transport retry, progress
+  via `moonclip://publish-progress`). Title sanitized (100 chars, no `<`/`>`)
+  with fixed description `#MoonClip #moonclip`, Gaming category, privacy
+  Private/Unlisted/Public (default private) and the YouTube community-
+  guidelines confirmation required by the API policies. Upload-only: cloud
+  clips use `ensure_local` and the cache copy is dropped after the upload.
+  UI: YouTube row in Settings → Accounts and a YouTube block in the share
+  dialog (connect, title, privacy, confirm, progress, copy/open link, audit
+  notice). Tests: title/privacy/body/range units + a mock resumable flow
+  (init → 308 half-ack → resume → 200). Google-side pending: sensitive-scope
+  verification (demo video) and the API compliance audit that lifts the
+  private lock; the API and scope are already enabled in the project.
 - **VA-API decode root-caused (2026-09-27)** — the Fedora 44 note from
   `0ba7444` was wrong: `gst-plugins-bad` does ship the `va` plugin (it
   Obsoletes `gstreamer1-vaapi`). GStreamer 1.28's driver allowlist

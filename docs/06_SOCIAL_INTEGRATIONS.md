@@ -49,9 +49,20 @@ All uploads are client-to-service. No MoonClip server.
   terminan en `" - <app conocida>"` (Brave, Chrome, Firefox, Dolphin,
   Discord, VS Code, KWrite, Steam…) porque KRunner reporta `app_id` vacío
   para casi todo; los estados de juego (`- 1.4.4.9`) siguen matcheando.
-- Pendiente: YouTube (requiere verificación del proyecto + auditoría de la
-  API), TikTok (Worker broker para el `client_secret`), Discord (webhook por
-  usuario) y X (navegador + portapapeles de archivo).
+- **YouTube (2026-09-27, código listo)**: mismo OAuth loopback de Google que
+  Drive (scope `youtube.upload`, token propio en el keyring; si no hay
+  `google_youtube` en `social.json` se usa el cliente de Drive). Subida
+  resumible `videos.insert` (chunks de 8 MiB, reanudación desde el `Range`
+  del 308, progreso por `moonclip://publish-progress`), título del usuario +
+  descripción fija `#MoonClip #moonclip`, categoría Gaming, privacidad
+  Privado/No listado/Público (default privado) y checkbox de cumplimiento de
+  las normas de la comunidad. Solo subida: no navega ni descarga nada.
+  **Bloqueo externo**: hasta pasar la auditoría de YouTube (y la verificación
+  del scope sensible) todo video subido por API queda privado; la UI lo avisa
+  (trámites en el log de PROGRESS).
+- Pendiente: TikTok (Worker broker para el `client_secret`), Discord (webhook
+  por usuario + compresión agresiva opcional para servidores sin boost) y X
+  (navegador + portapapeles de archivo).
 
 ## 1. Google Drive (primary share)
 
@@ -78,13 +89,14 @@ All uploads are client-to-service. No MoonClip server.
 | Network | Priority | Flow |
 |---|---|---|
 | Discord | Essential | Webhook `POST multipart/form-data`. If >25 MB (or >10 MB on old limits), send Drive link instead. Optional FFmpeg fast-compress toggle to fit limit. Zero API cost. |
-| YouTube | Essential | Data API v3 `videos.insert`, same Google OAuth. UI selector: Private/Unlisted/Public. Auto-append `#Shorts` if vertical or ≤60s. Quota ~10k units/day (~6 uploads/day per global key); allow advanced users to paste own Client ID. |
+| YouTube | Essential | Data API v3 `videos.insert` over the same Google OAuth (implemented). Privacy selector: Private/Unlisted/Public. Fixed description `#MoonClip #moonclip`; default quota 100 `videos.insert`/day per project. Without the compliance audit, API uploads are locked private. |
 | TikTok | Essential | Content Posting API (Direct Post / Inbox Draft). Requires TikTok Developers app + audit. Upload as draft so user adds music. Fallback: open TikTok Studio Web with file ready. |
 | Twitter/X | Essential | **No paid API.** Copy file to OS clipboard + open `https://twitter.com/compose/tweet?text=...` (or `twitter.com/intent/tweet?url=<drive>&text=...`). User presses Ctrl+V; video uploads natively. If using Drive link, ensure OpenGraph `twitter:card=player` on viewer page (future web viewer). |
 | Instagram/Facebook | Optional | Meta Graph API requires Business/Creator + audit; desktop Reels restricted. Defer past MVP. |
 
 ## 3. Acceptance (Phase 6)
 
-- [ ] Drive upload shows live %, finishes with public `webViewLink` copied + notification.
-- [ ] Discord webhook sends file or link correctly.
+- [x] Drive upload shows live %, finishes with public `webViewLink` copied + notification.
+- [ ] YouTube upload shows live %, finishes with the video link (public visibility waits for the project audit).
+- [ ] Discord webhook sends file (or the compressed copy) correctly.
 - [ ] Twitter flow opens intent with clipboard ready.
