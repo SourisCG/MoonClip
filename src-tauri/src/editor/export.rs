@@ -351,10 +351,6 @@ pub fn audio_filter(
             v
         };
         for (stream, gain, group) in sources {
-            // The Mix stem is never used by the single-track mix output.
-            if group == "mixstem" && !tracks_mode {
-                continue;
-            }
             let label = format!("a{i}_{stream}");
             let delay = if start > 0 {
                 format!(",adelay={}|{}", start, start)
@@ -377,7 +373,10 @@ pub fn audio_filter(
         }
     }
     if !tracks_mode {
-        let mut all = fallback_labels;
+        // ONE track with all three channels at their own per-clip gains (the
+        // editor lets the user mix Mix/Game/Mic freely).
+        let mut all = mixstem_labels;
+        all.append(&mut fallback_labels);
         all.append(&mut game_labels);
         all.append(&mut mic_labels);
         if all.is_empty() {
@@ -665,12 +664,13 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
             sources[idx].6
         })
         .collect();
+    // No global master any more: the three channel gains are the whole mix.
     let (filter, audio_maps) = audio_filter(
         &project.segments,
         &input_index,
         &tracks_per_input,
         total_ms,
-        project.gain_master,
+        1.0,
         &project.output.audio,
     );
     let has_audio = !audio_maps.is_empty();
@@ -894,19 +894,21 @@ mod tests {
     }
 
     #[test]
-    fn audio_filter_remixes_stems_and_never_track_one() {
+    fn audio_filter_mixes_all_three_channels_with_clip_gains() {
         let mut s = seg(1000, 2500);
         s.timeline_start_ms = 500;
+        s.gain_mix = 1.1;
         s.gain_game = 0.8;
         s.gain_mic = 1.5;
         let (graph, maps) = audio_filter(&[s], &[1], &[3], 3000, 1.0, "mix");
         assert_eq!(maps, vec!["[aout]".to_string()]);
-        // Track 1 of a recording is the SUM of Game+Mic: never played.
-        assert!(!graph.contains("[1:a:0]"), "{graph}");
+        // Mix, Game and Mic are three independent channels.
+        assert!(graph.contains("[1:a:0]atrim=start=1.000:end=2.500"));
         assert!(graph.contains("[1:a:1]atrim=start=1.000:end=2.500"));
+        assert!(graph.contains("volume=1.100,adelay=500|500[a0_0]"), "{graph}");
         assert!(graph.contains("volume=0.800,adelay=500|500[a0_1]"), "{graph}");
         assert!(graph.contains("volume=1.500,adelay=500|500[a0_2]"), "{graph}");
-        assert!(graph.contains("amix=inputs=2:duration=longest:normalize=0"), "{graph}");
+        assert!(graph.contains("amix=inputs=3:duration=longest:normalize=0"), "{graph}");
         assert!(graph.contains("atrim=0:3.000"));
         assert!(!graph.contains("rubberband"), "{graph}");
     }
@@ -914,19 +916,21 @@ mod tests {
     #[test]
     fn audio_filter_uses_each_clips_own_gains_times_master() {
         let mut a = seg(0, 1000);
+        a.gain_mix = 0.0;
         a.gain_game = 0.25;
         a.gain_mic = 0.0;
         let mut b = seg(0, 1000);
+        b.gain_mix = 0.0;
         b.gain_game = 1.0;
         b.gain_mic = 2.0;
         let (graph, maps) = audio_filter(&[a, b], &[1, 2], &[3, 3], 1000, 0.5, "mix");
         assert_eq!(maps, vec!["[aout]".to_string()]);
-        // master x clip gain, per segment (not one global value).
+        // master x clip gain, per segment and per channel.
         assert!(graph.contains("volume=0.125[a0_1]"), "{graph}");
         assert!(graph.contains("volume=0.000[a0_2]"), "{graph}");
         assert!(graph.contains("volume=0.500[a1_1]"), "{graph}");
         assert!(graph.contains("volume=1.000[a1_2]"), "{graph}");
-        assert!(graph.contains("amix=inputs=4"), "{graph}");
+        assert!(graph.contains("amix=inputs=6"), "{graph}");
     }
 
     #[test]
@@ -1044,14 +1048,15 @@ mod tests {
     }
 
     #[test]
-    fn audio_filter_two_tracks_use_game_only() {
+    fn audio_filter_two_tracks_use_mix_and_game() {
         let mut s = seg(0, 1000);
+        s.gain_mix = 0.3;
         s.gain_game = 0.5;
         let (graph, maps) = audio_filter(&[s], &[1], &[2], 1000, 1.0, "mix");
         assert_eq!(maps, vec!["[aout]".to_string()]);
+        assert!(graph.contains("volume=0.300[a0_0]"), "{graph}");
         assert!(graph.contains("[1:a:1]"), "{graph}");
         assert!(!graph.contains("[1:a:2]"), "{graph}");
-        assert!(!graph.contains("[1:a:0]"), "{graph}");
     }
 
     #[test]

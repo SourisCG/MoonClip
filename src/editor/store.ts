@@ -131,7 +131,9 @@ export const useEditorStore = create<EditorState>()(
             speed: 1,
             freezeAtMs: 0,
             freezeMs: 0,
-            gainMix: 1,
+            // Game+Mic are the sum that the recording's Mix track contains:
+            // default to those so nothing is doubled.
+            gainMix: 0,
             gainGame: 1,
             gainMic: 1,
             zoom: 1,

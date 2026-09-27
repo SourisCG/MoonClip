@@ -374,14 +374,6 @@ export default function EditorApp({
         useEditorStore.getState().setProject(s.project);
         useEditorStore.getState().setSources(s.sources);
         useEditorStore.temporal.getState().clear();
-        // A saved master of 0 was a stuck mute (raising it back used to be
-        // skipped by the gain guard): recover automatically so the editor is
-        // never silent for no reason.
-        if (s.project.gainMaster <= 0) {
-          useEditorStore.getState().setMasterGain(1);
-          useEditorStore.temporal.getState().clear();
-          void invoke("editor_log", { message: "auto-unmute: saved master was 0" }).catch(() => {});
-        }
         setSession(s);
         setVisibleMs(
           Math.max(6000, Math.min(30_000, s.project.segments[0]?.outMs ?? 8000) + 2000),
@@ -435,7 +427,8 @@ export default function EditorApp({
     return engineRef.current;
   }, []);
 
-  const masterGain = project?.gainMaster ?? 1;
+  /** No global master any more: every channel has its own slider. */
+  const masterGain = 1;
   /** Selected clip's own audio mix (falls back to the active source). */
   const clipSegment = selectedSegment ?? null;
 
@@ -462,10 +455,7 @@ export default function EditorApp({
     void invoke<number>("editor_audio_health").catch(() => {});
     void decodeProject(project).then((engine) => {
       void engine.gainSelfTest();
-      void engine.gainPathProbe(
-        useEditorStore.getState().project?.segments ?? [],
-        useEditorStore.getState().project?.gainMaster ?? 1,
-      );
+      void engine.gainPathProbe(useEditorStore.getState().project?.segments ?? [], 1);
       setWaveSources(
         Object.fromEntries(
           Object.keys(useEditorStore.getState().sources).map((id) => [id, engine.peaksFor(id)]),
@@ -694,7 +684,7 @@ export default function EditorApp({
       } else if (v) {
         // Fallback: the audio comes from the video, so follow the clip's own
         // mix gain there too (per-clip sliders must keep working).
-        v.volume = Math.min(1, Math.max(0, (seg?.gainMix ?? 1) * p.gainMaster));
+        v.volume = Math.min(1, Math.max(0, seg?.gainMix ?? 1));
       }
       const end = projectDurationMs(p);
       if (ms >= end - 20) {
@@ -883,6 +873,7 @@ export default function EditorApp({
   const clipGainSliders: ["gainGame" | "gainMic" | "gainMix", string][] =
     clipStems > 1
       ? [
+          ["gainMix", t("editor.mix")],
           ["gainGame", t("editor.game")],
           ["gainMic", t("editor.mic")],
         ]
@@ -995,36 +986,6 @@ export default function EditorApp({
             engineRef={engineRef}
             labels={[t("editor.game"), t("editor.mic"), t("editor.out")]}
           />
-          {project.gainMaster <= 0 && (
-            <div className="flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100">
-              <span className="min-w-0 flex-1">{t("editor.master_zero")}</span>
-              <button
-                onClick={() => useEditorStore.getState().setMasterGain(1)}
-                className="rounded border border-amber-300/40 bg-amber-300/20 px-2 py-0.5 font-semibold"
-              >
-                {t("editor.master_reset")}
-              </button>
-            </div>
-          )}
-          <label className="space-y-1 text-[11px] text-slate-400">
-            <span className="flex items-center gap-1">
-              {t("editor.master_global")}
-              <span className="ml-auto font-mono">
-                {Math.round(project.gainMaster * 100)}%
-              </span>
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={200}
-              value={Math.round(project.gainMaster * 100)}
-              onChange={(e) =>
-                useEditorStore.getState().setMasterGain(Number(e.target.value) / 100)
-              }
-              className="w-full accent-cyan-400"
-            />
-          </label>
-
           <div className="space-y-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-200/80">
               {t("editor.clip_audio")}
@@ -1530,20 +1491,6 @@ export default function EditorApp({
                     forceTick((n) => n + 1);
                   }}
                 />
-              )}
-              {playing && project.gainMaster <= 0 && (
-                <div
-                  className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 p-4"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <p className="text-center text-sm text-amber-200">{t("editor.master_zero")}</p>
-                  <button
-                    onClick={() => useEditorStore.getState().setMasterGain(1)}
-                    className="rounded-lg border border-amber-300/40 bg-amber-300/20 px-4 py-1.5 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/30"
-                  >
-                    {t("editor.master_reset")}
-                  </button>
-                </div>
               )}
             </div>
           </div>

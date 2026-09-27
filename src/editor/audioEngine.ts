@@ -241,7 +241,26 @@ export class AudioTimeline {
   async gainPathProbe(segments: Segment[], master: number): Promise<void> {
     const first = segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
     if (!first) return;
-    await this.play(segments, first.timelineStartMs, 0.001);
+    // Start where the source actually has signal (scanning its peaks), or the
+    // probe would measure silence and prove nothing.
+    let fromMs = first.timelineStartMs;
+    const src = this.sources.get(first.sourceClipId);
+    const stem = src?.stems.find((s) => s.label === "game") ?? src?.stems[0];
+    if (stem) {
+      const per = stem.peaks[0]?.length ? stem.peaks[0].length / 2 : 0;
+      const srcDur = Math.max(1, src?.durationMs ?? 1);
+      for (let b = 0; b < per; b++) {
+        const amp = Math.max(
+          Math.abs(stem.peaks[0][b * 2] ?? 0),
+          Math.abs(stem.peaks[0][b * 2 + 1] ?? 0),
+        );
+        if (amp > 0.2) {
+          fromMs = first.timelineStartMs + first.inMs + (b / per) * srcDur;
+          break;
+        }
+      }
+    }
+    await this.play(segments, fromMs, 0.01);
     await new Promise((r) => setTimeout(r, 450));
     const on = this.levels().out;
     const muted = segments.map((s) => ({ ...s, gainMix: 0, gainGame: 0, gainMic: 0 }));
@@ -311,14 +330,17 @@ export class AudioTimeline {
           `out=${Math.round(seg.outMs)} speed=${seg.speed} ` +
           `g=${seg.gainGame} m=${seg.gainMic} mix=${seg.gainMix}`,
       );
-      // Multi-stem sources: Game/Mic only (the Mix stem duplicates them).
-      const wanted =
-        decoded.stems.length > 1
-          ? decoded.stems.filter((s) => s.label === "game" || s.label === "mic")
-          : decoded.stems;
-      for (const stem of wanted) {
+      // ALL channels play, each through its own per-clip gain: Mix, Game and
+      // Mic are independent sliders (the user mixes what they want to hear).
+      for (const stem of decoded.stems) {
         const kind: "mix" | "game" | "mic" =
-          decoded.stems.length > 1 ? (stem.label === "mic" ? "mic" : "game") : "mix";
+          stem.label === "mic"
+            ? "mic"
+            : stem.label === "game"
+              ? "game"
+              : stem.label === "mix"
+                ? "mix"
+                : "mix";
         const value =
           kind === "mic" ? seg.gainMic : kind === "game" ? seg.gainGame : seg.gainMix;
         const target =
