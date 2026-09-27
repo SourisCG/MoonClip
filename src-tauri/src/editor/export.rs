@@ -249,6 +249,14 @@ pub fn audio_filter(
             v
         };
         let start = seg.timeline_start_ms.max(0);
+        let speed = seg.speed.clamp(0.05, 20.0);
+        // Speed changes the visual length; the audio must follow (rubberband
+        // keeps the pitch, unlike the preview's playbackRate).
+        let tempo = if (speed - 1.0).abs() > f64::EPSILON {
+            format!(",rubberband=tempo={speed:.4}")
+        } else {
+            String::new()
+        };
         for (stream, gain) in sources {
             let label = format!("a{i}_{stream}");
             let delay = if start > 0 {
@@ -257,7 +265,7 @@ pub fn audio_filter(
                 String::new()
             };
             chains.push(format!(
-                "[{idx}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,volume={:.3}{delay}[{label}]",
+                "[{idx}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,volume={:.3}{tempo}{delay}[{label}]",
                 secs(seg.in_ms),
                 secs(seg.out_ms),
                 gain.clamp(0.0, 4.0),
@@ -767,6 +775,20 @@ mod tests {
         assert!(graph.contains("volume=1.500,adelay=500|500[a0_2]"), "{graph}");
         assert!(graph.contains("amix=inputs=2:duration=longest:normalize=0"), "{graph}");
         assert!(graph.contains("atrim=0:3.000"));
+        assert!(!graph.contains("rubberband"), "{graph}");
+    }
+
+    #[test]
+    fn audio_filter_stretches_with_rubberband_for_speed() {
+        let mut s = seg(0, 2000);
+        s.speed = 0.5;
+        let (graph, has) = audio_filter(&[s], &[1], &[3], 4000, 1.0, 1.0, 1.0);
+        assert!(has);
+        assert!(graph.contains("rubberband=tempo=0.5000"), "{graph}");
+        let mut s = seg(0, 2000);
+        s.speed = 3.0;
+        let (graph, _) = audio_filter(&[s], &[1], &[3], 700, 1.0, 1.0, 1.0);
+        assert!(graph.contains("rubberband=tempo=3.0000"), "{graph}");
     }
 
     #[test]
@@ -917,6 +939,45 @@ mod tests {
         let text = String::from_utf8_lossy(&stderr.stderr);
         assert_eq!(session::parse_audio_track_count(&text), 1, "{text}");
         assert!(crate::editor::ffmpeg::parse_video_stream_line(&text).is_some());
+
+        // Speed 2x: video setpts + audio rubberband must produce a clip half
+        // as long, still with one audio track.
+        let mut fast = seg(1000, 2500);
+        fast.speed = 2.0;
+        let fast_a = dir.join("fast_a.mp4");
+        let ok = tokio::process::Command::new(&ff)
+            .args(&stage_a_args(
+                &src,
+                &fast_a,
+                &fast,
+                (640, 360),
+                (640, 360),
+                0,
+                "libx264",
+                0,
+            ))
+            .status()
+            .await
+            .unwrap();
+        assert!(ok.success(), "speed stage A failed");
+        let (fast_filter, _) = audio_filter(&[fast.clone()], &[1], &[3], 750, 1.0, 1.0, 1.0);
+        let fast_out = dir.join("fast.mp4");
+        let ok = tokio::process::Command::new(&ff)
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&fast_a)
+            .args(["-i"])
+            .arg(&src)
+            .args(["-filter_complex", &fast_filter, "-map", "0:v:0", "-map", "[aout]"])
+            .args(["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"])
+            .arg(&fast_out)
+            .status()
+            .await
+            .unwrap();
+        assert!(ok.success(), "speed stage B failed");
+        let ms = crate::editor::ffmpeg::probe_duration_ms(&ff, &fast_out)
+            .await
+            .expect("probe speed export");
+        assert!((500..=1100).contains(&ms), "speed export duration {ms} ms");
 
         // Text overlay: the generated drawtext filter must run with the
         // bundled font and produce the expected duration.

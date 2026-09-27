@@ -303,6 +303,9 @@ export default function EditorApp({
   const selectedOverlay =
     project?.overlays.find((o) => selection?.kind === "overlay" && o.id === selection.id) ??
     null;
+  const selectedSegment =
+    project?.segments.find((s) => selection?.kind === "segment" && s.id === selection.id) ??
+    null;
 
   // ---- Session lifecycle -------------------------------------------------
   useEffect(() => {
@@ -948,6 +951,36 @@ export default function EditorApp({
                   className="w-full accent-amber-300"
                 />
               </label>
+            </div>
+          )}
+
+          {selectedSegment && (
+            <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-2">
+              <p className="text-[11px] font-semibold text-slate-300">{t("editor.speed")}</p>
+              <div className="flex flex-wrap gap-1">
+                {[0.25, 0.5, 1, 1.5, 2, 3, 4].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => {
+                      useEditorStore
+                        .getState()
+                        .updateSegment(selectedSegment.id, { speed: v });
+                      // Re-schedule the audio at the new rate if playing.
+                      if (useEditorStore.getState().playing) {
+                        seek(useEditorStore.getState().playheadMs);
+                      }
+                    }}
+                    className={`rounded border px-1.5 py-0.5 font-mono text-[10px] transition ${
+                      Math.abs(selectedSegment.speed - v) < 0.001
+                        ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
+                        : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
+                    }`}
+                  >
+                    {v}x
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-500">{t("editor.speed_hint")}</p>
             </div>
           )}
 

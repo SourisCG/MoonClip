@@ -209,6 +209,8 @@
     "mode_stems": "Modo: stems ({{stems}})",
     "master_zero": "Volumen general (Master) en 0%: no se oirá nada.",
     "master_reset": "Poner a 100%",
+    "speed": "Velocidad",
+    "speed_hint": "En el export el audio conserva el tono (rubberband); en el preview puede sonar más agudo/grave.",
     "shortcuts": "Espacio: play · Ctrl+K: dividir · Ctrl+D: duplicar · Supr: borrar · Ctrl+Z: deshacer",
     "export_title": "Exportar clip",
     "resolution": "Resolución",

@@ -65,6 +65,7 @@ function SegmentItem({ segment }: { segment: Segment }) {
           <span className="pointer-events-none select-none truncate">
             {name ? `${name} · ` : ""}
             {fmt(duration)}
+            {Math.abs(segment.speed - 1) > 0.001 ? ` · ${segment.speed}x` : ""}
           </span>
         </div>
       </div>
