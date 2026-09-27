@@ -11,6 +11,7 @@ import {
   type Span,
 } from "dnd-timeline";
 import { useEditorStore } from "./store";
+import { WaveCanvas } from "./WaveCanvas";
 import {
   segmentDurationMs,
   type EditorAudioTrack,
@@ -177,14 +178,16 @@ function Playhead() {
 
 function Inner({
   rows,
-  laneRefs,
+  stems,
+  plate,
   visibleEnd,
   onSeek,
   onScrubStart,
   onScrubEnd,
 }: {
   rows: (RowDefinition & { label?: string })[];
-  laneRefs: React.MutableRefObject<(HTMLDivElement | null)[]>;
+  stems: { label: string; peaks: number[][] }[];
+  plate: { width: number; offset: number };
   visibleEnd: number;
   onSeek: (ms: number) => void;
   onScrubStart: () => void;
@@ -257,14 +260,31 @@ function Inner({
               overlays
                 .filter((o) => o.id === rows[idx].id)
                 .map((o) => <OverlayItem key={o.id} overlay={o} />)}
-            {idx >= audioStart && (
-              <div
-                ref={(el) => {
-                  laneRefs.current[idx - audioStart] = el;
-                }}
-                className="h-full w-full"
-              />
-            )}
+            {idx >= audioStart &&
+              (() => {
+                const stem = stems[idx - audioStart];
+                return (
+                  <div
+                    className={
+                      stem
+                        ? "h-full"
+                        : "h-full w-full opacity-15"
+                    }
+                    style={
+                      stem && plate.width > 0
+                        ? { width: plate.width, marginLeft: plate.offset }
+                        : undefined
+                    }
+                  >
+                    <WaveCanvas
+                      peaks={stem?.peaks}
+                      color={
+                        ["#0891b2", "#22c55e", "#f59e0b"][idx - audioStart] ?? "#0891b2"
+                      }
+                    />
+                  </div>
+                );
+              })()}
           </Lane>
         ))}
         <Playhead />
@@ -277,7 +297,8 @@ function Inner({
  *  one lane per capture audio track. Clicking/dragging anywhere scrubs. */
 export function TimelineView({
   audioTracks,
-  laneRefs,
+  stems,
+  plate,
   visibleEnd,
   onVisibleEnd,
   onSeek,
@@ -285,7 +306,8 @@ export function TimelineView({
   onScrubEnd,
 }: {
   audioTracks: EditorAudioTrack[];
-  laneRefs: React.MutableRefObject<(HTMLDivElement | null)[]>;
+  stems: { label: string; peaks: number[][] }[];
+  plate: { width: number; offset: number };
   visibleEnd: number;
   onVisibleEnd: (ms: number) => void;
   onSeek: (ms: number) => void;
@@ -347,7 +369,8 @@ export function TimelineView({
     >
       <Inner
         rows={rows}
-        laneRefs={laneRefs}
+        stems={stems}
+        plate={plate}
         visibleEnd={visibleEnd}
         onSeek={onSeek}
         onScrubStart={onScrubStart}

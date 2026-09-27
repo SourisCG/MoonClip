@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import Moveable from "react-moveable";
-import WaveSurfer from "wavesurfer.js";
 import {
   ArrowLeft,
   Copy,
@@ -22,6 +21,7 @@ import {
 } from "lucide-react";
 import { TimelineView } from "./TimelineView";
 import { ExportDialog } from "./ExportDialog";
+import { AudioTimeline, VIDEO_SYNC_TOLERANCE_MS } from "./audioEngine";
 import { canRedo, canUndo, redo, undo, useEditorStore } from "./store";
 import {
   projectDurationMs,
@@ -32,6 +32,8 @@ import {
   type Segment,
 } from "./types";
 import type { ClipMetadata } from "../types";
+
+const SIDEBAR_WIDTH = 88;
 
 function fmt(ms: number) {
   const s = Math.max(0, ms) / 1000;
@@ -162,7 +164,8 @@ function OverlayView({
   );
 }
 
-/** Heavy editor (E2/E3a/E5a): lazy chunk, maximized view, full teardown. */
+/** Heavy editor: lazy chunk, maximized view, full teardown.
+ *  Playback uses a single AudioContext clock; the video is muted and slaved. */
 export default function EditorApp({
   clipId,
   onExit,
@@ -181,14 +184,17 @@ export default function EditorApp({
   const [toast, setToast] = useState<string | null>(null);
   const [library, setLibrary] = useState<ClipMetadata[]>([]);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
+  const [stems, setStems] = useState<{ label: string; peaks: number[][] }[]>([]);
+  const [laneWidth, setLaneWidth] = useState(0);
+  /** Fallback clock when the active source has no decodable audio. */
+  const [videoClock, setVideoClock] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
+  const timelineWrapRef = useRef<HTMLDivElement | null>(null);
   const overlayEls = useRef<Record<string, HTMLDivElement | null>>({});
-  const laneRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const wsRef = useRef<WaveSurfer[]>([]);
-  const loadedClipRef = useRef<string | null>(null);
-  const currentSegRef = useRef<Segment | null>(null);
+  const engineRef = useRef<AudioTimeline | null>(null);
+  const videoSegRef = useRef<Segment | null>(null);
   const saveTimer = useRef<number | undefined>(undefined);
   const openingRef = useRef(false);
   const resumeAfterScrub = useRef(false);
@@ -228,14 +234,14 @@ export default function EditorApp({
       })
       .catch((e) => setError(String(e)));
     return () => {
-      wsRef.current.forEach((w) => w.destroy());
-      wsRef.current = [];
       const v = videoRef.current;
       if (v) {
         v.pause();
         v.removeAttribute("src");
         v.load();
       }
+      engineRef.current?.dispose();
+      engineRef.current = null;
       if (!closedRef.current && sessionRef.current) {
         closedRef.current = true;
         void invoke("editor_close", { sessionId: sessionRef.current.sessionId }).catch(() => {});
@@ -245,7 +251,8 @@ export default function EditorApp({
 
   const exit = useCallback(async () => {
     videoRef.current?.pause();
-    wsRef.current.forEach((w) => w.pause());
+    engineRef.current?.dispose();
+    engineRef.current = null;
     if (sessionRef.current && !closedRef.current) {
       closedRef.current = true;
       await invoke("editor_close", { sessionId: sessionRef.current.sessionId }).catch(() => {});
@@ -255,159 +262,212 @@ export default function EditorApp({
     onExit();
   }, [onExit]);
 
-  // ---- Playback (virtual player over segments/sources) ------------------
-  const applyGains = useCallback(() => {
-    const gains = [
-      selectedSegment?.gainMix,
-      selectedSegment?.gainGame,
-      selectedSegment?.gainMic,
-    ];
-    wsRef.current.forEach((w, i) => w.setVolume(Math.min(1, gains[i] ?? 1)));
-  }, [selectedSegment]);
+  // ---- Audio engine ------------------------------------------------------
+  const ensureEngine = useCallback(() => {
+    if (!engineRef.current) engineRef.current = new AudioTimeline();
+    return engineRef.current;
+  }, []);
 
-  const loadSegment = useCallback(
-    (seg: Segment, autoplay: boolean, seekMs?: number) => {
-      const source = useEditorStore.getState().sources[seg.sourceClipId];
+  const gainsOf = useCallback(
+    (seg: Segment) => ({
+      mix: seg.gainMix,
+      game: seg.gainGame,
+      mic: seg.gainMic,
+    }),
+    [],
+  );
+
+  /** Decode every source used by the project so playback never stalls. */
+  const decodeProject = useCallback(
+    async (p: NonNullable<typeof project>) => {
+      const engine = ensureEngine();
+      const ids = Array.from(new Set(p.segments.map((s) => s.sourceClipId)));
+      const store = useEditorStore.getState();
+      for (const id of ids) {
+        const source = store.sources[id];
+        if (source) await engine.ensureSource(source);
+      }
+      return engine;
+    },
+    [ensureEngine],
+  );
+
+  // Decode the primary source as soon as the session is ready.
+  useEffect(() => {
+    if (!session || !project) return;
+    void decodeProject(project).then(() => {
+      const id = project.segments[0]?.sourceClipId;
+      if (id) {
+        setStems(engineRef.current?.peaksFor(id) ?? []);
+        setVideoClock(!engineRef.current?.hasAudio(id));
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  // Which source's waveforms are shown (the one under the playhead).
+  const waveSourceId = useMemo(() => {
+    if (!project) return null;
+    const under = segmentAt(project.segments, playhead);
+    if (under) return under.sourceClipId;
+    const sorted = project.segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs);
+    return sorted[0]?.sourceClipId ?? null;
+  }, [project, playhead]);
+
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!session || !engine || !waveSourceId) return;
+    const source = useEditorStore.getState().sources[waveSourceId];
+    if (!source) return;
+    void engine.ensureSource(source).then(() => {
+      setStems(engine.peaksFor(waveSourceId));
+      const seg = useEditorStore.getState().project?.segments.find(
+        (s) => s.sourceClipId === waveSourceId,
+      );
+      setVideoClock(!engine.hasAudio(seg?.sourceClipId ?? waveSourceId));
+    });
+  }, [session, waveSourceId, project?.segments.length]);
+
+  // Lane width + waveform plate (same time->px mapping as the ruler).
+  useEffect(() => {
+    const el = timelineWrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setLaneWidth(Math.max(0, el.clientWidth - SIDEBAR_WIDTH)));
+    ro.observe(el);
+    setLaneWidth(Math.max(0, el.clientWidth - SIDEBAR_WIDTH));
+    return () => ro.disconnect();
+  }, [session]);
+
+  const plate = useMemo(() => {
+    if (!project || !waveSourceId) return { width: 0, offset: 0 };
+    const source = useEditorStore.getState().sources[waveSourceId];
+    const first = project.segments
+      .filter((s) => s.sourceClipId === waveSourceId)
+      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
+    if (!source || !first || laneWidth <= 0) return { width: 0, offset: 0 };
+    const pxPerMs = laneWidth / Math.max(1000, visibleMs);
+    return {
+      width: Math.max(8, source.durationMs * pxPerMs),
+      offset: (first.timelineStartMs - first.inMs) * pxPerMs,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, waveSourceId, laneWidth, visibleMs, session]);
+
+  // Grow the visible window with the timeline (single source of truth).
+  useEffect(() => {
+    if (total + 1000 > visibleMs) setVisibleMs(total + 2000);
+  }, [total, visibleMs]);
+
+  // ---- Video slaving / fallback clock ------------------------------------
+  const syncVideo = useCallback(
+    (ms: number, autoplay: boolean) => {
+      const p = useEditorStore.getState().project;
       const v = videoRef.current;
-      if (!source || !v) return;
-      currentSegRef.current = seg;
-      const targetMs = seekMs ?? seg.inMs;
-      const targetSec = targetMs / 1000;
-
-      // Stems follow the video position: without this, playing after a scrub
-      // resumed each waveform where it was (audible desync).
-      const syncStems = (play: boolean) => {
-        wsRef.current.forEach((w) => {
-          try {
-            w.setTime(targetSec);
-          } catch {
-            /* not ready */
-          }
-          if (play) void w.play();
-        });
-      };
-      const setTimeline = () => {
-        useEditorStore
-          .getState()
-          .setPlayhead(
-            seg.timelineStartMs +
-              (targetMs - seg.inMs) / Math.max(0.05, seg.speed),
-          );
-      };
-
-      if (loadedClipRef.current !== source.clipId) {
-        loadedClipRef.current = source.clipId;
+      if (!p || !v) return;
+      const seg = segmentAt(p.segments, ms);
+      if (!seg) {
+        v.pause();
+        return;
+      }
+      const source = useEditorStore.getState().sources[seg.sourceClipId];
+      if (!source) return;
+      const targetSec = sourceMsFor(seg, ms) / 1000;
+      const needsSrc = videoSegRef.current?.sourceClipId !== seg.sourceClipId || !v.src;
+      videoSegRef.current = seg;
+      if (needsSrc) {
         v.src = source.videoUrl;
         v.load();
-        // Swap every lane to this source's stems (same instances, new media).
-        const loads = wsRef.current.map((w, i) => {
-          const stem = source.stems[i];
-          return stem ? w.load(stem.url) : Promise.resolve();
-        });
         const onMeta = () => {
           v.removeEventListener("loadedmetadata", onMeta);
           v.currentTime = targetSec;
-          setTimeline();
-          void Promise.all(loads).then(() => {
-            syncStems(autoplay);
-            if (autoplay) {
-              void v.play();
-              useEditorStore.getState().setPlaying(true);
-            }
-          });
+          if (autoplay) void v.play().catch(() => {});
         };
         v.addEventListener("loadedmetadata", onMeta);
-      } else {
-        v.currentTime = targetSec;
-        setTimeline();
-        syncStems(autoplay);
-        if (autoplay) {
-          void v.play();
-          useEditorStore.getState().setPlaying(true);
-        }
+        return;
       }
-      applyGains();
+      if (Math.abs(v.currentTime - targetSec) * 1000 > VIDEO_SYNC_TOLERANCE_MS) {
+        v.currentTime = targetSec;
+      }
+      v.playbackRate = Math.max(0.25, Math.min(4, seg.speed));
+      if (autoplay && v.paused) void v.play().catch(() => {});
     },
-    [applyGains],
+    [],
   );
+
+  // ---- Transport ---------------------------------------------------------
+  const pause = useCallback(() => {
+    void engineRef.current?.pause();
+    videoRef.current?.pause();
+    useEditorStore.getState().setPlaying(false);
+  }, []);
+
+  const play = useCallback(async () => {
+    const p = useEditorStore.getState().project;
+    if (!p) return;
+    const engine = await decodeProject(p);
+    const ms = useEditorStore.getState().playheadMs;
+    const seg = segmentAt(p.segments, ms) ?? p.segments[0];
+    const hasAudio = seg ? engine.hasAudio(seg.sourceClipId) : false;
+    setVideoClock(!hasAudio);
+    syncVideo(ms, true);
+    if (hasAudio) {
+      await engine.play(p.segments, ms, gainsOf);
+      await engine.resume();
+      const v = videoRef.current;
+      if (v) v.muted = true;
+    } else {
+      const v = videoRef.current;
+      if (v) {
+        v.muted = false;
+        v.volume = Math.min(1, Math.max(0, seg?.gainMix ?? 1));
+      }
+    }
+    useEditorStore.getState().setPlaying(true);
+  }, [decodeProject, gainsOf, syncVideo]);
+
+  const toggle = useCallback(() => {
+    if (useEditorStore.getState().playing) pause();
+    else void play();
+  }, [pause, play]);
 
   const seek = useCallback(
     (ms: number) => {
       const p = useEditorStore.getState().project;
       if (!p) return;
-      const clampedMs = Math.max(0, Math.min(ms, Math.max(0, projectDurationMs(p) - 30)));
-      const seg = segmentAt(p.segments, clampedMs);
-      const v = videoRef.current;
-      if (!seg) {
-        // Gap (or past the end): park the playhead without starting a source.
-        currentSegRef.current = null;
-        v?.pause();
-        wsRef.current.forEach((w) => w.pause());
-        useEditorStore.getState().setPlayhead(clampedMs);
-        return;
-      }
+      const target = Math.max(0, Math.min(ms, Math.max(0, projectDurationMs(p) - 30)));
       const wasPlaying = useEditorStore.getState().playing;
-      loadSegment(seg, wasPlaying, sourceMsFor(seg, clampedMs));
+      useEditorStore.getState().setPlayhead(target);
+      syncVideo(target, wasPlaying);
+      void engineRef.current?.seek(target, p.segments, wasPlaying, gainsOf);
     },
-    [loadSegment],
+    [gainsOf, syncVideo],
   );
 
-  const pause = useCallback(() => {
-    videoRef.current?.pause();
-    wsRef.current.forEach((w) => w.pause());
-    useEditorStore.getState().setPlaying(false);
-  }, []);
-
-  const play = useCallback(() => {
-    const p = useEditorStore.getState().project;
-    if (!p) return;
-    const ms = useEditorStore.getState().playheadMs;
-    const seg = segmentAt(p.segments, ms) ?? p.segments[0];
-    if (!seg) return;
-    loadSegment(seg, true, sourceMsFor(seg, segmentAt(p.segments, ms) ? ms : seg.timelineStartMs));
-  }, [loadSegment]);
-
-  const toggle = useCallback(() => {
-    if (useEditorStore.getState().playing) pause();
-    else play();
-  }, [pause, play]);
-
-  // Playback clock: video drives the timeline; segment boundaries advance.
+  // Single clock: the playhead always follows the audio (or the video when the
+  // source has no decodable audio).
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
-    let lastDriftAt = performance.now();
     const tick = () => {
-      const v = videoRef.current;
       const p = useEditorStore.getState().project;
-      const seg = currentSegRef.current;
-      if (!v || !p || !seg) return;
-      const ms = v.currentTime * 1000;
-      const timelineMs =
-        seg.timelineStartMs + (ms - seg.inMs) / Math.max(0.05, seg.speed);
-      useEditorStore.getState().setPlayhead(timelineMs);
-      if (performance.now() - lastDriftAt > 3000) {
-        lastDriftAt = performance.now();
-        wsRef.current.forEach((w) => {
-          try {
-            // Seeking mid-playback glitches the audio: only pull back real
-            // desyncs, never micro-drift.
-            if (Math.abs(w.getCurrentTime() * 1000 - ms) > 800) w.setTime(ms / 1000);
-          } catch {
-            /* not ready */
-          }
-        });
+      const v = videoRef.current;
+      const engine = engineRef.current;
+      if (!p) return;
+      let ms: number;
+      if (!videoClock && engine && engine.isPlaying()) {
+        ms = engine.currentTimeMs();
+      } else if (v) {
+        const seg = videoSegRef.current;
+        ms = seg
+          ? seg.timelineStartMs + (v.currentTime * 1000 - seg.inMs) / Math.max(0.05, seg.speed)
+          : v.currentTime * 1000;
+      } else {
+        return;
       }
-      if (ms >= seg.outMs - 25) {
-        const end = seg.timelineStartMs + segmentDurationMs(seg);
-        const next = p.segments
-          .filter((s) => s.timelineStartMs >= end - 1)
-          .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
-        if (next) {
-          loadSegment(next, true);
-          raf = requestAnimationFrame(tick);
-          return;
-        }
+      useEditorStore.getState().setPlayhead(ms);
+      if (!videoClock) syncVideo(ms, true);
+      const end = projectDurationMs(p);
+      if (ms >= end - 20) {
         pause();
         useEditorStore.getState().setPlayhead(end);
         return;
@@ -416,105 +476,18 @@ export default function EditorApp({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, pause, loadSegment]);
+  }, [playing, videoClock, syncVideo, pause]);
 
-  // ---- Waveforms ---------------------------------------------------------
+  // Live track gains (shared GainNodes, no reschedule).
   useEffect(() => {
-    if (!session) return;
-    const created: WaveSurfer[] = [];
-    session.sources[0]?.stems.forEach((stem, i) => {
-      const el = laneRefs.current[i];
-      if (!el) return;
-      const ws = WaveSurfer.create({
-        container: el,
-        url: stem.url,
-        height: 30,
-        waveColor: "#334155",
-        progressColor: "#0891b2",
-        cursorWidth: 0,
-        barWidth: 2,
-        barGap: 1,
-        normalize: false,
-        interact: false,
-        autoScroll: false,
-      });
-      created.push(ws);
-    });
-    wsRef.current = created;
-    loadedClipRef.current = null;
-    // Sync the preview with the first segment (right source + frame).
-    const first = session.project.segments
-      .slice()
-      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
-    if (first) {
-      const v = videoRef.current;
-      if (v && !v.src) v.src = session.sources[0].videoUrl;
-      requestAnimationFrame(() => {
-        const seg = useEditorStore.getState().project?.segments.find((s) => s.id === first.id);
-        if (seg) loadSegment(seg, false, seg.inMs);
-      });
-    }
-    return () => {
-      created.forEach((w) => w.destroy());
-      wsRef.current = [];
-    };
-  }, [session, loadSegment]);
-
-  useEffect(() => {
-    applyGains();
-  }, [applyGains, session]);
-
-  // Waveform scale: wavesurfer stretches the WHOLE stem over its container,
-  // while the timeline maps only the visible window; without pinning the
-  // width the waves drift from the ruler/playhead. The plate width matches
-  // `valueToPixels(sourceDuration)` and it is offset so source time lines up
-  // with timeline time (correct for the first segment of each source; later
-  // splits of the same source reuse the same plate).
-  const [laneWidth, setLaneWidth] = useState(0);
-
-  // Grow the visible window with the timeline (single source of truth).
-  useEffect(() => {
-    if (total + 1000 > visibleMs) setVisibleMs(total + 2000);
-  }, [total, visibleMs]);
-  useEffect(() => {
-    const el = laneRefs.current[0];
-    const parent = el?.parentElement ?? null;
-    if (!parent) return;
-    const ro = new ResizeObserver(() => setLaneWidth(parent.clientWidth));
-    ro.observe(parent);
-    setLaneWidth(parent.clientWidth);
-    return () => ro.disconnect();
-  }, [session]);
-
-  const waveSourceId = useMemo(() => {
-    const first = project?.segments
-      .slice()
-      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
-    if (!first) return null;
-    // Prefer the source under the playhead (multi-clip), else the first.
-    const under = project ? segmentAt(project.segments, playhead) : undefined;
-    return (under ?? first).sourceClipId;
-  }, [project, playhead]);
-
-  useEffect(() => {
-    if (!laneWidth || !waveSourceId) return;
-    const store = useEditorStore.getState();
-    const source = store.sources[waveSourceId];
-    const plate = store.project?.segments
-      .filter((s) => s.sourceClipId === waveSourceId)
-      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
-    if (!source || !plate) return;
-    const pxPerMs = laneWidth / Math.max(1000, visibleMs);
-    const width = Math.max(8, source.durationMs * pxPerMs);
-    const offset = (plate.timelineStartMs - plate.inMs) * pxPerMs;
-    laneRefs.current.forEach((el, i) => {
-      if (!el) return;
-      const hasStem = Boolean(source.stems[i]);
-      el.style.width = `${width}px`;
-      el.style.marginLeft = `${offset}px`;
-      el.style.opacity = hasStem ? "1" : "0.15";
-    });
-  }, [laneWidth, visibleMs, waveSourceId, session, project]);
+    const engine = engineRef.current;
+    if (!engine || !selectedSegment) return;
+    engine.setTrackVolume("mix", Math.min(2, selectedSegment.gainMix));
+    engine.setTrackVolume("game", Math.min(2, selectedSegment.gainGame));
+    engine.setTrackVolume("mic", Math.min(2, selectedSegment.gainMic));
+    const v = videoRef.current;
+    if (v && videoClock) v.volume = Math.min(1, Math.max(0, selectedSegment.gainMix));
+  }, [selectedSegment, videoClock, session]);
 
   // Frame size (font scaling / overlay coordinates).
   useEffect(() => {
@@ -527,12 +500,6 @@ export default function EditorApp({
     setFrame({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, [session]);
-
-  // Selecting an overlay needs one extra render: the element ref is attached
-  // during commit, after `moveableTarget` was computed.
-  useEffect(() => {
-    forceTick((n) => n + 1);
-  }, [selection]);
 
   // ---- Autosave ----------------------------------------------------------
   useEffect(() => {
@@ -607,15 +574,16 @@ export default function EditorApp({
         store.upsertSource(source);
       }
       store.addSegmentFromSource(source, null);
+      const engine = ensureEngine();
+      await engine.ensureSource(source);
       forceTick((n) => n + 1);
     },
-    [session],
+    [session, ensureEngine],
   );
 
   const addText = useCallback(() => {
     const store = useEditorStore.getState();
-    const at = store.playheadMs;
-    store.addTextOverlay(at, 3000);
+    store.addTextOverlay(store.playheadMs, 3000);
   }, []);
 
   const exportDone = useCallback(() => {
@@ -914,16 +882,16 @@ export default function EditorApp({
               ))}
               {moveableTarget && (
                 <Moveable
+                  key={selection!.id}
                   target={moveableTarget}
                   draggable
                   scalable
                   rotatable
                   keepRatio
                   origin={false}
-                  // Editors' feel: magnetize rotation to 45/90/180… and snap
-                  // position to the frame center/edges.
-                  rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
-                  rotationSnapThreshold={5}
+                  snappable
+                  snapRotationDegrees={[0, 45, 90, 135, 180, 225, 270, 315]}
+                  snapRotationThreshold={7}
                   snapDirections={{
                     top: true,
                     left: true,
@@ -935,11 +903,10 @@ export default function EditorApp({
                   verticalGuidelines={[0, frame.w / 2, frame.w]}
                   horizontalGuidelines={[0, frame.h / 2, frame.h]}
                   elementGuidelines={videoRef.current ? [videoRef.current] : []}
-                  snapThreshold={6}
+                  snapHorizontalThreshold={6}
+                  snapVerticalThreshold={6}
                   snapGap={false}
                   onDrag={({ target, transform }) => {
-                    // Moveable already decomposed our transform (translate +
-                    // centering + scale + rotate): keep it verbatim.
                     (target as HTMLElement).style.transform = transform;
                   }}
                   onDragEnd={({ target }) => {
@@ -950,6 +917,7 @@ export default function EditorApp({
                       x: (trect.left + trect.width / 2 - frect.left) / frect.width,
                       y: (trect.top + trect.height / 2 - frect.top) / frect.height,
                     });
+                    forceTick((n) => n + 1);
                   }}
                   onScale={({ scale }) => {
                     lastScale.current = scale[0];
@@ -987,7 +955,7 @@ export default function EditorApp({
               onScrubEnd={() => {
                 if (resumeAfterScrub.current) {
                   resumeAfterScrub.current = false;
-                  play();
+                  void play();
                 }
               }}
             />
@@ -998,6 +966,7 @@ export default function EditorApp({
               <TimeLabel total={total} />
               <span className="ml-auto font-mono text-[11px] text-slate-500">
                 {project.segments.length} clips · {project.overlays.length} text
+                {videoClock ? " · audio del video" : ""}
               </span>
             </div>
           </div>
@@ -1005,10 +974,11 @@ export default function EditorApp({
       </div>
 
       {/* Timeline */}
-      <div className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
+      <div ref={timelineWrapRef} className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
         <TimelineView
           audioTracks={session.audioTracks}
-          laneRefs={laneRefs}
+          stems={stems}
+          plate={plate}
           visibleEnd={visibleMs}
           onVisibleEnd={(ms) => setVisibleMs(Math.max(1000, ms))}
           onSeek={seek}
@@ -1021,7 +991,7 @@ export default function EditorApp({
           onScrubEnd={() => {
             if (resumeAfterScrub.current) {
               resumeAfterScrub.current = false;
-              play();
+              void play();
             }
           }}
         />
