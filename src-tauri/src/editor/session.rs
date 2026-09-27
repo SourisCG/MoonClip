@@ -91,7 +91,13 @@ pub struct EditorSourceInfo {
     pub height: u32,
     pub fps: f64,
     pub codec: String,
+    /// Preview URL: a video-ONLY rendition. The original file keeps its own
+    /// audio track and WebKitGTK may ignore `muted`, which would play it over
+    /// the engine (making every channel slider look dead).
     pub video_url: String,
+    /// Original file URL (WITH audio): only used as a last-resort fallback
+    /// when the stems cannot be decoded.
+    pub audio_video_url: String,
     pub using_proxy: bool,
     pub stems: Vec<AudioTrackInfo>,
 }
@@ -287,26 +293,41 @@ pub async fn ensure_source(
         .map(|e| e.id.clone())
         .unwrap_or_else(|| "libx264".to_string());
 
+    // Preview is ALWAYS video-only: H.264 -> fast lossless remux (-an, no
+    // re-encode), other codecs -> H.264 proxy (proxy_args already strips the
+    // audio). With no audio track in the <video>, the engine is the only
+    // sound source and the channel sliders are the only volume controls.
+    let preview = clip_dir.join("preview.mp4");
     let mut using_proxy = false;
-    let video_path = if !codec.is_empty() && codec != "h264" {
-        let proxy = clip_dir.join("proxy.mp4");
+    let preview_ok = if !codec.is_empty() && codec != "h264" {
         let args = proxy_args(&auto_encoder, height, &input);
         let status = tokio::process::Command::new(&ffmpeg)
             .args(&args)
-            .arg(&proxy)
+            .arg(&preview)
             .status()
             .await
             .map_err(|e| format!("proxy encode failed: {e}"))?;
-        if status.success() && proxy.is_file() {
-            using_proxy = true;
-            proxy
-        } else {
-            eprintln!("[moonclip] warning: proxy generation failed for {clip_id}");
-            input.clone()
-        }
+        using_proxy = status.success() && preview.is_file();
+        using_proxy
     } else {
-        input.clone()
+        let status = tokio::process::Command::new(&ffmpeg)
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&input)
+            .args([
+                "-map", "0:v:0", "-c:v", "copy", "-an", "-movflags", "+faststart",
+            ])
+            .arg(&preview)
+            .status()
+            .await
+            .map_err(|e| format!("preview remux failed: {e}"))?;
+        status.success() && preview.is_file()
     };
+    if !preview_ok {
+        eprintln!(
+            "[moonclip] warning: video-only preview failed for {clip_id}; using the original"
+        );
+    }
+    let video_source = if preview_ok { preview } else { input.clone() };
 
     let info = EditorSourceInfo {
         clip_id: clip.id.clone(),
@@ -317,7 +338,8 @@ pub async fn ensure_source(
         height,
         fps,
         codec,
-        video_url: crate::editor::media_server::media_url_session(Some(session_id), &video_path)?,
+        video_url: crate::editor::media_server::media_url_session(Some(session_id), &video_source)?,
+        audio_video_url: crate::editor::media_server::media_url_session(Some(session_id), &input)?,
         using_proxy,
         stems,
     };

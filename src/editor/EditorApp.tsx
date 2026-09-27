@@ -549,7 +549,11 @@ export default function EditorApp({
         videoSegRef.current = seg;
         lastCorrectionRef.current = performance.now();
         v.playbackRate = Math.max(0.25, Math.min(4, seg.speed));
-        v.src = source.videoUrl;
+        // Preview files have NO audio. Only when the stems cannot be decoded
+        // (the engine cannot play) fall back to the original file's audio.
+        v.src = engineRef.current?.hasAudio(seg.sourceClipId)
+          ? source.videoUrl
+          : source.audioVideoUrl;
         v.load();
         const onMeta = () => {
           v.removeEventListener("loadedmetadata", onMeta);

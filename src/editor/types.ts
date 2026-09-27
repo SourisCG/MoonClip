@@ -120,7 +120,10 @@ export interface EditorSourceInfo {
   height: number;
   fps: number;
   codec: string;
+  /** Video-only preview URL (no audio track): the engine is the only sound. */
   videoUrl: string;
+  /** Original file URL (with audio) for the rare stems-decode fallback. */
+  audioVideoUrl: string;
   usingProxy: boolean;
   stems: EditorAudioTrack[];
 }
