@@ -20,8 +20,6 @@ interface EditorState {
   project: EditProject | null;
   /** Media (video URL + stems) per source clip; not part of undo. */
   sources: Record<string, EditorSourceInfo>;
-  /** Clip whose waveforms are shown (changes rarely; kept out of t edits). */
-  activeSourceId: string | null;
   selection: Selection;
   playheadMs: number;
   playing: boolean;
@@ -36,7 +34,6 @@ interface EditorState {
     value: number,
   ) => void;
   setSources: (sources: EditorSourceInfo[]) => void;
-  setActiveSource: (clipId: string | null) => void;
   upsertSource: (source: EditorSourceInfo) => void;
   addSegmentFromSource: (source: EditorSourceInfo, atMs: number | null) => void;
   addTextOverlay: (startMs: number, durationMs: number) => void;
@@ -82,7 +79,6 @@ export const useEditorStore = create<EditorState>()(
     immer((set) => ({
       project: null,
       sources: {},
-      activeSourceId: null,
       selection: null,
       playheadMs: 0,
       playing: false,
@@ -111,11 +107,6 @@ export const useEditorStore = create<EditorState>()(
       setSources: (sources) =>
         set((s) => {
           s.sources = Object.fromEntries(sources.map((x) => [x.clipId, x]));
-        }),
-
-      setActiveSource: (clipId) =>
-        set((s) => {
-          s.activeSourceId = clipId;
         }),
 
       upsertSource: (source) =>
@@ -326,7 +317,6 @@ export const useEditorStore = create<EditorState>()(
         set((s) => {
           s.project = null;
           s.sources = {};
-          s.activeSourceId = null;
           s.selection = null;
           s.playheadMs = 0;
           s.playing = false;

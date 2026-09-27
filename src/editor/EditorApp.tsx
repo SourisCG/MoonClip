@@ -311,7 +311,10 @@ export default function EditorApp({
   const [library, setLibrary] = useState<ClipMetadata[]>([]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
-  const [stems, setStems] = useState<{ label: string; peaks: number[][] }[]>([]);
+  /** Peaks per SOURCE (not per active source): every clip draws its own waves. */
+  const [waveSources, setWaveSources] = useState<
+    Record<string, { label: string; peaks: number[][] }[]>
+  >({});
 
   /** Fallback clock when the active source has no decodable audio. */
   const [videoClock, setVideoClock] = useState(false);
@@ -336,7 +339,6 @@ export default function EditorApp({
   const sources = useEditorStore((s) => s.sources);
   const selection = useEditorStore((s) => s.selection);
   const playing = useEditorStore((s) => s.playing);
-  const activeSourceId = useEditorStore((s) => s.activeSourceId);
   const total = project ? projectDurationMs(project) : 0;
   const selectedOverlay =
     project?.overlays.find((o) => selection?.kind === "overlay" && o.id === selection.id) ??
@@ -446,64 +448,49 @@ export default function EditorApp({
     // KDE remembers per-app mute: clear it for our own stream (and retry
     // until the AudioContext has created it).
     void invoke<number>("editor_audio_health").catch(() => {});
-    void decodeProject(project).then(() => {
+    void decodeProject(project).then((engine) => {
+      setWaveSources(
+        Object.fromEntries(
+          Object.keys(useEditorStore.getState().sources).map((id) => [id, engine.peaksFor(id)]),
+        ),
+      );
       const id =
         project.segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0]
           ?.sourceClipId ?? null;
-      if (id) {
-        useEditorStore.getState().setActiveSource(id);
-        setStems(engineRef.current?.peaksFor(id) ?? []);
-        setVideoClock(!engineRef.current?.hasAudio(id));
-      }
+      if (id) setVideoClock(!engine.hasAudio(id));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  // Which source's waveforms are shown: the one under the playhead. The clock
-  // tick updates `activeSourceId` only when it changes, so this component does
-  // not re-render every frame.
-  const waveSourceId = activeSourceId;
-
-  // One waveform plate PER SEGMENT (a source can appear many times). The
-  // timeline position/size are computed inside TimelineView with dnd-timeline's
-  // own `valueToPixels`, so the waves share the clip bars' scale exactly.
+  // One waveform plate PER SEGMENT, always for EVERY clip: each plate draws
+  // its own source's peaks at its own timeline position (no "active source"
+  // that could show another clip's audio). Position/size are computed inside
+  // TimelineView with dnd-timeline's `valueToPixels`, the same mapping used by
+  // the clip bars, the ruler and the playhead.
   const plates = useMemo(() => {
-    if (!project || !waveSourceId) return [];
-    const source = useEditorStore.getState().sources[waveSourceId];
-    if (!source) return [];
-    // Prefer the decoded stem length over the container metadata (a few ms).
-    const decoded = engineRef.current?.durationMsFor(waveSourceId) ?? null;
-    const dur = Math.max(1, decoded ?? source.durationMs);
+    if (!project) return [];
     return project.segments
-      .filter((s) => s.sourceClipId === waveSourceId)
+      .slice()
       .sort((a, b) => a.timelineStartMs - b.timelineStartMs)
-      .map((seg) => ({
-        id: seg.id,
-        startMs: seg.timelineStartMs,
-        durationMs: segmentDurationMs(seg),
-        from: Math.min(1, Math.max(0, seg.inMs / dur)),
-        to: Math.min(1, Math.max(0, seg.outMs / dur)),
-        gainMix: seg.gainMix,
-        gainGame: seg.gainGame,
-        gainMic: seg.gainMic,
-      }));
+      .map((seg) => {
+        const source = sources[seg.sourceClipId];
+        // Prefer the decoded stem length over the container metadata (a few ms).
+        const decoded = engineRef.current?.durationMsFor(seg.sourceClipId) ?? null;
+        const dur = Math.max(1, decoded ?? source?.durationMs ?? 1);
+        return {
+          id: seg.id,
+          sourceId: seg.sourceClipId,
+          startMs: seg.timelineStartMs,
+          durationMs: segmentDurationMs(seg),
+          from: Math.min(1, Math.max(0, seg.inMs / dur)),
+          to: Math.min(1, Math.max(0, seg.outMs / dur)),
+          gainMix: seg.gainMix,
+          gainGame: seg.gainGame,
+          gainMic: seg.gainMic,
+        };
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, waveSourceId, session, stems]);
-
-  // Paused, clicking a clip shows ITS waveforms even when the playhead is
-  // elsewhere. Only on an actual selection change: scrubbing/playing must not
-  // be overridden by an old selection.
-  const lastWaveSelRef = useRef<string | null>(null);
-  useEffect(() => {
-    const selId = selection?.kind === "segment" ? selection.id : null;
-    if (selId === lastWaveSelRef.current) return;
-    lastWaveSelRef.current = selId;
-    if (!selId || playing) return;
-    const seg = useEditorStore.getState().project?.segments.find((s) => s.id === selId);
-    if (!seg || seg.sourceClipId === useEditorStore.getState().activeSourceId) return;
-    useEditorStore.getState().setActiveSource(seg.sourceClipId);
-    setStems(engineRef.current?.peaksFor(seg.sourceClipId) ?? []);
-  }, [selection, playing]);
+  }, [project, session, sources, waveSources]);
 
   // Grow the visible window with the timeline (single source of truth).
   useEffect(() => {
@@ -643,10 +630,6 @@ export default function EditorApp({
       const target = Math.max(0, Math.min(ms, Math.max(0, projectDurationMs(p) - 30)));
       const wasPlaying = useEditorStore.getState().playing;
       useEditorStore.getState().setPlayhead(target);
-      const segUnder = segmentAt(p.segments, target);
-      const srcId = segUnder?.sourceClipId ?? null;
-      useEditorStore.getState().setActiveSource(srcId);
-      setStems(engineRef.current?.peaksFor(srcId ?? "") ?? []);
       syncVideo(target, wasPlaying);
       void engineRef.current?.seek(target, p.segments, wasPlaying, masterGain);
     },
@@ -676,11 +659,6 @@ export default function EditorApp({
       }
       useEditorStore.getState().setPlayhead(ms);
       const seg = segmentAt(p.segments, ms);
-      const srcId = seg?.sourceClipId ?? null;
-      if (srcId !== useEditorStore.getState().activeSourceId) {
-        useEditorStore.getState().setActiveSource(srcId);
-        setStems(engine?.peaksFor(srcId ?? "") ?? []);
-      }
       if (!videoClock) {
         syncVideo(ms, true);
       } else if (v) {
@@ -815,6 +793,10 @@ export default function EditorApp({
       store.addSegmentFromSource(source, null);
       const engine = ensureEngine();
       await engine.ensureSource(source);
+      setWaveSources((prev) => ({
+        ...prev,
+        [source.clipId]: engine.peaksFor(source.clipId),
+      }));
       forceTick((n) => n + 1);
     },
     [session, ensureEngine],
@@ -970,7 +952,8 @@ export default function EditorApp({
             {videoClock
               ? t("editor.mode_video")
               : t("editor.mode_stems", {
-                  stems: stems.map((s) => s.label).join("+") || "—",
+                  stems:
+                    (sources[session.clip.id]?.stems ?? []).map((s) => s.label).join("+") || "—",
                 })}
           </p>
           <LevelMeters engineRef={engineRef} labels={[t("editor.game"), t("editor.mic")]} />
@@ -1566,7 +1549,7 @@ export default function EditorApp({
       <div className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
         <TimelineView
           audioTracks={session.audioTracks}
-          stems={stems}
+          waveSources={waveSources}
           plates={plates}
           master={masterGain}
           visibleEnd={visibleMs}

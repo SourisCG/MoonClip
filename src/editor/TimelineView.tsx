@@ -179,7 +179,7 @@ function Playhead() {
 
 function Inner({
   rows,
-  stems,
+  waveSources,
   plates,
   master,
   visibleEnd,
@@ -188,9 +188,10 @@ function Inner({
   onScrubEnd,
 }: {
   rows: (RowDefinition & { label?: string })[];
-  stems: { label: string; peaks: number[][] }[];
+  waveSources: Record<string, { label: string; peaks: number[][] }[]>;
   plates: {
     id: string;
+    sourceId: string;
     startMs: number;
     durationMs: number;
     from: number;
@@ -275,14 +276,20 @@ function Inner({
                 .map((o) => <OverlayItem key={o.id} overlay={o} />)}
             {idx >= audioStart &&
               (() => {
-                const stem = stems[idx - audioStart];
-                const color = ["#0891b2", "#22c55e", "#f59e0b"][idx - audioStart] ?? "#0891b2";
+                const laneIdx = idx - audioStart;
+                const laneLabel = rows[idx].label ?? "";
+                const color = ["#0891b2", "#22c55e", "#f59e0b"][laneIdx] ?? "#0891b2";
                 return (
                   <div className="relative h-full w-full">
                     {plates.map((pl) => {
-                      // Position and size with dnd-timeline's own mapping: the
-                      // exact same function used by the clip bars, the ruler
-                      // and the playhead, so waves can never drift at any zoom.
+                      // Each clip draws ITS OWN source's stems (matched by
+                      // label, not by which clip is selected/under the playhead).
+                      const src = waveSources[pl.sourceId] ?? [];
+                      const stem =
+                        src.find((s) => s.label === laneLabel) ?? src[laneIdx] ?? src[0];
+                      // Position/size with dnd-timeline's own mapping: the exact
+                      // same function used by the clip bars, the ruler and the
+                      // playhead, so waves can never drift at any zoom.
                       const left = valueToPixels(pl.startMs - range.start);
                       const width = Math.max(2, valueToPixels(pl.durationMs));
                       // Scale each clip's wave by its own gain for this stem
@@ -324,7 +331,7 @@ function Inner({
  *  one lane per capture audio track. Clicking/dragging anywhere scrubs. */
 export function TimelineView({
   audioTracks,
-  stems,
+  waveSources,
   plates,
   master,
   visibleEnd,
@@ -334,9 +341,10 @@ export function TimelineView({
   onScrubEnd,
 }: {
   audioTracks: EditorAudioTrack[];
-  stems: { label: string; peaks: number[][] }[];
+  waveSources: Record<string, { label: string; peaks: number[][] }[]>;
   plates: {
     id: string;
+    sourceId: string;
     startMs: number;
     durationMs: number;
     from: number;
@@ -407,7 +415,7 @@ export function TimelineView({
     >
       <Inner
         rows={rows}
-        stems={stems}
+        waveSources={waveSources}
         plates={plates}
         master={master}
         visibleEnd={visibleEnd}

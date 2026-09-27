@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { Circle, Clapperboard, Gamepad2, Monitor, Settings, Square } from "lucide-react";
 import { MoonClipStarfield } from "./components/starfield/MoonClipStarfield";
 import { MoonClipLogo } from "./components/logo/MoonClipLogo";
@@ -54,6 +55,9 @@ export default function App() {
       const w = getCurrentWindow();
       editorWasMaximized.current = await w.isMaximized();
       if (!editorWasMaximized.current) await w.maximize();
+      // The editor needs room for rail + preview + timeline; below this the
+      // layout gets cramped (and the timeline unreadable).
+      await w.setMinSize(new LogicalSize(1024, 600));
     } catch {
       // window ops are best effort; the editor still opens
     }
@@ -61,6 +65,11 @@ export default function App() {
   }, []);
 
   const closeAdvancedEditor = useCallback(async () => {
+    try {
+      await getCurrentWindow().setMinSize(new LogicalSize(420, 420));
+    } catch {
+      // best effort
+    }
     if (!editorWasMaximized.current) {
       await getCurrentWindow().unmaximize().catch(() => {});
     }
