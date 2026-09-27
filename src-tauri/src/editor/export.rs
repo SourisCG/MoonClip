@@ -946,7 +946,7 @@ mod tests {
         fast.speed = 2.0;
         let fast_a = dir.join("fast_a.mp4");
         let ok = tokio::process::Command::new(&ff)
-            .args(&stage_a_args(
+            .args(stage_a_args(
                 &src,
                 &fast_a,
                 &fast,
