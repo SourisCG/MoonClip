@@ -1117,3 +1117,15 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   archivo a la papelera de Drive con confirmación en dos pasos; purga y cuota
   ignoran filas cloud. Migración 015. Commit `e942f17`.
 - Gates: 194 tests, clippy `-D warnings` y `pnpm build` limpios.
+
+### Fase 6 — Subidas consistentes + navegación Medal (2026-09-27)
+
+- **Consistencia**: `drive_file_id`/link persistidos en cada subida;
+  `drive_upload_clip` reutiliza el remoto vivo (404/papelera → limpia y sube),
+  `replace` manda el viejo a la papelera, y "borrar local ahora" convierte a
+  cloud sin re-subir. Diálogo de compartir en dos estados. Commit `5cd62ac`.
+- **Galería Medal**: grid de tarjetas 16:9, visor a pantalla completa con
+  acciones y navegación ←/→/Esc (cloud con descarga on demand), sidebar
+  Subidos/En Drive y toolbar con búsqueda/orden. Commit `3050b6c`.
+- Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios. Verificado en
+  vivo: grid + secciones + badge "En Drive" visibles.

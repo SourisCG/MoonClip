@@ -32,6 +32,16 @@ All uploads are client-to-service. No MoonClip server.
   archivo remoto (sin duplicados). Borrar un clip cloud manda el remoto a la
   papelera de Drive (confirmación en dos pasos); purga y cuota ignoran filas
   cloud. Migración 015.
+- **Subidas consistentes (2026-09-27)**: el `drive_file_id`/link se guarda en
+  TODA subida (no solo al borrar el local); re-subir reutiliza el remoto
+  (verificando que siga vivo; si está en papelera/404 se limpia y se sube de
+  nuevo) y "Reemplazar en Drive" manda el viejo a la papelera. El diálogo de
+  compartir tiene estado pendiente/subido (copiar link, hacer público, abrir
+  en Drive, borrar local ahora, reemplazar).
+- **Navegación estilo Medal (2026-09-27)**: galería en grid de tarjetas 16:9,
+  visor a pantalla completa con reproductor + metadatos + todas las acciones
+  (←/→ navega, Esc cierra; cloud descarga on demand con progreso), sidebar con
+  Todos/Favoritos/Subidos/En Drive/juegos y toolbar con búsqueda y orden.
 - **Detección**: además del blocklist de gestores, se rechazan títulos que
   terminan en `" - <app conocida>"` (Brave, Chrome, Firefox, Dolphin,
   Discord, VS Code, KWrite, Steam…) porque KRunner reporta `app_id` vacío
