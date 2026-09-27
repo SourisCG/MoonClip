@@ -12,6 +12,17 @@ body {
   font-family: Inter, system-ui, sans-serif;
   margin: 0;
   overflow: hidden;
+  /* Desktop-app feel: dragging over the UI must never select labels/copy.
+     Inputs and text areas opt back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 ::selection {
