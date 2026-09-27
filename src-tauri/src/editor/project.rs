@@ -15,6 +15,9 @@ fn default_gain() -> f64 {
 fn default_true() -> bool {
     true
 }
+fn default_audio() -> String {
+    "mix".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +33,11 @@ pub struct OutputSettings {
     /// "auto" | "cpu" | explicit ffmpeg encoder id.
     pub encoder: String,
     pub container: String,
+    /// "mix" = one AAC track with the Game+Mic mix (plays everywhere);
+    /// "tracks" = two AAC tracks (Game, Mic) for re-editing. The recording's
+    /// track 1 (Mix, the sum) is never included.
+    #[serde(default = "default_audio")]
+    pub audio: String,
 }
 
 impl Default for OutputSettings {
@@ -41,6 +49,7 @@ impl Default for OutputSettings {
             bitrate_kbps: 0,
             encoder: "auto".into(),
             container: "mp4".into(),
+            audio: "mix".into(),
         }
     }
 }
@@ -220,11 +229,11 @@ pub struct EditProject {
     pub id: String,
     pub name: String,
     pub source_clip_id: String,
-    /// Track mix: `gain_master` multiplies the stem mix, and Game/Mic are the
-    /// individual stems. Track 1 of the recording (Mix) is the SUM of both, so
-    /// it is never played alongside them (that caused doubled audio).
+    /// Final output level (v3): multiplies each clip's own Game/Mic gains.
     #[serde(default = "default_gain")]
     pub gain_master: f64,
+    /// Deprecated (v2 only): the per-clip Game/Mic gains now live on every
+    /// segment; migration bakes these into the segments and leaves them at 1.
     #[serde(default = "default_gain")]
     pub gain_game: f64,
     #[serde(default = "default_gain")]
@@ -254,7 +263,7 @@ impl EditProject {
 /// Fresh single-segment project for a clip.
 pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProject {
     EditProject {
-        version: 2,
+        version: 3,
         id: uuid::Uuid::new_v4().to_string(),
         name: name.to_string(),
         source_clip_id: clip_id.to_string(),
@@ -299,17 +308,16 @@ pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProje
     }
 }
 
-/// Projects saved before the track gains moved to the project level carry
-/// them per segment (and the old default was "mix only", which in the new
-/// model would silence the stems since the Mix track is no longer played).
-/// Adopt the first segment's values, then make sure a mix-only project ends
-/// up as Game+Mic so it still sounds like before. Returns true when changed.
+/// Migrate the audio-gain schema. v1 carried the gains per segment, v2 moved
+/// them to the project, and v3 moves them back per segment (each clip is
+/// independent). The old default was "mix only" (Mix=1, stems=0); since the
+/// Mix track is the SUM of Game+Mic and is never played as itself, a mix-only
+/// project must end up with Game+Mic enabled. Returns true when changed.
 pub fn migrate_gains(project: &mut EditProject) -> bool {
     let mut changed = false;
-    let mut master = project.gain_master;
-    let mut game = project.gain_game;
-    let mut mic = project.gain_mic;
-    // v1 projects carried the gains per segment; v2 moved them to the project.
+    // v1 -> v2: adopt the first segment's gains as the project mix and fix
+    // the mix-only default. Only v1 defaults get that fix: in v3 a clip can
+    // be silenced on purpose and must stay silent across reloads.
     if project.version < 2 {
         if let Some(seg) = project.segments.first() {
             let legacy = (seg.gain_mix, seg.gain_game, seg.gain_mic);
@@ -317,24 +325,39 @@ pub fn migrate_gains(project: &mut EditProject) -> bool {
                 || (legacy.1 - 1.0).abs() > f64::EPSILON
                 || (legacy.2 - 1.0).abs() > f64::EPSILON
             {
-                master = legacy.0;
-                game = legacy.1;
-                mic = legacy.2;
+                project.gain_master = legacy.0.clamp(0.0, 4.0);
+                project.gain_game = legacy.1.clamp(0.0, 4.0);
+                project.gain_mic = legacy.2.clamp(0.0, 4.0);
             }
+        }
+        if project.gain_master > 0.0 && project.gain_game <= 0.0 && project.gain_mic <= 0.0 {
+            project.gain_game = 1.0;
+            project.gain_mic = 1.0;
         }
         project.version = 2;
         changed = true;
     }
-    // Old "mix only" default (mix=1, stems 0): the same audio is now
-    // Game+Mic, so enable the stems.
-    if master > 0.0 && game <= 0.0 && mic <= 0.0 {
-        game = 1.0;
-        mic = 1.0;
+    // v2 -> v3: bake the global Game/Mic into every segment so existing
+    // projects keep sounding the same, then leave the project fields neutral.
+    if project.version < 3 {
+        let (game, mic) = (
+            project.gain_game.clamp(0.0, 4.0),
+            project.gain_mic.clamp(0.0, 4.0),
+        );
+        // Unconditional: the project values were authoritative in v2, and a
+        // v1 mix-only project (stems at 0) must get the fix on its segments.
+        for seg in &mut project.segments {
+            seg.gain_game = game;
+            seg.gain_mic = mic;
+        }
+        project.gain_game = 1.0;
+        project.gain_mic = 1.0;
+        project.version = 3;
         changed = true;
     }
-    project.gain_master = master.clamp(0.0, 4.0);
-    project.gain_game = game.clamp(0.0, 4.0);
-    project.gain_mic = mic.clamp(0.0, 4.0);
+    project.gain_master = project.gain_master.clamp(0.0, 4.0);
+    project.gain_game = project.gain_game.clamp(0.0, 4.0);
+    project.gain_mic = project.gain_mic.clamp(0.0, 4.0);
     changed
 }
 
@@ -375,11 +398,15 @@ mod tests {
         p.segments[0].gain_game = 0.0;
         p.segments[0].gain_mic = 0.0;
         assert!(migrate_gains(&mut p));
+        assert_eq!(p.version, 3);
         assert_eq!(p.gain_master, 1.0);
         assert_eq!(p.gain_game, 1.0);
         assert_eq!(p.gain_mic, 1.0);
+        // The mix-only default becomes real Game+Mic on the clip (v3).
+        assert_eq!(p.segments[0].gain_game, 1.0);
+        assert_eq!(p.segments[0].gain_mic, 1.0);
         assert!(!migrate_gains(&mut p));
-        // A deliberate stem remix survives (adopted as-is).
+        // v3 project fields are inert: touching them changes nothing.
         p.gain_game = 0.3;
         p.gain_mic = 1.4;
         assert!(!migrate_gains(&mut p));
@@ -399,16 +426,55 @@ mod tests {
         p.segments[0].gain_mic = 0.0;
         assert!(migrate_gains(&mut p));
         assert_eq!(p.gain_master, 0.5);
-        assert_eq!(p.gain_game, 1.2);
-        assert_eq!(p.gain_mic, 0.0);
+        // Baked into the clip; the project stem fields go back to neutral.
+        assert_eq!(p.gain_game, 1.0);
+        assert_eq!(p.gain_mic, 1.0);
+        assert_eq!(p.segments[0].gain_game, 1.2);
+        assert_eq!(p.segments[0].gain_mic, 0.0);
+        assert_eq!(p.version, 3);
+        assert!(!migrate_gains(&mut p));
+    }
+
+    #[test]
+    fn migration_v2_bakes_global_stems_into_every_segment() {
+        let mut p = default_project("c", "n", 1000);
+        p.version = 2;
+        p.gain_game = 0.3;
+        p.gain_mic = 1.4;
+        let mut seg2 = p.segments[0].clone();
+        seg2.id = "s2".into();
+        p.segments.push(seg2);
+        assert!(migrate_gains(&mut p));
+        assert_eq!(p.version, 3);
+        assert_eq!(p.gain_game, 1.0);
+        assert_eq!(p.gain_mic, 1.0);
+        assert!(p
+            .segments
+            .iter()
+            .all(|s| s.gain_game == 0.3 && s.gain_mic == 1.4));
+        assert!(!migrate_gains(&mut p));
+    }
+
+    #[test]
+    fn v3_per_clip_silence_is_not_resurrected() {
+        let mut p = default_project("c", "n", 1000);
+        p.segments[0].gain_game = 0.0;
+        p.segments[0].gain_mic = 0.0;
+        assert!(!migrate_gains(&mut p));
+        assert_eq!(p.segments[0].gain_game, 0.0);
+        assert_eq!(p.segments[0].gain_mic, 0.0);
     }
 
     #[test]
     fn default_project_uses_the_stems_with_full_gains() {
         let p = default_project("c", "n", 1000);
+        assert_eq!(p.version, 3);
         assert_eq!(p.gain_master, 1.0);
         assert_eq!(p.gain_game, 1.0);
         assert_eq!(p.gain_mic, 1.0);
+        assert_eq!(p.segments[0].gain_game, 1.0);
+        assert_eq!(p.segments[0].gain_mic, 1.0);
+        assert_eq!(p.output.audio, "mix");
     }
 
     #[test]
@@ -419,6 +485,7 @@ mod tests {
         }"#;
         let p: EditProject = serde_json::from_str(json).unwrap();
         assert_eq!(p.output, OutputSettings::default());
+        assert_eq!(p.output.audio, "mix");
         assert_eq!(p.segments[0].speed, 1.0);
         assert!(p.audio_tracks.is_empty());
     }

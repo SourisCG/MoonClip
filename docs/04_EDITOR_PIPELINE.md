@@ -50,18 +50,23 @@ Two separate pieces, by design:
   only and serves exclusively paths the backend registered.
 - **Audio (single clock, stem remix)**: track 1 of a recording is the SUM of
   Game+Mic, so the editor never plays/export it: playback and export use the
-  Game and Mic stems with `master x game x mic` (project-level track gains,
-  live). The 3 tracks (Mix/Game/Mic) are extracted once
+  Game and Mic stems. Gains are **per clip** (`segment.gain_game/gain_mic`,
+  or `gain_mix` for single-track sources) times the global `gain_master`
+  (`project version 3`; migration bakes v2 globals into every segment). The 3
+  tracks (Mix/Game/Mic) are extracted once
   per clip to `~/.cache/MoonClip/editor/<session>/` as PCM WAV (guaranteed
   `decodeAudioData`, no codec priming), decoded to AudioBuffers
   and scheduled on ONE `AudioContext` (`src/editor/audioEngine.ts`): every
-  segment/track is an `AudioBufferSourceNode` through per-segment and per-track
-  `GainNode`s, so Mix/Game/Mic are fully modifiable live and cuts between
-  clips are sample-accurate. `ctx.currentTime` is the master clock for the
+  segment/track is an `AudioBufferSourceNode` through its own `GainNode`
+  (`applySegmentGains` updates them live, no reschedule), so each clip is
+  independently modifiable and cuts between clips are sample-accurate.
+  `ctx.currentTime` is the master clock for the
   playhead, scrub bar and time readout; the `<video>` is muted and slaved
   (corrective seek past 120 ms). Waveforms are drawn on canvas from the same
-  decoded buffers (no media element). **Export always mixes down to ONE AAC
-  track** (Medal parity), respecting the editor mix. Temps are purged on close
+  decoded buffers (no media element). **Export audio mode**
+  (`output.audio`): `mix` (default) = ONE AAC track with the Game+Mic mix
+  (plays everywhere); `tracks` = two AAC tracks (Game, Mic) for re-editing.
+  The Mix track is never included in either. Temps are purged on close
   and stale sessions on boot.
 - **Export**: Rust builds a `filter_complex` graph and runs the ffmpeg sidecar
   with `-progress pipe:1` and cancel-by-kill; encoder chosen per vendor
