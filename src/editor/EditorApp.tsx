@@ -374,6 +374,14 @@ export default function EditorApp({
         useEditorStore.getState().setProject(s.project);
         useEditorStore.getState().setSources(s.sources);
         useEditorStore.temporal.getState().clear();
+        // A saved master of 0 was a stuck mute (raising it back used to be
+        // skipped by the gain guard): recover automatically so the editor is
+        // never silent for no reason.
+        if (s.project.gainMaster <= 0) {
+          useEditorStore.getState().setMasterGain(1);
+          useEditorStore.temporal.getState().clear();
+          void invoke("editor_log", { message: "auto-unmute: saved master was 0" }).catch(() => {});
+        }
         setSession(s);
         setVisibleMs(
           Math.max(6000, Math.min(30_000, s.project.segments[0]?.outMs ?? 8000) + 2000),
@@ -454,6 +462,10 @@ export default function EditorApp({
     void invoke<number>("editor_audio_health").catch(() => {});
     void decodeProject(project).then((engine) => {
       void engine.gainSelfTest();
+      void engine.gainPathProbe(
+        useEditorStore.getState().project?.segments ?? [],
+        useEditorStore.getState().project?.gainMaster ?? 1,
+      );
       setWaveSources(
         Object.fromEntries(
           Object.keys(useEditorStore.getState().sources).map((id) => [id, engine.peaksFor(id)]),
@@ -1518,6 +1530,20 @@ export default function EditorApp({
                     forceTick((n) => n + 1);
                   }}
                 />
+              )}
+              {playing && project.gainMaster <= 0 && (
+                <div
+                  className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 p-4"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <p className="text-center text-sm text-amber-200">{t("editor.master_zero")}</p>
+                  <button
+                    onClick={() => useEditorStore.getState().setMasterGain(1)}
+                    className="rounded-lg border border-amber-300/40 bg-amber-300/20 px-4 py-1.5 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/30"
+                  >
+                    {t("editor.master_reset")}
+                  </button>
+                </div>
               )}
             </div>
           </div>

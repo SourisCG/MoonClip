@@ -109,10 +109,12 @@ export class AudioTimeline {
       for (let i = 0; i < this.levelBuf.length; i++) sum += this.levelBuf[i] * this.levelBuf[i];
       return Math.sqrt(sum / this.levelBuf.length);
     };
-    const master = this.master.gain.value;
+    // Channel meters are PRE-master: they must move with their slider even
+    // when the master is muted (they used to be multiplied by it and went
+    // dead). `out` is post-master: what leaves the engine.
     return {
-      game: rms(this.analyserGame) * master,
-      mic: rms(this.analyserMic) * master,
+      game: rms(this.analyserGame),
+      mic: rms(this.analyserMic),
       out: rms(this.analyserOut),
     };
   }
@@ -230,6 +232,30 @@ export class AudioTimeline {
     const v = Math.max(0, Math.min(4, value));
     this.master.gain.setValueAtTime(v, this.ctx.currentTime);
     diag(`master=${v.toFixed(2)}`);
+  }
+
+  /** Silent routing probe: plays the real segments at -60 dB and measures
+   *  the post-master output with the per-clip gains on, muted and restored.
+   *  Proves the slider->node->bus->master path end to end without being
+   *  audible. */
+  async gainPathProbe(segments: Segment[], master: number): Promise<void> {
+    const first = segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
+    if (!first) return;
+    await this.play(segments, first.timelineStartMs, 0.001);
+    await new Promise((r) => setTimeout(r, 450));
+    const on = this.levels().out;
+    const muted = segments.map((s) => ({ ...s, gainMix: 0, gainGame: 0, gainMic: 0 }));
+    this.applySegmentGains(muted);
+    await new Promise((r) => setTimeout(r, 300));
+    const off = this.levels().out;
+    this.applySegmentGains(segments);
+    await new Promise((r) => setTimeout(r, 300));
+    const back = this.levels().out;
+    this.stopNodes();
+    this.started = false;
+    this.paused = true;
+    this.setMaster(master);
+    diag(`gainPath on=${on.toFixed(4)} off=${off.toFixed(4)} back=${back.toFixed(4)}`);
   }
 
   /** Length of the decoded stems (ms), if this source was decoded. */
