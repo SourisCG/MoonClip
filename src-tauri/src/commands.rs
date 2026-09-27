@@ -2586,6 +2586,32 @@ pub async fn editor_export(
     Ok(())
 }
 
+/// Editor playback health: clear any persisted system mute on our own stream
+/// (KDE remembers per-app mute and would silence every new editor session).
+#[tauri::command]
+pub async fn editor_audio_health(app: AppHandle) -> Result<usize, String> {
+    // The stream only exists once the AudioContext is running, so retry until
+    // it appears and verifies as unmuted.
+    let mut fixed_total = 0usize;
+    for _ in 0..8 {
+        fixed_total += os::unmute_editor_streams()?;
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        let still = os::editor_streams_muted();
+        if still == 0 && fixed_total > 0 {
+            return Ok(fixed_total);
+        }
+    }
+    let _ = &app;
+    Ok(fixed_total)
+}
+
+/// Editor diagnostics bridge: webview messages land in the app log (the dev
+/// log is the only place we can see what the media engine actually did).
+#[tauri::command]
+pub fn editor_log(message: String) {
+    eprintln!("[moonclip] editor: {message}");
+}
+
 /// Make another gallery clip usable by the editor session: returns its
 /// preview URL (H.264 proxy generated on demand) and its audio stems.
 #[tauri::command]

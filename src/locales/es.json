@@ -207,6 +207,8 @@
     "text_opacity": "Opacidad",
     "mode_video": "Modo: audio del video (no se pudieron decodificar los stems)",
     "mode_stems": "Modo: stems ({{stems}})",
+    "master_zero": "Volumen general (Master) en 0%: no se oirá nada.",
+    "master_reset": "Poner a 100%",
     "shortcuts": "Espacio: play · Ctrl+K: dividir · Ctrl+D: duplicar · Supr: borrar · Ctrl+Z: deshacer",
     "export_title": "Exportar clip",
     "resolution": "Resolución",

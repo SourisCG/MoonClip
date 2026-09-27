@@ -541,6 +541,8 @@ pub fn run() {
             commands::editor_load_project,
             commands::editor_save_project,
             commands::editor_add_source,
+            commands::editor_log,
+            commands::editor_audio_health,
             commands::editor_export,
             commands::editor_cancel_export,
             commands::open_clip_external,

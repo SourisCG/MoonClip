@@ -131,6 +131,40 @@ pub fn window_identity(_settings: &serde_json::Value) -> Option<shared::winlist:
     None
 }
 
+/// Clear a persisted system-mixer mute on the editor's playback stream
+/// (KDE/WirePlumber remembers mute per application name). Linux only.
+#[cfg(target_os = "linux")]
+pub fn unmute_editor_streams() -> Result<usize, String> {
+    linux::audio::unmute_editor_streams()
+}
+#[cfg(target_os = "windows")]
+pub fn unmute_editor_streams() -> Result<usize, String> {
+    Ok(0)
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn unmute_editor_streams() -> Result<usize, String> {
+    Ok(0)
+}
+
+/// How many of the editor's output streams are still muted system-side.
+#[cfg(target_os = "linux")]
+pub fn editor_streams_muted() -> usize {
+    linux::audio::editor_streams_muted(&current_sink_inputs())
+}
+#[cfg(not(target_os = "linux"))]
+pub fn editor_streams_muted() -> usize {
+    0
+}
+
+#[cfg(target_os = "linux")]
+fn current_sink_inputs() -> String {
+    std::process::Command::new("pactl")
+        .args(["list", "sink-inputs"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
 /// MoonClip-owned OBS config root (never the user's OBS config).
 #[cfg(target_os = "linux")]
 pub fn obs_config_root() -> Result<PathBuf, String> {

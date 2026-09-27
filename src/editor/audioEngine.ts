@@ -9,7 +9,13 @@
  * and slaved to this clock (picture only), like other web editors do.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import type { EditorSourceInfo, Segment } from "./types";
+
+/** Diagnostics to the app log (visible in the dev terminal). */
+function diag(message: string) {
+  void invoke("editor_log", { message }).catch(() => {});
+}
 
 export interface DecodedSource {
   clipId: string;
@@ -99,7 +105,11 @@ export class AudioTimeline {
       for (let i = 0; i < this.levelBuf.length; i++) sum += this.levelBuf[i] * this.levelBuf[i];
       return Math.sqrt(sum / this.levelBuf.length);
     };
-    return { game: rms(this.analyserGame), mic: rms(this.analyserMic) };
+    const master = this.master.gain.value;
+    return {
+      game: rms(this.analyserGame) * master,
+      mic: rms(this.analyserMic) * master,
+    };
   }
 
   get sampleRate(): number {
@@ -111,12 +121,19 @@ export class AudioTimeline {
     const cached = this.sources.get(source.clipId);
     if (cached) return cached;
     const stems: DecodedSource["stems"] = [];
+    diag(`source ${source.clipId}: ${source.stems.length} stems (${source.stems
+      .map((s) => s.label)
+      .join("+")})`);
     for (const stem of source.stems) {
       const buffer = await this.decode(stem.url);
       if (buffer) {
+        diag(
+          `stem ${stem.label} decoded: ${buffer.duration.toFixed(2)}s ` +
+            `${buffer.numberOfChannels}ch ${buffer.sampleRate}Hz`,
+        );
         stems.push({ label: stem.label, buffer, peaks: computePeaks(buffer) });
       } else {
-        eprintln(`editor audio: stem ${stem.label} failed to decode`);
+        diag(`stem ${stem.label} FAILED to decode (${stem.url})`);
       }
     }
     const decoded: DecodedSource = {
@@ -203,6 +220,10 @@ export class AudioTimeline {
         this.nodes.push(src);
       }
     }
+    diag(
+      `play from ${Math.round(fromMs)}ms: scheduled ${this.nodes.length} node(s), ` +
+        `gains master=${gains.master} game=${gains.game} mic=${gains.mic}`,
+    );
     this.started = true;
     this.paused = false;
   }
@@ -264,9 +285,4 @@ export class AudioTimeline {
     void this.ctx.close().catch(() => {});
     this.sources.clear();
   }
-}
-
-/** Logs through the same console the dev log shows. */
-function eprintln(msg: string) {
-  console.warn(`[moonclip] ${msg}`);
 }

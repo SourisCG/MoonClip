@@ -371,6 +371,9 @@ export default function EditorApp({
   // Decode the primary source as soon as the session is ready.
   useEffect(() => {
     if (!session || !project) return;
+    // KDE remembers per-app mute: clear it for our own stream (and retry
+    // until the AudioContext has created it).
+    void invoke<number>("editor_audio_health").catch(() => {});
     void decodeProject(project).then(() => {
       const id =
         project.segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0]
@@ -505,6 +508,7 @@ export default function EditorApp({
     const p = useEditorStore.getState().project;
     if (!p) return;
     const engine = await decodeProject(p);
+    void invoke<number>("editor_audio_health").catch(() => {});
     const ms = useEditorStore.getState().playheadMs;
     const seg = segmentAt(p.segments, ms) ?? p.segments[0];
     const hasAudio = seg ? engine.hasAudio(seg.sourceClipId) : false;
@@ -942,6 +946,19 @@ export default function EditorApp({
                 })}
           </p>
           <LevelMeters engineRef={engineRef} labels={[t("editor.game"), t("editor.mic")]} />
+          {project.gainMaster <= 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100">
+              <span className="min-w-0 flex-1">{t("editor.master_zero")}</span>
+              <button
+                onClick={() =>
+                  useEditorStore.getState().setProjectGain("gainMaster", 1)
+                }
+                className="rounded border border-amber-300/40 bg-amber-300/20 px-2 py-0.5 font-semibold"
+              >
+                {t("editor.master_reset")}
+              </button>
+            </div>
+          )}
           {trackSliders.map(([field, label]) => {
             const disabled = field !== "gainMaster" && stems.length <= 1;
             return (

@@ -2,6 +2,7 @@
 //! platform (PipeWire portal capture, PulseAudio devices, XDG-isolated OBS
 //! config).
 
+pub mod audio;
 pub mod binary;
 pub mod devices;
 pub mod engine;
