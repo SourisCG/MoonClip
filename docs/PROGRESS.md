@@ -1076,3 +1076,28 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   reutilizable, comando `rename_clip`, lápiz con edición inline en la galería
   (Enter guarda, Esc/blur cancela) e i18n. Tests: movimiento real, colisión,
   inválidos, no-op y faltante. Commit `63f7bd9`.
+
+### Fase 6 — Google Drive (2026-09-27)
+
+- **Seguridad previa**: fuera del IPC `secret_store/get/delete` (cualquier JS
+  podía leer el keyring); la bóveda queda solo para Rust. Commit `ea9b4b9`.
+- **Núcleo OAuth + Cuentas**: `social/` (PKCE S256, loopback efímero con
+  `state` y timeout, exchange/refresh con reqwest, blob de tokens en keyring
+  con refresh automático, config `social.json` fuera de git con overrides de
+  entorno). Ajustes → Cuentas; conectar Drive crea/encuentra la raíz
+  `MoonClip`; migración 014 (`drive_folders`); desconectar limpia bóveda y
+  mapeo. Tests: vector RFC 7636, callback/estado, mocks de token y de
+  carpetas, expiración y config/env. Commit `4b3668b`.
+- **Subir/bajar**: subida resumable 8 MiB con progreso, reanudación desde el
+  `Range` del 308 (test del caso parcial `bytes 4-11/12`), permiso público
+  opcional + `webViewLink`, espejo `MoonClip/<juego>/` con dedupe `_2`,
+  explorador Drive y bajada en streaming que indexa el clip localmente
+  (thumbnail + probe + fila + `clip-saved`). UI: compartir por clip con
+  progreso y toggle privado/público, modal Drive con breadcrumb. Commit
+  `33638af`.
+- Credenciales de producción: proyecto Google `moonclip-drive` (Desktop app,
+  publicado, `drive.file` no sensible), home `moonclip.souriscg.dev` y
+  política en `/privacidad/` (repo `MoonClip-Page`, commit `8f8cb3e`).
+- Gates: 189 tests, clippy `-D warnings`, `pnpm build` limpios. Verificación
+  live pendiente del clic de consentimiento (conectar → subir → explorar →
+  bajar).

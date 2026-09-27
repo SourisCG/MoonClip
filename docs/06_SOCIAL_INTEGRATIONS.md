@@ -6,6 +6,27 @@
 
 All uploads are client-to-service. No MoonClip server.
 
+## 0. Estado (2026-09-27)
+
+- **Google Drive: implementado.** OAuth loopback (puerto efímero, PKCE S256 +
+  `state`, 3 min de timeout) contra el cliente Desktop del proyecto
+  `moonclip-drive` (scope `drive.file` + `userinfo.email`); tokens como blob
+  JSON en el keyring con refresh automático; carpeta raíz `MoonClip` y espejo
+  `MoonClip/<juego>/` con mapeo cacheado en `drive_folders` (migración 014).
+  Subida resumable por chunks de 8 MiB con progreso, reanudación exacta desde
+  el `Range` del 308 y reintento de transporte; conflicto remoto → `_2`.
+  **Privado por defecto**; el toggle "hacer público" crea el permiso
+  anyone-reader y devuelve `webViewLink` para copiar. Bajada en streaming a la
+  carpeta local del juego (thumbnail + probe + fila + `clip-saved`); conflicto
+  local → `_2`. UI: Ajustes → Cuentas (conectar/desconectar) + botón
+  compartir por clip + explorador Drive en la galería.
+- **Credenciales**: `social.json` en el app-data dir (fuera de git, 0600) con
+  override por env (`MOONCLIP_GOOGLE_DRIVE_CLIENT_ID`/`_SECRET`); plantilla
+  `social.example.json`. El keyring ya no se expone por IPC.
+- Pendiente: YouTube (requiere verificación del proyecto + auditoría de la
+  API), TikTok (Worker broker para el `client_secret`), Discord (webhook por
+  usuario) y X (navegador + portapapeles de archivo).
+
 ## 1. Google Drive (primary share)
 
 - **Scope (only):** `https://www.googleapis.com/auth/drive.file` — "files created by this app only". Avoids Google security audit, preserves trust.
