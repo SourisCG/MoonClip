@@ -338,6 +338,84 @@ impl DbState {
         Ok(())
     }
 
+    /// LRU pruning for `max_storage_gb` (docs/05): when the library exceeds
+    /// the quota, delete the OLDEST non-favorite clips (file + thumbnail +
+    /// row) until it fits. `protected_id` (the clip just saved) and favorites
+    /// are never touched; if only those remain over quota, nothing is deleted.
+    /// `quota_gb_override` exists for tests. Returns clips pruned.
+    pub fn enforce_quota(
+        &self,
+        protected_id: Option<&str>,
+        quota_gb_override: Option<f64>,
+    ) -> Result<u32, String> {
+        let quota_gb = match quota_gb_override {
+            Some(v) => v,
+            None => self
+                .get_settings()?
+                .get("max_storage_gb")
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .unwrap_or(0.0),
+        };
+        if quota_gb <= 0.0 || quota_gb.is_nan() {
+            return Ok(0);
+        }
+        let quota = (quota_gb * 1024.0 * 1024.0 * 1024.0) as i64;
+        let base = self.clips_dir()?;
+        let (mut total, candidates) = {
+            let conn = self.lock()?;
+            let total: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(file_size_bytes), 0) FROM clips",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("cannot sum clip sizes: {e}"))?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, file_name, thumbnail_name, file_size_bytes FROM clips
+                     WHERE is_favorite = 0 AND id != COALESCE(?1, '')
+                     ORDER BY created_at ASC, rowid ASC",
+                )
+                .map_err(|e| format!("cannot list prune candidates: {e}"))?;
+            let rows = stmt
+                .query_map(params![protected_id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                })
+                .map_err(|e| format!("cannot read prune candidates: {e}"))?;
+            let candidates = rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("cannot read prune candidate row: {e}"))?;
+            (total, candidates)
+        };
+        let mut pruned = 0u32;
+        for (id, file_name, thumb_name, size) in candidates {
+            if total <= quota {
+                break;
+            }
+            for name in [&file_name, &thumb_name] {
+                let path = paths::resolve_clip_path(&base, name);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => eprintln!(
+                        "[moonclip] prune: cannot delete {}: {e}",
+                        path.display()
+                    ),
+                }
+            }
+            self.delete_row(&id)?;
+            total -= size.max(0);
+            pruned += 1;
+            eprintln!("[moonclip] prune: removed {file_name} (quota {quota_gb} GB)");
+        }
+        Ok(pruned)
+    }
+
     pub fn get_settings(&self) -> Result<HashMap<String, String>, String> {
         let conn = self.lock()?;
         let mut stmt = conn
@@ -675,6 +753,88 @@ mod tests {
         db.delete_registered_input(&input.id).unwrap();
         assert!(db.list_registered_inputs().unwrap().is_empty());
     }
+    const MB: i64 = 1024 * 1024;
+
+    fn quota_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "moonclip-quota-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn quota_prunes_oldest_non_favorites_only() {
+        let db = tiny_db();
+        let dir = quota_dir();
+        db.set_setting("clips_directory", dir.to_str().unwrap())
+            .unwrap();
+        for name in [
+            "old.mp4",
+            "thumb_old.jpg",
+            "fav.mp4",
+            "thumb_fav.jpg",
+            "new.mp4",
+            "thumb_new.jpg",
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let old = db
+            .insert_clip("old.mp4", "thumb_old.jpg", "G", 1000, 900 * MB)
+            .unwrap();
+        let fav = db
+            .insert_clip("fav.mp4", "thumb_fav.jpg", "G", 1000, 900 * MB)
+            .unwrap();
+        db.toggle_favorite(&fav.id).unwrap();
+        let new = db
+            .insert_clip("new.mp4", "thumb_new.jpg", "G", 1000, 900 * MB)
+            .unwrap();
+        // 2.7 GB total with a 1 GB quota: only the oldest non-favorite goes.
+        assert_eq!(db.enforce_quota(Some(&new.id), Some(1.0)).unwrap(), 1);
+        assert!(!dir.join("old.mp4").exists());
+        assert!(!dir.join("thumb_old.jpg").exists());
+        assert!(dir.join("fav.mp4").exists());
+        assert!(dir.join("new.mp4").exists());
+        let remaining: Vec<String> = db
+            .list_clips()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(remaining.len(), 2);
+        assert!(!remaining.contains(&old.id));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quota_is_a_noop_without_a_limit() {
+        let db = tiny_db();
+        let dir = quota_dir();
+        db.set_setting("clips_directory", dir.to_str().unwrap())
+            .unwrap();
+        let clip = db.insert_clip("a.mp4", "t.jpg", "G", 1000, 50 * MB).unwrap();
+        assert_eq!(db.enforce_quota(Some(&clip.id), None).unwrap(), 0);
+        assert_eq!(db.enforce_quota(Some(&clip.id), Some(0.0)).unwrap(), 0);
+        assert_eq!(db.list_clips().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quota_never_prunes_favorites_or_the_new_clip() {
+        let db = tiny_db();
+        let dir = quota_dir();
+        db.set_setting("clips_directory", dir.to_str().unwrap())
+            .unwrap();
+        let a = db.insert_clip("a.mp4", "t.jpg", "G", 1000, 2 * 1024 * MB).unwrap();
+        db.toggle_favorite(&a.id).unwrap();
+        let b = db.insert_clip("b.mp4", "t.jpg", "G", 1000, 2 * 1024 * MB).unwrap();
+        // All over quota but every row is protected: nothing may be deleted.
+        assert_eq!(db.enforce_quota(Some(&b.id), Some(1.0)).unwrap(), 0);
+        assert_eq!(db.list_clips().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn migration_009_renames_engine_keys() {
         let conn = Connection::open_in_memory().unwrap();

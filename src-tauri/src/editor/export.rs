@@ -1084,6 +1084,7 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
         .unwrap_or_else(|| "Unknown".into());
     let db = app.state::<crate::storage::DbState>();
     let record = db.insert_clip(&out_name, &thumb_name, &game_title, duration_ms, size)?;
+    let _ = db.enforce_quota(Some(&record.id), None);
     emit(100.0, "timeline", true);
     let _ = app.emit("moonclip://clip-saved", &record);
     eprintln!("[moonclip] editor export done: {out_name}");

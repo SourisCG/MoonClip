@@ -1570,6 +1570,11 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
             .unwrap_or_else(|| "Unknown".to_string())
     };
     let clip = db.insert_clip(&file_name, &thumb_name, &game_title, secs_ms, size)?;
+    if let Ok(pruned) = db.enforce_quota(Some(&clip.id), None) {
+        if pruned > 0 {
+            eprintln!("[moonclip] quota: pruned {pruned} old clips");
+        }
+    }
     eprintln!(
         "[moonclip] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
         t_total.elapsed(),
@@ -2560,6 +2565,7 @@ pub async fn trim_clip(
         duration_ms,
         size,
     )?;
+    let _ = db.enforce_quota(Some(&record.id), None);
     eprintln!(
         "[moonclip] trim {} -> {} ({}ms..{}ms, {})",
         clip.file_name,
