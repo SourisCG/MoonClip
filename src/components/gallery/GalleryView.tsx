@@ -98,15 +98,6 @@ interface RowActions {
 
 function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions }) {
   const { t } = useTranslation();
-  const openVideo = async () => {
-    try {
-      // Backend-owned open: bypasses IPC capability checks, logs each layer.
-      await invoke("open_clip_external", { clipId: clip.id });
-      actions.onSuccess();
-    } catch (e) {
-      actions.onError(`open: ${String(e)}`);
-    }
-  };
   const reveal = async () => {
     try {
       const abs = await absOf(clip.file_name);
@@ -131,7 +122,7 @@ function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions })
   return (
     <li className="rounded-xl border border-white/5 bg-black/30 p-2.5 sm:pr-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-        <Thumb clip={clip} onOpen={() => void openVideo()} onError={actions.onError} />
+        <Thumb clip={clip} onOpen={() => actions.onTrim(clip)} onError={actions.onError} />
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <div className="min-w-0 flex-1 text-sm">
             <p className="truncate font-medium text-slate-200" title={clip.file_name}>

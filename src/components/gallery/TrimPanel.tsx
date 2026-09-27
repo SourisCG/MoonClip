@@ -94,12 +94,12 @@ export function TrimPanel({
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
-      if (v.currentTime * 1000 >= end - 20) seek(start);
+      // Never play outside the selection: jump to In first.
+      const ms = v.currentTime * 1000;
+      if (ms < start || ms >= end - 20) seek(start);
       void v.play();
-      setPlaying(true);
     } else {
       v.pause();
-      setPlaying(false);
     }
   }, [end, seek, start]);
 
@@ -107,12 +107,17 @@ export function TrimPanel({
     const v = videoRef.current;
     if (!v) return;
     const ms = v.currentTime * 1000;
+    // Preview is bounded to [start, end]: the audio never plays outside the
+    // selection (looping while playing, parked at the edge when paused).
+    if (ms < start - 30) {
+      v.currentTime = start / 1000;
+      setPos(start);
+      return;
+    }
     if (ms >= end) {
-      // Keep the preview inside the selection.
-      if (playing) {
+      if (!v.paused) {
         v.currentTime = start / 1000;
       } else {
-        v.pause();
         v.currentTime = end / 1000;
       }
       setPos(end);
@@ -202,6 +207,8 @@ export function TrimPanel({
               src={url}
               onLoadedMetadata={onLoaded}
               onTimeUpdate={onTimeUpdate}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
               onClick={togglePlay}
               onError={() => {
                 const code = videoRef.current?.error?.code;
