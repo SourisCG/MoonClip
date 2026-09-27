@@ -324,41 +324,95 @@ pub fn color_arg(color: &str) -> String {
     }
 }
 
-/// One `drawtext` filter for a text overlay (position/scale normalized to the
-/// output frame, font size at a 1080p reference).
-pub fn drawtext_filter(
-    overlay: &crate::editor::project::Overlay,
+/// ASS color: `&HAABBGGRR` (ASS is alpha-first, BGR order). `opacity` is
+/// the element opacity (1 = fully visible).
+fn ass_color(color: &str, opacity: f64) -> String {
+    let hex: String = color
+        .trim_start_matches('#')
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(6)
+        .collect();
+    let (r, g, b) = if hex.len() == 6 {
+        (
+            u8::from_str_radix(&hex[0..2], 16).unwrap_or(255),
+            u8::from_str_radix(&hex[2..4], 16).unwrap_or(255),
+            u8::from_str_radix(&hex[4..6], 16).unwrap_or(255),
+        )
+    } else {
+        (255, 255, 255)
+    };
+    let alpha = ((1.0 - opacity.clamp(0.0, 1.0)) * 255.0).round() as u8;
+    format!("&H{alpha:02X}{b:02X}{g:02X}{r:02X}")
+}
+
+/// ASS timestamp `H:MM:SS.cc` (centiseconds).
+fn ass_time(ms: i64) -> String {
+    let total = ms.max(0);
+    let cs = (total % 1000) / 10;
+    let s = (total / 1000) % 60;
+    let m = (total / 60_000) % 60;
+    let h = total / 3_600_000;
+    format!("{h}:{m:02}:{s:02}.{cs:02}")
+}
+
+/// Escape literal text for an ASS dialogue: newlines become hard breaks and
+/// braces (override blocks) are escaped.
+fn ass_text(text: &str) -> String {
+    text.replace("\\", "\\\\")
+        .replace('{', "\\{")
+        .replace('}', "\\}")
+        .replace("\r\n", "\\N")
+        .replace('\n', "\\N")
+        .replace('\r', "\\N")
+}
+
+/// Generate the ASS subtitle file for the text overlays: position, size,
+/// color, outline, shadow, opacity and ROTATION (which `drawtext` cannot do).
+pub fn ass_subtitles(
+    overlays: &[&crate::editor::project::Overlay],
+    out_w: u32,
     out_h: u32,
-    font: &Path,
-    text_file: &Path,
 ) -> String {
-    let k = out_h.max(2) as f64 / 1080.0;
-    let scale = overlay.scale.clamp(0.05, 8.0);
-    let fontsize = (overlay.font_size as f64 * k * scale).round().max(8.0) as u32;
-    let borderw = (overlay.stroke_width * k * scale).round().max(0.0) as u32;
-    let opacity = overlay.opacity.clamp(0.0, 1.0);
-    let start = overlay.start_ms.max(0) as f64 / 1000.0;
-    let end = (overlay.start_ms.max(0) + overlay.duration_ms.max(100)) as f64 / 1000.0;
-    let opacity_s = format!("{opacity:.2}");
-    let mut f = format!(
-        "drawtext=fontfile='{}':textfile='{}':enable='between(t,{start:.3},{end:.3})':x=(w*{:.5})-(text_w/2):y=(h*{:.5})-(text_h/2):fontsize={fontsize}:fontcolor={}@{}",
-        escape_filter_value(&font.to_string_lossy()),
-        escape_filter_value(&text_file.to_string_lossy()),
-        overlay.x.clamp(0.0, 1.0),
-        overlay.y.clamp(0.0, 1.0),
-        color_arg(&overlay.color),
-        opacity_s,
-    );
-    if borderw > 0 {
-        f.push_str(&format!(
-            ":borderw={borderw}:bordercolor={}",
-            color_arg(&overlay.stroke_color)
+    let w = out_w.max(2);
+    let h = out_h.max(2);
+    let k = h as f64 / 1080.0;
+    let mut s = String::new();
+    s.push_str("[Script Info]\nScriptType: v4.00+\n");
+    s.push_str(&format!("PlayResX: {w}\nPlayResY: {h}\nWrapStyle: 2\n\n"));
+    s.push_str("[V4+ Styles]\n");
+    s.push_str("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
+    // Alignment 5 = centered horizontally and vertically (\pos is the center).
+    s.push_str("Style: Clip,DejaVu Sans,48,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n\n");
+    s.push_str("[Events]\n");
+    s.push_str("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+    for o in overlays {
+        let text = o.text.as_deref().unwrap_or("");
+        if text.trim().is_empty() {
+            continue;
+        }
+        let scale = o.scale.clamp(0.05, 8.0);
+        let fontsize = (o.font_size as f64 * k * scale).round().max(8.0);
+        let outline = (o.stroke_width * k * scale).round().max(0.0);
+        let shadow = if o.shadow { 2.0 } else { 0.0 };
+        let x = o.x.clamp(0.0, 1.0) * w as f64;
+        let y = o.y.clamp(0.0, 1.0) * h as f64;
+        let start = ass_time(o.start_ms);
+        let end = ass_time(o.start_ms.max(0) + o.duration_ms.max(100));
+        // Inline override: size/colors per event (the style stays neutral).
+        let alpha = ((1.0 - o.opacity.clamp(0.0, 1.0)) * 255.0).round() as u8;
+        let tag = format!(
+            "{{\\pos({x:.1},{y:.1})\\frz({:.1})\\fs{fontsize:.0}\\1c{}\\3c{}\\bord{outline:.0}\\shad{shadow:.0}\\alpha&H{alpha:02X}&}}",
+            o.rotation,
+            ass_color(&o.color, 1.0),
+            ass_color(&o.stroke_color, 1.0),
+        );
+        s.push_str(&format!(
+            "Dialogue: 0,{start},{end},Clip,,0,0,0,,{tag}{}\n",
+            ass_text(text)
         ));
     }
-    if overlay.shadow {
-        f.push_str(":shadowcolor=black@0.6:shadowx=2:shadowy=2");
-    }
-    f
+    s
 }
 
 /// concat demuxer file body (one `file '...'` per segment).
@@ -785,7 +839,8 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
     );
     let has_audio = !audio_maps.is_empty();
 
-    // Text overlays (E3a): drawtext over the joined video, one filter each.
+    // Text overlays (E3a): one ASS subtitle file rendered by libass, which
+    // (unlike drawtext) supports rotation, positioning and per-event styling.
     let texts: Vec<&crate::editor::project::Overlay> = project
         .overlays
         .iter()
@@ -802,12 +857,15 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
         let font = resolve_font(app).ok_or_else(|| {
             "no font available for text overlays (expected fonts/DejaVuSans.ttf)".to_string()
         })?;
-        for (i, o) in texts.iter().enumerate() {
-            let tf = dir.join(format!("text_{i}.txt"));
-            std::fs::write(&tf, o.text.as_deref().unwrap_or(""))
-                .map_err(|e| format!("cannot write overlay text: {e}"))?;
-            vfilters.push(drawtext_filter(o, out_h, &font, &tf));
-        }
+        let fonts_dir = font.parent().ok_or("font path has no directory")?;
+        let ass_path = dir.join("overlays.ass");
+        std::fs::write(&ass_path, ass_subtitles(&texts, out_w, out_h))
+            .map_err(|e| format!("cannot write overlay subtitles: {e}"))?;
+        vfilters.push(format!(
+            "ass=filename='{}':fontsdir='{}'",
+            escape_filter_value(&ass_path.to_string_lossy()),
+            escape_filter_value(&fonts_dir.to_string_lossy()),
+        ));
     }
 
     let stem = clips
@@ -1257,27 +1315,40 @@ mod tests {
     }
 
     #[test]
-    fn drawtext_uses_normalized_position_and_scaled_font() {
-        let mut o = crate::editor::project::default_text_overlay("Hola", 1000, 3000);
+    fn ass_subtitles_include_position_size_rotation_and_opacity() {
+        let mut o = crate::editor::project::default_text_overlay("Hola\nmundo", 1000, 3000);
         o.x = 0.25;
         o.y = 0.8;
         o.font_size = 60;
         o.stroke_width = 4.0;
         o.scale = 2.0;
-        let f = drawtext_filter(
-            &o,
-            2160,
-            Path::new("/fonts/DejaVuSans.ttf"),
-            Path::new("/tmp/text_0.txt"),
-        );
-        // 1080p reference: 60px at 2160 -> 120, times scale 2 -> 240
-        assert!(f.contains("fontsize=240"), "{f}");
-        assert!(f.contains("x=(w*0.25000)-(text_w/2)"), "{f}");
-        assert!(f.contains("y=(h*0.80000)-(text_h/2)"), "{f}");
-        assert!(f.contains("between(t,1.000,4.000)"), "{f}");
-        assert!(f.contains("borderw=16"), "{f}");
-        assert!(f.contains("shadowcolor=black@0.6"), "{f}");
-        assert!(f.contains("fontfile='/fonts/DejaVuSans.ttf'"), "{f}");
+        o.rotation = 45.0;
+        o.opacity = 0.5;
+        o.shadow = true;
+        let s = ass_subtitles(&[&o], 1920, 1080);
+        assert!(s.contains("PlayResX: 1920"), "{s}");
+        assert!(s.contains("PlayResY: 1080"), "{s}");
+        assert!(s.contains("\\pos(480.0,864.0)"), "{s}");
+        assert!(s.contains("\\frz(45.0)"), "{s}");
+        // 60px at 1080 reference * scale 2 = 120.
+        assert!(s.contains("\\fs120"), "{s}");
+        assert!(s.contains("\\bord8"), "{s}");
+        assert!(s.contains("\\shad2"), "{s}");
+        assert!(s.contains("\\alpha&H80&"), "{s}");
+        assert!(s.contains("Hola\\Nmundo"), "{s}");
+        assert!(s.contains("Dialogue: 0,0:00:01.00,0:00:04.00,Clip,,0,0,0,,"), "{s}");
+    }
+
+    #[test]
+    fn ass_color_is_bgr_and_braces_are_escaped() {
+        assert_eq!(ass_color("#22d3ee", 1.0), "&H00EED322");
+        assert_eq!(ass_color("red", 1.0), "&H00FFFFFF");
+        let mut o = crate::editor::project::default_text_overlay("{hola}", 0, 1000);
+        o.rotation = -30.0;
+        o.opacity = 1.0;
+        let s = ass_subtitles(&[&o], 640, 360);
+        assert!(s.contains("\\{hola\\}"), "{s}");
+        assert!(s.contains("\\frz(-30.0)"), "{s}");
     }
 
     #[test]
@@ -1457,18 +1528,24 @@ mod tests {
             .expect("probe speed export");
         assert!((500..=1100).contains(&ms), "speed export duration {ms} ms");
 
-        // Text overlay: the generated drawtext filter must run with the
-        // bundled font and produce the expected duration.
+        // Text overlay: the generated ASS subtitles must render with libass
+        // and the bundled font (rotation included).
         let font = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fonts")
             .join("DejaVuSans.ttf");
         assert!(font.is_file(), "vendored font missing");
-        let tf = dir.join("text_0.txt");
-        std::fs::write(&tf, "Hola MoonClip").unwrap();
+        let fonts_dir = font.parent().unwrap();
         let mut overlay =
             crate::editor::project::default_text_overlay("Hola MoonClip", 0, 1500);
         overlay.stroke_width = 4.0;
-        let filter = drawtext_filter(&overlay, 360, &font, &tf);
+        overlay.rotation = 30.0;
+        let ass_path = dir.join("overlays.ass");
+        std::fs::write(&ass_path, ass_subtitles(&[&overlay], 640, 360)).unwrap();
+        let filter = format!(
+            "ass=filename='{}':fontsdir='{}'",
+            escape_filter_value(&ass_path.to_string_lossy()),
+            escape_filter_value(&fonts_dir.to_string_lossy()),
+        );
         let with_text = dir.join("with_text.mp4");
         let ok = tokio::process::Command::new(&ff)
             .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
@@ -1478,7 +1555,7 @@ mod tests {
             .status()
             .await
             .unwrap();
-        assert!(ok.success(), "drawtext export failed");
+        assert!(ok.success(), "ass export failed");
         assert!(with_text.is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
