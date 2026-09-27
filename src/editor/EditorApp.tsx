@@ -161,9 +161,14 @@ function OverlayView({
         selected ? "outline outline-1 outline-dashed outline-cyan-300/70" : ""
       }`}
       style={{
-        left: overlay.x * frame.w - size.w / 2,
-        top: overlay.y * frame.h - size.h / 2,
-        transform: `scale(${overlay.scale}) rotate(${overlay.rotation}deg)`,
+        // Anchored at 0,0 with a leading px translate: Moveable updates that
+        // same translate, so its control box always hugs the element and the
+        // committed position is exactly what you see.
+        left: 0,
+        top: 0,
+        transform: `translate(${overlay.x * frame.w - size.w / 2}px, ${
+          overlay.y * frame.h - size.h / 2
+        }px) scale(${overlay.scale}) rotate(${overlay.rotation}deg)`,
         opacity: overlay.opacity,
         color: overlay.color,
         fontSize: `${Math.max(8, overlay.fontSize * scale)}px`,
@@ -281,6 +286,7 @@ export default function EditorApp({
   const closedRef = useRef(false);
   const lastScale = useRef(1);
   const lastRotation = useRef(0);
+  const lastTranslate = useRef<[number, number]>([0, 0]);
   const [, forceTick] = useState(0);
 
   const project = useEditorStore((s) => s.project);
@@ -507,6 +513,11 @@ export default function EditorApp({
   const play = useCallback(async () => {
     const p = useEditorStore.getState().project;
     if (!p) return;
+    // Playing deselects overlays: editors hide the transform box while
+    // previewing, so nothing looks "selected by itself".
+    if (useEditorStore.getState().selection?.kind === "overlay") {
+      useEditorStore.getState().select(null);
+    }
     const engine = await decodeProject(p);
     void invoke<number>("editor_audio_health").catch(() => {});
     const ms = useEditorStore.getState().playheadMs;
@@ -1024,7 +1035,7 @@ export default function EditorApp({
                   }}
                 />
               ))}
-              {moveableTarget && (
+              {moveableTarget && !playing && (
                 <Moveable
                   key={selection!.id}
                   target={moveableTarget}
@@ -1050,16 +1061,21 @@ export default function EditorApp({
                   snapHorizontalThreshold={6}
                   snapVerticalThreshold={6}
                   snapGap={false}
-                  onDrag={({ target, transform }) => {
+                  onDrag={({ target, transform, translate }) => {
                     (target as HTMLElement).style.transform = transform;
+                    lastTranslate.current = [translate[0], translate[1]];
                   }}
-                  onDragEnd={({ target }) => {
+                  onDragEnd={() => {
+                    const el = overlayEls.current[selection!.id];
                     const frect = frameRef.current?.getBoundingClientRect();
-                    const trect = (target as HTMLElement).getBoundingClientRect();
-                    if (!frect || frect.width === 0 || frect.height === 0) return;
+                    if (!el || !frect || frect.width === 0 || frect.height === 0) return;
+                    // The leading translate places the element's top-left; the
+                    // center is that plus half its layout size.
+                    const cx = lastTranslate.current[0] + el.offsetWidth / 2;
+                    const cy = lastTranslate.current[1] + el.offsetHeight / 2;
                     useEditorStore.getState().updateOverlay(selection!.id, {
-                      x: (trect.left + trect.width / 2 - frect.left) / frect.width,
-                      y: (trect.top + trect.height / 2 - frect.top) / frect.height,
+                      x: Math.min(1, Math.max(0, cx / frect.width)),
+                      y: Math.min(1, Math.max(0, cy / frect.height)),
                     });
                     forceTick((n) => n + 1);
                   }}

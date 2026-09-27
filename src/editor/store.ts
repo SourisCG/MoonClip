@@ -132,7 +132,13 @@ export const useEditorStore = create<EditorState>()(
       updateOverlay: (id, patch) =>
         set((s) => {
           const o = s.project?.overlays.find((x) => x.id === id);
-          if (o) Object.assign(o, patch);
+          if (!o) return;
+          Object.assign(o, patch);
+          // Keep overlays reachable: center inside the frame, sane scale/alpha.
+          o.x = Math.min(1, Math.max(0, o.x));
+          o.y = Math.min(1, Math.max(0, o.y));
+          o.scale = Math.min(8, Math.max(0.1, o.scale));
+          o.opacity = Math.min(1, Math.max(0, o.opacity));
         }),
 
       moveOverlay: (id, startMs) =>
