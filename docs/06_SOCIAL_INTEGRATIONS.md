@@ -23,6 +23,19 @@ All uploads are client-to-service. No MoonClip server.
 - **Credenciales**: `social.json` en el app-data dir (fuera de git, 0600) con
   override por env (`MOONCLIP_GOOGLE_DRIVE_CLIENT_ID`/`_SECRET`); plantilla
   `social.example.json`. El keyring ya no se expone por IPC.
+- **Clips cloud (2026-09-27)**: tras subir, el checkbox opcional "borrar el
+  video local" deja el clip solo en Drive (thumbnail local conservado, fila
+  `cloud=1`, `drive_file_id`). El preview/trim usan `ensure_local` (descarga a
+  la caché de la app con progreso, y el panel de trim la borra al cerrarse);
+  el editor pesado descarga sí o sí al directorio de sesión (se limpia al
+  cerrar) y el export reutiliza esa copia. Re-subir un clip cloud reutiliza el
+  archivo remoto (sin duplicados). Borrar un clip cloud manda el remoto a la
+  papelera de Drive (confirmación en dos pasos); purga y cuota ignoran filas
+  cloud. Migración 015.
+- **Detección**: además del blocklist de gestores, se rechazan títulos que
+  terminan en `" - <app conocida>"` (Brave, Chrome, Firefox, Dolphin,
+  Discord, VS Code, KWrite, Steam…) porque KRunner reporta `app_id` vacío
+  para casi todo; los estados de juego (`- 1.4.4.9`) siguen matcheando.
 - Pendiente: YouTube (requiere verificación del proyecto + auditoría de la
   API), TikTok (Worker broker para el `client_secret`), Discord (webhook por
   usuario) y X (navegador + portapapeles de archivo).

@@ -1101,3 +1101,19 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 - Gates: 189 tests, clippy `-D warnings`, `pnpm build` limpios. Verificación
   live pendiente del clic de consentimiento (conectar → subir → explorar →
   bajar).
+
+### Fase 6 — Clips cloud + fix de detección (2026-09-27)
+
+- **Detección**: KRunner reporta `app_id` vacío para casi todo (Brave, Steam,
+  Discord, VS Code), así que una pestaña titulada como un juego arrancaba el
+  buffer. `window_matches` ahora rechaza títulos terminados en
+  `" - <app conocida>"`; verificado en vivo con una pestaña "Overwatch"
+  ("Overwatch - Brave" → no match, sin auto-start). Commit `d39ec45`.
+- **Clips cloud**: checkbox opcional al subir para borrar el video local
+  (thumbnail conservado, `cloud=1`); `ensure_local` descarga on demand a la
+  caché (preview/trim/reveal), el panel de trim borra la copia al cerrarse,
+  el editor pesado descarga al directorio de sesión y el export reutiliza esa
+  copia; re-subir reutiliza el remoto (sin duplicados); borrar manda el
+  archivo a la papelera de Drive con confirmación en dos pasos; purga y cuota
+  ignoran filas cloud. Migración 015. Commit `e942f17`.
+- Gates: 194 tests, clippy `-D warnings` y `pnpm build` limpios.
