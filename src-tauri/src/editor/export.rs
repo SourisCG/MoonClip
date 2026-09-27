@@ -68,10 +68,13 @@ pub fn stage_a_args(
     dims: (u32, u32),
     src_dims: (u32, u32),
     fps: u32,
+    force_scale: bool,
     encoder: &str,
     bitrate_kbps: u32,
 ) -> Vec<String> {
-    let needs_scale = dims != src_dims;
+    // `force_scale` normalizes every segment of a multi-source project to the
+    // output frame and fps so the concat never mixes resolutions/timebases.
+    let needs_scale = dims != src_dims || force_scale;
     let needs_speed = (segment.speed - 1.0).abs() > f64::EPSILON;
     let needs_fps = fps > 0;
     // Clip adjustments (E4.3/E4.5/E4.7).
@@ -97,7 +100,12 @@ pub fn stage_a_args(
         || has_eq
         || has_temperature
         || has_vignette;
-    let copy = !needs_scale && !needs_speed && !needs_fps && !has_adjust && segment.freeze_ms <= 0;
+    let copy = !needs_scale
+        && !needs_speed
+        && !needs_fps
+        && !has_adjust
+        && !force_scale
+        && segment.freeze_ms <= 0;
 
     let mut a: Vec<String> = vec![
         "-y".into(),
@@ -209,6 +217,72 @@ pub fn stage_a_args(
     a
 }
 
+/// One ordered piece of the exported video timeline: a segment or a black
+/// filler for a gap the user left between clips.
+#[derive(Debug, PartialEq)]
+pub enum TimelinePiece {
+    Seg(usize),
+    Black { duration_ms: i64 },
+}
+
+/// Expand the segments into timeline pieces, inserting black fillers for the
+/// gaps (dragging a clip right leaves one; the preview shows black there and
+/// the audio already respects it via `adelay`).
+pub fn timeline_pieces(segments: &[Segment]) -> Vec<TimelinePiece> {
+    let mut order: Vec<(i64, usize)> = segments
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.timeline_start_ms.max(0), i))
+        .collect();
+    order.sort_by_key(|(start, _)| *start);
+    let mut pieces = Vec::new();
+    let mut cursor = 0i64;
+    for (start, i) in order {
+        if start > cursor {
+            pieces.push(TimelinePiece::Black {
+                duration_ms: start - cursor,
+            });
+        }
+        pieces.push(TimelinePiece::Seg(i));
+        cursor = start + segments[i].timeline_duration_ms();
+    }
+    pieces
+}
+
+/// ffmpeg args for a silent black filler clip of `duration_ms`.
+pub fn black_filler_args(
+    output: &Path,
+    dims: (u32, u32),
+    fps: u32,
+    duration_ms: i64,
+    encoder: &str,
+    bitrate_kbps: u32,
+) -> Vec<String> {
+    let fps = fps.max(1);
+    let mut a: Vec<String> = vec![
+        "-y".into(),
+        "-hide_banner".into(),
+        "-nostdin".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-f".into(),
+        "lavfi".into(),
+        "-i".into(),
+    ];
+    a.push(format!(
+        "color=c=black:s={}x{}:r={fps}",
+        dims.0.max(2),
+        dims.1.max(2)
+    ));
+    a.push("-t".into());
+    a.push(secs(duration_ms));
+    a.push("-an".into());
+    a.extend(encoders::quality_args(encoder, bitrate_kbps, dims.1));
+    a.extend(["-c:v", encoder, "-pix_fmt", "yuv420p"].map(String::from));
+    a.push(output.to_string_lossy().into_owned());
+    a
+}
+
 /// Bundled font for text overlays (OFL/redistributable). Searches the
 /// packaged resource dir first, then the dev tree, then common system paths.
 pub fn resolve_font(app: &AppHandle) -> Option<PathBuf> {
@@ -296,13 +370,13 @@ pub fn concat_file(paths: &[PathBuf]) -> String {
         .join("\n")
 }
 
-/// Audio filtergraph for the stem remix. Every contribution carries
-/// `master x that clip's own gain` at its timeline position.
+/// Audio filtergraph matching the editor mixer: Mix, Game and Mic are three
+/// independent channels, each contribution carrying its per-clip gain at its
+/// timeline position.
 ///
 /// Returns the graph plus the output labels to `-map`. `mode` is:
-/// - `"mix"`: ONE AAC track with Game+Mic (plays everywhere). The recording's
-///   Mix stem (the SUM of both) is never included here: playing both copies
-///   was the doubled-audio bug.
+/// - `"mix"`: ONE AAC track with the three channels summed, exactly like the
+///   preview plays them.
 /// - `"tracks"`: three AAC tracks — Mix, Game, Mic — for re-editing.
 pub fn audio_filter(
     segments: &[Segment],
@@ -564,12 +638,27 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
         sources.push((seg.source_clip_id.clone(), path, clip.duration_ms, w, h, fps, tracks));
     }
     let (src_w, src_h) = (sources[0].3, sources[0].4);
+    let base_fps = sources[0].5.round().max(1.0) as u32;
     let (out_w, out_h) = output_dims(src_w, src_h, &project.output);
-    let fps = project.output.fps;
+    // Timeline pieces: segments plus black fillers for gaps.
+    let pieces = timeline_pieces(&project.segments);
+    let has_gap = pieces.iter().any(|p| matches!(p, TimelinePiece::Black { .. }));
+    // Uniform encoding is mandatory when several sources or gaps coexist (the
+    // concat demuxer cannot mix resolutions/timebases/codecs).
+    let mixed = sources.len() > 1;
+    let force_scale = mixed || has_gap;
+    let fps = if project.output.fps > 0 {
+        project.output.fps
+    } else if force_scale {
+        base_fps
+    } else {
+        0
+    };
     let encoder = encoders::pick(&ffmpeg, &project.output.encoder).await;
     eprintln!(
-        "[moonclip] editor export: {out_w}x{out_h} encoder={encoder} segments={}",
-        project.segments.len()
+        "[moonclip] editor export: {out_w}x{out_h} encoder={encoder} segments={} pieces={}",
+        project.segments.len(),
+        pieces.len()
     );
 
     let total_ms = project.duration_ms().max(100);
@@ -589,33 +678,52 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
     emit(0.0, "segments", false);
     let handle = session::export_handle(session_id).ok_or("editor session not found")?;
 
-    // ---- Stage A: one video-only file per segment ------------------------
+    // ---- Stage A: one video-only file per timeline piece -----------------
     let mut segment_files: Vec<PathBuf> = Vec::new();
-    for (i, seg) in project.segments.iter().enumerate() {
-        let src = sources
-            .iter()
-            .find(|(id, ..)| id == &seg.source_clip_id)
-            .ok_or("source clip not resolved")?;
+    let piece_count = pieces.len() as f64;
+    for (i, piece) in pieces.iter().enumerate() {
         let out = dir.join(format!("seg_{i}.mp4"));
-        let args = stage_a_args(
-            &src.1,
-            &out,
-            seg,
-            (out_w, out_h),
-            (src_w, src_h),
-            fps,
-            &encoder,
-            project.output.bitrate_kbps,
-        );
-        let seg_seconds = (seg.out_ms - seg.in_ms).max(1) as f64 / 1000.0;
-        let seg_count = project.segments.len() as f64;
-        run_ffmpeg(&ffmpeg, &args, &handle, seg_seconds, |p| {
-            emit((i as f64 + p / 100.0) / seg_count * 55.0, "segments", false);
+        let (args, seconds) = match piece {
+            TimelinePiece::Black { duration_ms } => (
+                black_filler_args(
+                    &out,
+                    (out_w, out_h),
+                    if fps > 0 { fps } else { base_fps },
+                    *duration_ms,
+                    &encoder,
+                    project.output.bitrate_kbps,
+                ),
+                (*duration_ms).max(1) as f64 / 1000.0,
+            ),
+            TimelinePiece::Seg(idx) => {
+                let seg = &project.segments[*idx];
+                let src = sources
+                    .iter()
+                    .find(|(id, ..)| id == &seg.source_clip_id)
+                    .ok_or("source clip not resolved")?;
+                (
+                    stage_a_args(
+                        &src.1,
+                        &out,
+                        seg,
+                        (out_w, out_h),
+                        (src.3, src.4),
+                        fps,
+                        force_scale,
+                        &encoder,
+                        project.output.bitrate_kbps,
+                    ),
+                    (seg.out_ms - seg.in_ms).max(1) as f64 / 1000.0,
+                )
+            }
+        };
+        run_ffmpeg(&ffmpeg, &args, &handle, seconds, |p| {
+            emit((i as f64 + p / 100.0) / piece_count * 55.0, "segments", false);
         })
         .await
-        .map_err(|e| format!("segment {} failed: {e}", i + 1))?;
+        .map_err(|e| format!("piece {} failed: {e}", i + 1))?;
         if !out.is_file() {
-            return Err(format!("segment {} produced no file", i + 1));
+            return Err(format!("piece {} produced no file", i + 1));
         }
         segment_files.push(out);
     }
@@ -860,6 +968,7 @@ mod tests {
             (1920, 1080),
             (1920, 1080),
             0,
+            false,
             "libx264",
             0,
         );
@@ -867,6 +976,83 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["-ss", "1.000"]));
         assert!(a.windows(2).any(|w| w == ["-t", "1.500"]));
         assert!(!a.iter().any(|x| x == "-vf"));
+    }
+
+    #[test]
+    fn timeline_pieces_insert_black_fillers_for_gaps() {
+        let mut a = seg(0, 2000);
+        a.timeline_start_ms = 0;
+        let mut b = seg(0, 1000);
+        b.timeline_start_ms = 3000;
+        // Sorted by start even if the vector is not ordered.
+        assert_eq!(
+            timeline_pieces(&[b.clone(), a.clone()]),
+            vec![
+                TimelinePiece::Seg(1),
+                TimelinePiece::Black { duration_ms: 1000 },
+                TimelinePiece::Seg(0),
+            ]
+        );
+        // Leading gap before the first clip.
+        let mut c = seg(0, 1000);
+        c.timeline_start_ms = 500;
+        assert_eq!(
+            timeline_pieces(&[c]),
+            vec![
+                TimelinePiece::Black { duration_ms: 500 },
+                TimelinePiece::Seg(0)
+            ]
+        );
+        // Contiguous clips starting at 0: no fillers.
+        let mut d = seg(0, 1000);
+        d.timeline_start_ms = 0;
+        let mut e = seg(0, 1000);
+        e.timeline_start_ms = 1000;
+        assert_eq!(
+            timeline_pieces(&[d, e]),
+            vec![TimelinePiece::Seg(0), TimelinePiece::Seg(1)]
+        );
+    }
+
+    #[test]
+    fn black_filler_encodes_black_video_with_the_chosen_encoder() {
+        let a = black_filler_args(
+            Path::new("/tmp/gap.mp4"),
+            (1920, 1080),
+            30,
+            1500,
+            "h264_nvenc",
+            8000,
+        );
+        assert!(a.contains(&"color=c=black:s=1920x1080:r=30".to_string()), "{a:?}");
+        assert!(a.windows(2).any(|w| w == ["-t", "1.500"]));
+        assert!(a.contains(&"-an".to_string()));
+        assert!(a.windows(2).any(|w| w == ["-c:v", "h264_nvenc"]));
+        assert_eq!(a.last().unwrap(), "/tmp/gap.mp4");
+    }
+
+    #[test]
+    fn stage_a_force_scale_normalizes_same_size_sources() {
+        // A multi-source project forces re-encode + cover scale even when the
+        // segment's dims already match the output frame.
+        let a = stage_a_args(
+            Path::new("/clips/in.mp4"),
+            Path::new("/tmp/seg.mp4"),
+            &seg(0, 1000),
+            (1920, 1080),
+            (1920, 1080),
+            30,
+            true,
+            "libx264",
+            0,
+        );
+        assert!(!a.windows(2).any(|w| w == ["-c:v", "copy"]));
+        let vf = a
+            .windows(2)
+            .find(|w| w[0] == "-vf")
+            .map(|w| w[1].clone())
+            .unwrap();
+        assert!(vf.contains("scale=1920:1080"), "{vf}");
     }
 
     #[test]
@@ -880,6 +1066,7 @@ mod tests {
             (1080, 1920),
             (1920, 1080),
             30,
+            false,
             "h264_nvenc",
             8000,
         );
@@ -991,6 +1178,7 @@ mod tests {
             (1920, 1080),
             (1920, 1080),
             0,
+            false,
             "libx264",
             0,
         );
@@ -1018,6 +1206,7 @@ mod tests {
             (1920, 1080),
             (1920, 1080),
             0,
+            false,
             "libx264",
             0,
         );
@@ -1155,6 +1344,7 @@ mod tests {
             (640, 360),
             (640, 360),
             0,
+            false,
             "libx264",
             0,
         );
@@ -1240,6 +1430,7 @@ mod tests {
                 (640, 360),
                 (640, 360),
                 0,
+                false,
                 "libx264",
                 0,
             ))
@@ -1289,6 +1480,137 @@ mod tests {
             .unwrap();
         assert!(ok.success(), "drawtext export failed");
         assert!(with_text.is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Acceptance (export everything): two sources with DIFFERENT resolutions
+    /// and a gap between them. Each segment must be normalized to the output
+    /// frame, the gap filled with black, and the result must be one video +
+    /// one mixed audio track with the exact project duration.
+    #[tokio::test]
+    async fn live_multisource_gap_export() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let ff = manifest
+            .join("binaries")
+            .join(crate::sidecar::host_triple())
+            .join(crate::editor::ffmpeg::sidecar_name());
+        if !ff.exists() {
+            eprintln!("skip: bundled ffmpeg not staged");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("moonclip-multi-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two fixtures: 640x360@30 and 480x270@30, 3 audio tracks each.
+        let mut fixtures = Vec::new();
+        for (w, h, name) in [(640u32, 360u32, "a.mp4"), (480, 270, "b.mp4")] {
+            let path = dir.join(name);
+            let status = tokio::process::Command::new(&ff)
+                .args([
+                    "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                ])
+                .arg(format!("testsrc2=size={w}x{h}:rate=30"))
+                .args([
+                    "-f", "lavfi", "-i", "sine=frequency=440",
+                    "-f", "lavfi", "-i", "sine=frequency=880",
+                    "-f", "lavfi", "-i", "sine=frequency=1320",
+                    "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a",
+                    "-t", "2", "-c:v", "libx264", "-preset", "ultrafast", "-g", "30",
+                    "-c:a", "aac",
+                ])
+                .arg(&path)
+                .status()
+                .await
+                .unwrap();
+            assert!(status.success(), "fixture {name} failed");
+            fixtures.push(path);
+        }
+
+        // Project: A [0..2000] at 0, B [0..2000] at 2500 -> 500 ms gap.
+        let mut a_seg = seg(0, 2000);
+        a_seg.timeline_start_ms = 0;
+        let mut b_seg = seg(0, 2000);
+        b_seg.timeline_start_ms = 2500;
+        b_seg.zoom = 1.25;
+        let project = vec![a_seg, b_seg];
+        let pieces = timeline_pieces(&project);
+        assert_eq!(pieces.len(), 3, "two clips + one black filler");
+
+        // Stage A: pieces normalized to 640x360@30 (base frame).
+        let mut piece_files: Vec<std::path::PathBuf> = Vec::new();
+        for (i, piece) in pieces.iter().enumerate() {
+            let out = dir.join(format!("p{i}.mp4"));
+            let args = match piece {
+                TimelinePiece::Black { duration_ms } => {
+                    black_filler_args(&out, (640, 360), 30, *duration_ms, "libx264", 0)
+                }
+                TimelinePiece::Seg(idx) => stage_a_args(
+                    &fixtures[*idx],
+                    &out,
+                    &project[*idx],
+                    (640, 360),
+                    if *idx == 0 { (640, 360) } else { (480, 270) },
+                    30,
+                    true,
+                    "libx264",
+                    0,
+                ),
+            };
+            let ok = tokio::process::Command::new(&ff)
+                .args(&args)
+                .status()
+                .await
+                .unwrap();
+            assert!(ok.success(), "piece {i} failed");
+            piece_files.push(out);
+        }
+
+        // Stage B: concat + audio (the gap is silent via adelay).
+        let list = dir.join("concat.txt");
+        std::fs::write(&list, concat_file(&piece_files)).unwrap();
+        let joined = dir.join("joined.mp4");
+        let ok = tokio::process::Command::new(&ff)
+            .args([
+                "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i",
+            ])
+            .arg(&list)
+            .args(["-c", "copy"])
+            .arg(&joined)
+            .status()
+            .await
+            .unwrap();
+        assert!(ok.success(), "concat failed");
+
+        let (filter, maps) = audio_filter(&project, &[1, 2], &[3, 3], 4500, 1.0, "mix");
+        assert_eq!(maps, vec!["[aout]".to_string()]);
+        let out = dir.join("out.mp4");
+        let ok = tokio::process::Command::new(&ff)
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&joined)
+            .args(["-i"])
+            .arg(&fixtures[0])
+            .args(["-i"])
+            .arg(&fixtures[1])
+            .args(["-filter_complex", &filter, "-map", "0:v:0", "-map", "[aout]"])
+            .args(["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"])
+            .arg(&out)
+            .status()
+            .await
+            .unwrap();
+        assert!(ok.success(), "stage B failed");
+
+        let stderr = tokio::process::Command::new(&ff)
+            .args(["-hide_banner", "-i"])
+            .arg(&out)
+            .output()
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&stderr.stderr);
+        assert_eq!(session::parse_audio_track_count(&text), 1, "{text}");
+        let ms = crate::editor::ffmpeg::probe_duration_ms(&ff, &out)
+            .await
+            .expect("probe duration");
+        assert!((4300..=4700).contains(&ms), "duration {ms} ms (expected ~4500)");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
