@@ -223,6 +223,7 @@
   "trim": {
     "title": "Recortar clip",
     "precise": "Preciso (re-encode)",
+    "loop": "Repetir",
     "hint": "Sin pérdida corta en el keyframe anterior (±1–2 s); Preciso es exacto.",
     "save": "Guardar copia",
     "saving_short": "Recortando…",

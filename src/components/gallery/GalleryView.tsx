@@ -12,10 +12,9 @@ import {
   Star,
   Upload,
 } from "lucide-react";
-import { ClipViewer, type ViewerActions } from "./ClipViewer";
 import { DriveBrowser } from "./DriveBrowser";
 import { ShareDialog } from "./ShareDialog";
-import { TrimPanel } from "./TrimPanel";
+import { TrimPanel, type PanelActions } from "./TrimPanel";
 import { useClips } from "../../hooks/useClips";
 import { useRegisteredInputs } from "../../hooks/useRegisteredInputs";
 import type { ClipMetadata } from "../../types";
@@ -179,7 +178,6 @@ export function GalleryView({
   const [purged, setPurged] = useState<number | null>(null);
   const [trimClip, setTrimClip] = useState<ClipMetadata | null>(null);
   const [shareClip, setShareClip] = useState<ClipMetadata | null>(null);
-  const [viewerId, setViewerId] = useState<string | null>(null);
   const [showDrive, setShowDrive] = useState(false);
   const [download, setDownload] = useState<{ sent: number; total: number } | null>(null);
   const [query, setQuery] = useState("");
@@ -273,7 +271,7 @@ export function GalleryView({
   };
 
   const fail = (msg: string) => setLastError(`${timeNow()} · ${msg}`);
-  const actions: ViewerActions = {
+  const actions: PanelActions = {
     onToggleFavorite: (id) =>
       toggleFavorite(id).then(
         () => setLastError(null),
@@ -283,12 +281,10 @@ export function GalleryView({
       deleteClip(id).then(
         () => {
           setLastError(null);
-          setViewerId((current) => (current === id ? null : current));
+          setTrimClip((current) => (current?.id === id ? null : current));
         },
         (e) => fail(String(e)),
       ),
-    onTrim: (clip) => setTrimClip(clip),
-    onAdvancedEdit: (clip) => onAdvancedEdit?.(clip),
     onRename: (clip, name) =>
       renameClip(clip.id, name).then(
         () => setLastError(null),
@@ -302,6 +298,13 @@ export function GalleryView({
     onToggleFavorite: actions.onToggleFavorite,
     onShare: actions.onShare,
     onError: actions.onError,
+  };
+  // ←/→ in the panel walk the CURRENT filtered list.
+  const trimIndex = trimClip ? visible.findIndex((c) => c.id === trimClip.id) : -1;
+  const navTrim = (dir: number) => {
+    if (trimIndex < 0) return;
+    const next = visible[trimIndex + dir];
+    if (next) setTrimClip(next);
   };
 
   if (loading && clips.length === 0)
@@ -348,26 +351,8 @@ export function GalleryView({
     }`;
   const countBadge = "ml-auto font-mono text-[10px] text-slate-500";
 
-  const viewerClip = viewerId ? clips.find((c) => c.id === viewerId) ?? null : null;
-  const viewerIndex = viewerClip ? visible.findIndex((c) => c.id === viewerClip.id) : -1;
-  const navViewer = (dir: number) => {
-    if (viewerIndex < 0) return;
-    const next = visible[viewerIndex + dir];
-    if (next) setViewerId(next.id);
-  };
-
   return (
     <>
-      {viewerClip && (
-        <ClipViewer
-          clip={viewerClip}
-          gameLabel={labelFor(viewerClip.folder || FLAT)}
-          onClose={() => setViewerId(null)}
-          onPrev={viewerIndex > 0 ? () => navViewer(-1) : undefined}
-          onNext={viewerIndex >= 0 && viewerIndex < visible.length - 1 ? () => navViewer(1) : undefined}
-          actions={actions}
-        />
-      )}
       {shareClip && (
         <ShareDialog
           clip={shareClip}
@@ -388,12 +373,16 @@ export function GalleryView({
       {trimClip && (
         <TrimPanel
           clip={trimClip}
+          gameLabel={labelFor(trimClip.folder || FLAT)}
           onAdvancedEdit={onAdvancedEdit}
           onClose={() => setTrimClip(null)}
           onSaved={() => {
             setLastError(null);
             void refresh();
           }}
+          onPrev={trimIndex > 0 ? () => navTrim(-1) : undefined}
+          onNext={trimIndex >= 0 && trimIndex < visible.length - 1 ? () => navTrim(1) : undefined}
+          actions={actions}
         />
       )}
       <div className="mt-2 flex flex-col gap-4 lg:flex-row">
@@ -500,7 +489,7 @@ export function GalleryView({
                   key={c.id}
                   clip={c}
                   gameLabel={labelFor(c.folder || FLAT)}
-                  onOpen={() => setViewerId(c.id)}
+                  onOpen={() => setTrimClip(c)}
                   actions={cardActions}
                 />
               ))}

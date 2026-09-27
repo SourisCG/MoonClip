@@ -224,6 +224,7 @@
   "trim": {
     "title": "Trim clip",
     "precise": "Precise (re-encode)",
+    "loop": "Repeat",
     "hint": "Lossless cuts at the previous keyframe (±1–2 s); Precise is exact.",
     "save": "Save copy",
     "saving_short": "Trimming…",
