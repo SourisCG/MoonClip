@@ -447,6 +447,10 @@ pub fn run() {
             app.manage(db);
             app.manage(state::AppState::default());
 
+            // One-time: move plaintext portal tokens from older builds into
+            // the OS vault (idempotent; capture still works if it is absent).
+            storage::migrate_input_secrets_to_vault(app.state::<storage::DbState>().inner());
+
             // --- Global shortcut (configurable, default F9) ---
             register_stored_hotkey(app.handle());
 

@@ -25,6 +25,16 @@ const MIGRATION_012: &str = include_str!("../../migrations/012_window_identity.s
 
 pub struct DbState(pub Mutex<Connection>);
 
+/// Older builds persisted the obs-websocket password and the portal restore
+/// token in `settings`. Remove them on open (idempotent).
+fn scrub_legacy_secret_settings(conn: &Connection) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM settings WHERE key IN ('engine_ws_password', 'engine_restore_token')",
+        [],
+    )
+    .map_err(|e| format!("cannot scrub legacy secrets: {e}"))
+}
+
 impl DbState {
     pub fn open(app: &AppHandle) -> Result<Self, String> {
         let db_path = paths::db_file_path(app)?;
@@ -84,6 +94,10 @@ impl DbState {
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
         }
+        // Secrets never live in the DB: drop rows written by older builds
+        // (the websocket password is generated per start; the portal token
+        // now lives in the OS vault).
+        scrub_legacy_secret_settings(&conn)?;
         let state = Self(Mutex::new(conn));
         state.ensure_clips_dir()?;
         Ok(state)
@@ -373,8 +387,6 @@ impl DbState {
             "capture_mode",
             "engine_token_reset_v2",
             "engine_ws_port",
-            "engine_ws_password",
-            "engine_restore_token",
             "engine_source_width",
             "engine_source_height",
         ];
@@ -432,6 +444,11 @@ impl DbState {
     /// never listed here.
     pub fn list_registered_inputs(&self) -> Result<Vec<RegisteredInput>, String> {
         self.list_inputs_where("input_kind = 'window'")
+    }
+
+    /// Every input row, the internal screen one included (secret migration).
+    pub fn all_registered_inputs(&self) -> Result<Vec<RegisteredInput>, String> {
+        self.list_inputs_where("1 = 1")
     }
 
     /// The single internal full-screen input (created on first screen start).
@@ -577,6 +594,27 @@ impl DbState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_secret_settings_are_scrubbed_on_open() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO settings VALUES
+               ('engine_ws_password','pw'),
+               ('engine_restore_token','tok'),
+               ('engine_ws_port','4456');",
+        )
+        .unwrap();
+        assert_eq!(scrub_legacy_secret_settings(&conn).unwrap(), 2);
+        let mut stmt = conn.prepare("SELECT key FROM settings").unwrap();
+        let keys: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(keys, vec!["engine_ws_port"]);
+    }
 
     #[test]
     fn migration_010_adds_portal_token() {

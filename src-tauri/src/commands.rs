@@ -13,6 +13,58 @@ use crate::state::AppState;
 use crate::storage::models::{ClipRecord, RegisteredInput};
 use crate::storage::{secrets, DbState};
 
+/// Persist OBS source settings with portal tokens stripped into the OS vault
+/// (plaintext-DB fallback when the vault is unavailable, so capture never
+/// breaks on minimal WMs).
+fn persist_input_settings(
+    db: &DbState,
+    input_id: &str,
+    input_name: &str,
+    settings: &serde_json::Value,
+) -> Result<(), String> {
+    let mut sanitized = settings.clone();
+    let secret = secrets::take_secrets(&mut sanitized);
+    if !secret.is_empty() {
+        match secrets::store_input_secrets(input_id, &secret) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!(
+                    "[moonclip] secret vault unavailable ({e}); keeping the portal token in the local DB"
+                );
+                secrets::merge_secrets(&mut sanitized, secret);
+            }
+        }
+    }
+    db.set_input_settings(input_name, &sanitized.to_string())
+}
+
+/// Stored settings for an input with vault secrets merged back in.
+fn input_settings_with_secrets(row: &RegisteredInput, fallback: serde_json::Value) -> serde_json::Value {
+    let mut value = row
+        .input_settings
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or(fallback);
+    match secrets::load_input_secrets(&row.id) {
+        Ok(Some(secret)) => secrets::merge_secrets(&mut value, secret),
+        Ok(None) => {}
+        Err(e) => eprintln!(
+            "[moonclip] cannot read the secret vault ({e}); the portal picker may appear again"
+        ),
+    }
+    value
+}
+
+/// Did the user already grant a portal (screen) restore token?
+fn portal_token_present(db: &DbState) -> bool {
+    let Ok(Some(screen)) = db.screen_input() else {
+        return false;
+    };
+    let stored = screen.input_settings.as_deref().unwrap_or("");
+    stored.contains("RestoreToken")
+        || matches!(secrets::load_input_secrets(&screen.id), Ok(Some(_)))
+}
+
 #[tauri::command]
 pub fn list_clips(db: State<'_, DbState>) -> Result<Vec<ClipRecord>, String> {
     db.list_clips()
@@ -311,17 +363,15 @@ pub(crate) async fn build_capture_config(
         bitrate = b;
     }
 
-    // Private obs-websocket: dedicated port + generated password (persisted).
+    // Private obs-websocket: dedicated port + a password generated per start.
+    // It is written into this run's generated OBS config and never persisted
+    // (one less secret at rest; the DB scrub removes legacy rows).
     let port: u16 = setting_str(&db, "engine_ws_port", "4456")
         .parse()
         .unwrap_or(4456)
         .clamp(1024, 65535);
-    let mut password = setting_str(&db, "engine_ws_password", "");
-    if password.len() < 16 {
-        password =
-            uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
-        let _ = db.set_setting("engine_ws_password", &password);
-    }
+    let password =
+        uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
 
     let (obs_bin, _) = resolve_obs(app)?;
 
@@ -334,17 +384,12 @@ pub(crate) async fn build_capture_config(
     let inputs: Vec<CaptureInput> = regs
         .iter()
         .map(|r| {
-            let settings = r
-                .input_settings
-                .as_deref()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                .unwrap_or_else(|| {
-                    if r.input_kind == "screen" {
-                        os::screen_input_settings(&monitor)
-                    } else {
-                        serde_json::json!({})
-                    }
-                });
+            let fallback = if r.input_kind == "screen" {
+                os::screen_input_settings(&monitor)
+            } else {
+                serde_json::json!({})
+            };
+            let settings = input_settings_with_secrets(r, fallback);
             CaptureInput {
                 name: r.input_name.clone(),
                 kind: r.input_kind.clone(),
@@ -479,14 +524,12 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     // a fresh token survives even if the later size probe fails (and is never
     // lost when the engine is force-stopped).
     let db = app.state::<DbState>();
-    let mut stored_settings = if active_input.is_empty() {
+    let active_row = if active_input.is_empty() {
         None
     } else {
-        db.input_by_name(&active_input)
-            .ok()
-            .flatten()
-            .and_then(|r| r.input_settings)
+        db.input_by_name(&active_input).ok().flatten()
     };
+    let mut stored_settings = active_row.as_ref().and_then(|r| r.input_settings.clone());
     let source_wait = if first_time {
         std::time::Duration::from_secs(60)
     } else {
@@ -497,9 +540,15 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     while waited < source_wait {
         if !active_input.is_empty() {
             if let Some(settings) = engine.read_input_settings(&active_input).await {
-                let text = settings.to_string();
+                // Compare/store the sanitized form so the vault token does not
+                // count as a change on every poll.
+                let mut sanitized = settings.clone();
+                secrets::take_secrets(&mut sanitized);
+                let text = sanitized.to_string();
                 if stored_settings.as_deref() != Some(text.as_str()) {
-                    let _ = db.set_input_settings(&active_input, &text);
+                    if let Some(row) = &active_row {
+                        let _ = persist_input_settings(&db, &row.id, &active_input, &settings);
+                    }
                     engine.note("capture settings updated");
                     stored_settings = Some(text);
                 }
@@ -1228,7 +1277,11 @@ async fn pick_window(app: &AppHandle, input_name: &str) -> Result<(), String> {
     let identity = os::window_identity(&settings);
     {
         let db = app.state::<DbState>();
-        db.set_input_settings(input_name, &settings.to_string())?;
+        if let Some(row) = db.input_by_name(input_name)? {
+            persist_input_settings(&db, &row.id, input_name, &settings)?;
+        } else {
+            return Err("registered input vanished while picking".into());
+        }
         match identity {
             Some(id) if !id.title.trim().is_empty() => {
                 db.set_input_identity(
@@ -1285,8 +1338,9 @@ pub async fn edit_game(app: AppHandle, id: String) -> Result<RegisteredInput, St
             .into_iter()
             .find(|r| r.id == id)
             .ok_or_else(|| "registered game not found".to_string())?;
-        // Drop the stored target so the picker appears again.
+        // Drop the stored target (and its vault token) so the picker appears.
         db.set_input_settings(&row.input_name, "{}")?;
+        let _ = secrets::delete_input_secrets(&row.id);
         row
     };
     pick_window(&app, &row.input_name).await?;
@@ -1326,9 +1380,11 @@ pub async fn clear_portal_token(app: AppHandle) -> Result<EngineStatus, String> 
     }
     {
         let db = app.state::<DbState>();
-        db.set_setting("engine_restore_token", "")?;
         db.set_setting("engine_source_width", "")?;
         db.set_setting("engine_source_height", "")?;
+        if let Ok(Some(screen)) = db.screen_input() {
+            let _ = secrets::delete_input_secrets(&screen.id);
+        }
     }
     // The generated collection carries the last RestoreToken OBS saved and
     // `write_obs_config` merges it back, so it must be dropped too or the next
@@ -2184,7 +2240,7 @@ pub async fn video_options(app: AppHandle) -> Result<VideoOptions, String> {
         current_height,
         current_fps,
         current_monitor,
-        portal_ready: !setting_str(&db, "engine_restore_token", "").is_empty(),
+        portal_ready: portal_token_present(&db),
         buffer_height: current_height,
         transcoding: false,
         max_source_height,
