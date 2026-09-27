@@ -1129,3 +1129,15 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   Subidos/En Drive y toolbar con búsqueda/orden. Commit `3050b6c`.
 - Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios. Verificado en
   vivo: grid + secciones + badge "En Drive" visibles.
+
+### Fase 6 — Panel único ver+recortar y arreglos de reproducción (2026-09-27)
+
+- **Playback**: `ensure_local` single-flight (lock por clip) y descarga
+  atómica `*.part`+rename (evita que StrictMode descargue dos veces y el
+  reproductor lea un archivo a medio reescribir); media server con
+  `Cache-Control: private, max-age` en vez de no-store. Commit `4ddfb15`.
+- **Panel único**: fuera el visor full-screen; el panel de trim es ahora el
+  visor Medal (cabecera con renombrar inline y chips, player grande con % de
+  descarga cloud, acciones completas, ←/→, Esc, loop opt-in, estética nueva).
+  Commit `0ac9e26`.
+- Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios.

@@ -39,9 +39,12 @@ All uploads are client-to-service. No MoonClip server.
   compartir tiene estado pendiente/subido (copiar link, hacer público, abrir
   en Drive, borrar local ahora, reemplazar).
 - **Navegación estilo Medal (2026-09-27)**: galería en grid de tarjetas 16:9,
-  visor a pantalla completa con reproductor + metadatos + todas las acciones
-  (←/→ navega, Esc cierra; cloud descarga on demand con progreso), sidebar con
-  Todos/Favoritos/Subidos/En Drive/juegos y toolbar con búsqueda y orden.
+  sidebar con Todos/Favoritos/Subidos/En Drive/juegos y toolbar con búsqueda y
+  orden. Al hacer clic se abre UN solo panel (el de recorte, agrandado) con
+  reproductor, metadatos, renombrar inline, acciones (compartir, editor,
+  favorito, revelar, borrar con confirmación cloud), navegación ←/→ y Esc;
+  cloud descarga on demand con % y la copia temporal se borra al cerrar. El
+  loop es opt-in (por defecto se detiene al final).
 - **Detección**: además del blocklist de gestores, se rechazan títulos que
   terminan en `" - <app conocida>"` (Brave, Chrome, Firefox, Dolphin,
   Discord, VS Code, KWrite, Steam…) porque KRunner reporta `app_id` vacío
