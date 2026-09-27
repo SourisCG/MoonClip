@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, KeyRound } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocale } from "../../hooks/useLocale";
 import { AudioSection } from "./AudioSection";
@@ -10,8 +10,6 @@ import { NumberField } from "./NumberField";
 import { ObsEngineSection } from "./ObsEngineSection";
 import { VideoSection } from "./VideoSection";
 import type { EngineStatus } from "../../hooks/useEngine";
-
-const SECRET_TEST_ALIAS = "phase2_selftest";
 
 export function SettingsModal({
   engineStatus,
@@ -26,7 +24,7 @@ export function SettingsModal({
   const { locale, setLocale } = useLocale();
   const { settings, loading, error, setSetting } = useSettings();
   const [saving, setSaving] = useState<string | null>(null);
-  const [secretStatus, setSecretStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [hotkey, setHotkey] = useState("F9");
   const [capturing, setCapturing] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
@@ -82,11 +80,11 @@ export function SettingsModal({
 
   const save = async (key: string, value: string) => {
     setSaving(key);
-    setSecretStatus(null);
+    setStatus(null);
     try {
       await setSetting(key, value);
     } catch (e) {
-      setSecretStatus(String(e));
+      setStatus(String(e));
     } finally {
       setSaving(null);
     }
@@ -94,7 +92,7 @@ export function SettingsModal({
 
   const browseDir = async () => {
     setSaving("clips_directory");
-    setSecretStatus(null);
+    setStatus(null);
     try {
       const dir = await open({
         directory: true,
@@ -103,23 +101,9 @@ export function SettingsModal({
       });
       if (typeof dir === "string") await setSetting("clips_directory", dir);
     } catch (e) {
-      setSecretStatus(String(e));
+      setStatus(String(e));
     } finally {
       setSaving(null);
-    }
-  };
-
-  const secretRoundTrip = async () => {
-    setSecretStatus(t("settings.secret.testing"));
-    try {
-      const probe = `ok-${Date.now()}`;
-      await invoke("secret_store", { alias: SECRET_TEST_ALIAS, value: probe });
-      const back = await invoke<string>("secret_get", { alias: SECRET_TEST_ALIAS });
-      if (back !== probe) throw new Error("mismatch");
-      await invoke("secret_delete", { alias: SECRET_TEST_ALIAS });
-      setSecretStatus(t("settings.secret.ok"));
-    } catch (e) {
-      setSecretStatus(String(e));
     }
   };
 
@@ -201,23 +185,8 @@ export function SettingsModal({
         <p className="break-all font-mono text-xs text-red-400">{hotkeyError}</p>
       )}
 
-      <div className={row}>
-        <span className={label}>
-          <span className="inline-flex items-center gap-2">
-            <KeyRound size={14} /> {t("settings.secret.title")}
-          </span>
-        </span>
-        <button
-          onClick={() => void secretRoundTrip()}
-          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200"
-        >
-          {t("settings.secret.test")}
-        </button>
-      </div>
-      {(secretStatus || saving) && (
-        <p className="font-mono text-xs text-slate-400">
-          {saving ? `${saving}…` : secretStatus}
-        </p>
+      {(status || saving) && (
+        <p className="font-mono text-xs text-slate-400">{saving ? `${saving}…` : status}</p>
       )}
 
       <h3 className="pt-2 text-sm font-semibold text-slate-200">{t("audio.title")}</h3>

@@ -151,13 +151,7 @@
     "hotkey_edit": "Clic para cambiar",
     "hotkey_press": "Pulsa una tecla… (Esc cancela)",
     "hotkey_reset": "Restablecer F9",
-    "hotkey_needs_mod": "Usa un modificador (Ctrl/Alt/Shift/Super) o una tecla de función (F1–F12).",
-    "secret": {
-      "title": "Bóveda de secretos (keyring del SO)",
-      "test": "Probar escritura/lectura",
-      "testing": "Probando bóveda…",
-      "ok": "Bóveda OK: guardar → leer → borrar funcionó."
-    }
+    "hotkey_needs_mod": "Usa un modificador (Ctrl/Alt/Shift/Super) o una tecla de función (F1–F12)."
   },
   "game": {
     "running": "{{name}} en ejecución"

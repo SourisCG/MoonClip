@@ -22,10 +22,6 @@ pub fn store_secret(alias: &str, value: &str) -> Result<(), String> {
         .and_then(|e| e.set_password(value).map_err(|e| friendly(&e)))
 }
 
-pub fn get_secret(alias: &str) -> Result<String, String> {
-    entry(alias).and_then(|e| e.get_password().map_err(|e| friendly(&e)))
-}
-
 /// `None` when the entry does not exist (as opposed to a real vault failure).
 pub fn get_secret_opt(alias: &str) -> Result<Option<String>, String> {
     let entry = entry(alias)?;

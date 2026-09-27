@@ -908,20 +908,9 @@ pub fn read_thumbnail(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-#[tauri::command]
-pub fn secret_store(alias: String, value: String) -> Result<(), String> {
-    secrets::store_secret(&alias, &value)
-}
-
-#[tauri::command]
-pub fn secret_get(alias: String) -> Result<String, String> {
-    secrets::get_secret(&alias)
-}
-
-#[tauri::command]
-pub fn secret_delete(alias: String) -> Result<(), String> {
-    secrets::delete_secret(&alias)
-}
+// NOTE: the OS keyring is intentionally NOT exposed over IPC. The webview
+// must never be able to read or write arbitrary vault entries (an XSS would
+// exfiltrate every stored OAuth token). Secrets live behind Rust-only APIs.
 
 // ---------------------------------------------------------------------------
 // Capture control

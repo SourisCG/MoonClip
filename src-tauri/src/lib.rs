@@ -545,9 +545,7 @@ pub fn run() {
             commands::set_settings,
             commands::set_video_quality,
             commands::system_memory,
-            commands::secret_store,
-            commands::secret_get,
-            commands::secret_delete,
+
             commands::start_buffer,
             commands::stop_buffer,
             commands::clear_portal_token,
