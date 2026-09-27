@@ -50,6 +50,13 @@
     "stopped_hint": "Inicia el búfer para enlazar las pistas de audio.",
     "gain_live": "Se aplica en vivo mientras el búfer graba; sin el búfer, se aplica al iniciar."
   },
+  "decode": {
+    "title": "Decodificación de video",
+    "hardware": "Hardware (VA-API)",
+    "software": "Software",
+    "install": "Instala",
+    "doc": "Guía de dependencias"
+  },
   "video": {
     "title": "Video de grabación",
     "monitor": "Monitor",

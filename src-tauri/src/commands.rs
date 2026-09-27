@@ -105,6 +105,13 @@ pub fn compositing_status() -> Result<bool, String> {
     Ok(crate::os::software_compositing())
 }
 
+/// Playback decode capability for the Settings notice (hardware VA-API vs
+/// software). Purely informational: software decoders always ship bundled.
+#[tauri::command]
+pub async fn decode_status() -> Result<crate::os::video::DecodeStatus, String> {
+    Ok(crate::os::video::decode_status().await)
+}
+
 /// Drop the on-demand cache of a cloud clip (quick-trim panel closed).
 #[tauri::command]
 pub fn cloud_cache_cleanup(app: AppHandle, clip_id: String) -> Result<(), String> {

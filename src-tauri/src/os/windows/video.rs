@@ -313,6 +313,28 @@ pub async fn offered_codecs(ffmpeg: &Path) -> Vec<String> {
     ids
 }
 
+/// Playback decode status (same shape as the Linux backend). On Windows the
+/// hardware decoders ship with the GPU driver (D3D11/Media Foundation), so
+/// there is nothing to install and no notice to show.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DecodeStatus {
+    pub vendor: String,
+    pub distro: String,
+    pub hardware: bool,
+    pub driver: Option<String>,
+    pub missing_package: Option<String>,
+}
+
+pub async fn decode_status() -> DecodeStatus {
+    DecodeStatus {
+        vendor: vendor().await,
+        distro: "windows".into(),
+        hardware: true,
+        driver: None,
+        missing_package: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{resolve_monitor, static_codecs_for_vendor, vendor_from_pci_id, Monitor};

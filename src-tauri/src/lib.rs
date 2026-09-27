@@ -545,6 +545,7 @@ pub fn run() {
             commands::cloud_cache_cleanup,
             commands::first_paint,
             commands::compositing_status,
+            commands::decode_status,
             social::social_status,
             social::connect_google_drive,
             social::disconnect_google_drive,

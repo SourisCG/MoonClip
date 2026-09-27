@@ -95,9 +95,130 @@ pub async fn offered_codecs(_ffmpeg: &Path) -> Vec<String> {
     ids
 }
 
+/// Playback decode capability. Hardware decode is strictly OPTIONAL: the
+/// bundled ffmpeg always ships software decoders (`avdec_h264`, `dav1d`,
+/// `openh264`), so a machine without a VA-API driver plays everything, just
+/// with more CPU. The UI only ever shows the missing package NAME; each
+/// distro's install command lives in docs/10_DEPENDENCIES.md.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DecodeStatus {
+    /// GPU vendor slug (`nvidia`/`amd`/`intel`/`unknown`).
+    pub vendor: String,
+    /// Distro family (`fedora`/`debian`/`arch`/`suse`/id/`unknown`).
+    pub distro: String,
+    /// A VA-API driver for this vendor is installed.
+    pub hardware: bool,
+    /// Driver file found (e.g. `nvidia_drv_video.so`).
+    pub driver: Option<String>,
+    /// Package that would provide it (name only, when missing).
+    pub missing_package: Option<String>,
+}
+
+/// Distro family from os-release content (pure: testable).
+fn distro_family_from(os_release: &str) -> String {
+    let id = os_release
+        .lines()
+        .find_map(|l| l.strip_prefix("ID="))
+        .map(|v| v.trim().trim_matches('"').to_lowercase())
+        .unwrap_or_default();
+    match id.as_str() {
+        "fedora" | "rhel" | "centos" | "rocky" | "almalinux" => "fedora".into(),
+        "debian" | "ubuntu" | "linuxmint" | "pop" | "zorin" | "elementary" => "debian".into(),
+        "arch" | "endeavouros" | "manjaro" | "cachyos" | "garuda" => "arch".into(),
+        "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "sles" => "suse".into(),
+        "" => "unknown".into(),
+        other => other.into(),
+    }
+}
+
+fn distro_family() -> String {
+    distro_family_from(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+}
+
+/// VA-API driver file candidates per vendor. NVIDIA needs the separate
+/// `nvidia-vaapi-driver` (RPM Fusion on Fedora); AMD/Intel drivers ship with
+/// Mesa/the media driver.
+fn va_driver_names(vendor: &str) -> &'static [&'static str] {
+    match vendor {
+        "nvidia" => &["nvidia_drv_video.so"],
+        "amd" => &["radeonsi_drv_video.so"],
+        "intel" => &["iHD_drv_video.so", "i965_drv_video.so"],
+        _ => &[
+            "nvidia_drv_video.so",
+            "radeonsi_drv_video.so",
+            "iHD_drv_video.so",
+            "i965_drv_video.so",
+        ],
+    }
+}
+
+/// Common DRI driver directories (Fedora/RHEL, Debian/Ubuntu, Arch).
+const DRI_DIRS: &[&str] = &[
+    "/usr/lib64/dri",
+    "/usr/lib/x86_64-linux-gnu/dri",
+    "/usr/lib/dri",
+];
+
+/// First VA-API driver file present in `dirs` (pure: testable with temp dirs).
+fn va_driver_in(vendor: &str, dirs: &[&str]) -> Option<String> {
+    for name in va_driver_names(vendor) {
+        if dirs.iter().any(|dir| Path::new(dir).join(name).is_file()) {
+            return Some((*name).to_string());
+        }
+    }
+    None
+}
+
+fn va_driver_for(vendor: &str) -> Option<String> {
+    va_driver_in(vendor, DRI_DIRS)
+}
+
+/// Package providing the VA-API driver per vendor+distro (name only).
+fn decode_package(vendor: &str, distro: &str) -> Option<String> {
+    let name = match (vendor, distro) {
+        ("nvidia", "arch") => "libva-nvidia-driver",
+        ("nvidia", _) => "nvidia-vaapi-driver",
+        ("amd", "arch") | ("amd", "suse") => "libva-mesa-driver",
+        ("amd", _) => "mesa-va-drivers",
+        ("intel", "debian") => "intel-media-va-driver",
+        ("intel", _) => "intel-media-driver",
+        _ => return None,
+    };
+    Some(name.to_string())
+}
+
+/// Detect the decode path for the Settings notice.
+pub async fn decode_status() -> DecodeStatus {
+    let vendor = vendor().await;
+    tokio::task::spawn_blocking(move || {
+        let distro = distro_family();
+        let driver = va_driver_for(&vendor);
+        let missing_package = if driver.is_none() {
+            decode_package(&vendor, &distro)
+        } else {
+            None
+        };
+        DecodeStatus {
+            hardware: driver.is_some(),
+            vendor,
+            distro,
+            driver,
+            missing_package,
+        }
+    })
+    .await
+    .unwrap_or(DecodeStatus {
+        vendor: "unknown".into(),
+        distro: "unknown".into(),
+        hardware: false,
+        driver: None,
+        missing_package: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::vendor_from_id;
+    use super::{decode_package, distro_family_from, va_driver_names, vendor_from_id};
 
     #[test]
     fn sysfs_ids_map() {
@@ -105,5 +226,74 @@ mod tests {
         assert_eq!(vendor_from_id("0x1002\n"), "amd");
         assert_eq!(vendor_from_id("0x8086\n"), "intel");
         assert_eq!(vendor_from_id("0x1234\n"), "unknown");
+    }
+
+    #[test]
+    fn os_release_maps_to_families() {
+        assert_eq!(distro_family_from("ID=fedora\n"), "fedora");
+        assert_eq!(distro_family_from("ID=\"ubuntu\"\n"), "debian");
+        assert_eq!(distro_family_from("ID=manjaro\n"), "arch");
+        assert_eq!(distro_family_from("ID=opensuse-tumbleweed\n"), "suse");
+        assert_eq!(distro_family_from("NAME=Weird\n"), "unknown");
+        assert_eq!(distro_family_from("ID=nixos\n"), "nixos");
+    }
+
+    #[test]
+    fn vendor_driver_names() {
+        assert_eq!(va_driver_names("nvidia"), &["nvidia_drv_video.so"]);
+        assert!(va_driver_names("intel").contains(&"iHD_drv_video.so"));
+        // Unknown vendors accept any known driver (hybrid machines).
+        assert!(va_driver_names("unknown").len() >= 4);
+    }
+
+    #[test]
+    fn driver_lookup_scans_the_dirs() {
+        use super::va_driver_in;
+        let dir = std::env::temp_dir().join(format!(
+            "moonclip-dri-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dirs = [dir.to_str().unwrap()];
+        assert_eq!(va_driver_in("nvidia", &dirs), None);
+        std::fs::write(dir.join("radeonsi_drv_video.so"), b"").unwrap();
+        assert_eq!(
+            va_driver_in("amd", &dirs).as_deref(),
+            Some("radeonsi_drv_video.so")
+        );
+        // A Radeon driver never satisfies NVIDIA.
+        assert_eq!(va_driver_in("nvidia", &dirs), None);
+        // Unknown vendors accept whatever is there.
+        assert_eq!(
+            va_driver_in("unknown", &dirs).as_deref(),
+            Some("radeonsi_drv_video.so")
+        );
+        std::fs::write(dir.join("iHD_drv_video.so"), b"").unwrap();
+        assert_eq!(
+            va_driver_in("intel", &dirs).as_deref(),
+            Some("iHD_drv_video.so")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn package_names_per_distro() {
+        assert_eq!(
+            decode_package("nvidia", "fedora").as_deref(),
+            Some("nvidia-vaapi-driver")
+        );
+        assert_eq!(
+            decode_package("nvidia", "arch").as_deref(),
+            Some("libva-nvidia-driver")
+        );
+        assert_eq!(
+            decode_package("amd", "debian").as_deref(),
+            Some("mesa-va-drivers")
+        );
+        assert_eq!(
+            decode_package("intel", "debian").as_deref(),
+            Some("intel-media-va-driver")
+        );
+        assert_eq!(decode_package("unknown", "fedora"), None);
     }
 }

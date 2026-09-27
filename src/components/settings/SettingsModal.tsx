@@ -7,6 +7,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { useLocale } from "../../hooks/useLocale";
 import { AccountsSection } from "./AccountsSection";
 import { AudioSection } from "./AudioSection";
+import { DecodeNotice } from "./DecodeNotice";
 import { NumberField } from "./NumberField";
 import { ObsEngineSection } from "./ObsEngineSection";
 import { VideoSection } from "./VideoSection";
@@ -208,6 +209,7 @@ export function SettingsModal({
         )}
       </div>
       <VideoSection />
+      <DecodeNotice />
 
       <ObsEngineSection />
 

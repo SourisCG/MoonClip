@@ -50,6 +50,13 @@
     "stopped_hint": "Start the buffer to link audio tracks.",
     "gain_live": "Applies live while the buffer runs; otherwise on the next start."
   },
+  "decode": {
+    "title": "Video decoding",
+    "hardware": "Hardware (VA-API)",
+    "software": "Software",
+    "install": "Install",
+    "doc": "Dependency guide"
+  },
   "video": {
     "title": "Recording video",
     "monitor": "Monitor",
