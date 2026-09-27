@@ -15,6 +15,7 @@ import {
   Scissors,
   Trash2,
   Type,
+  X,
   Undo2,
   Volume2,
   ZoomIn,
@@ -311,6 +312,7 @@ export default function EditorApp({
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [library, setLibrary] = useState<ClipMetadata[]>([]);
+  const [showLibrary, setShowLibrary] = useState(false);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
   const [stems, setStems] = useState<{ label: string; peaks: number[][] }[]>([]);
   const [laneWidth, setLaneWidth] = useState(0);
@@ -359,7 +361,18 @@ export default function EditorApp({
         setVisibleMs(
           Math.max(6000, Math.min(30_000, s.project.segments[0]?.outMs ?? 8000) + 2000),
         );
-        invoke<ClipMetadata[]>("list_clips").then(setLibrary).catch(() => {});
+        invoke<ClipMetadata[]>("list_clips")
+          .then((clips) => {
+            setLibrary(clips);
+            void invoke("editor_log", {
+              message: `library loaded: ${clips.length} clip(s)`,
+            }).catch(() => {});
+          })
+          .catch((e) => {
+            void invoke("editor_log", {
+              message: `library FAILED to load: ${String(e)}`,
+            }).catch(() => {});
+          });
       })
       .catch((e) => setError(String(e)));
     return () => {
@@ -875,6 +888,12 @@ export default function EditorApp({
             title={t("editor.zoom_out")}
           >
             <ZoomOut size={15} />
+          </button>
+          <button
+            onClick={() => setShowLibrary(true)}
+            className="ml-1 inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+          >
+            <Plus size={14} /> {t("editor.add_clip")}
           </button>
           <button
             onClick={() => setShowExport(true)}
@@ -1451,6 +1470,47 @@ export default function EditorApp({
           }}
         />
       </div>
+
+      {showLibrary && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
+            <div className="mb-3 flex items-center">
+              <h3 className="text-sm font-semibold text-slate-100">{t("editor.add_clip")}</h3>
+              <button
+                onClick={() => setShowLibrary(false)}
+                className="ml-auto rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <div className="max-h-[50vh] space-y-1 overflow-y-auto pr-1">
+              {library.filter((c) => c.exists).length === 0 && (
+                <p className="text-xs text-slate-500">{t("editor.no_clips")}</p>
+              )}
+              {library
+                .filter((c) => c.exists)
+                .slice(0, 60)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setShowLibrary(false);
+                      void addClip(c);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-1.5 text-left text-xs text-slate-200 transition hover:bg-cyan-500/10"
+                    title={c.file_name}
+                  >
+                    <Plus size={13} className="shrink-0 text-cyan-300" />
+                    <span className="min-w-0 flex-1 truncate">{c.game_title}</span>
+                    <span className="font-mono text-[10px] text-slate-500">
+                      {fmt(c.duration_ms)}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showExport && (
         <ExportDialog session={session} onClose={() => setShowExport(false)} onDone={exportDone} />
