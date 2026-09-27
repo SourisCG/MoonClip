@@ -1019,3 +1019,42 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   limpio, `pnpm build` limpio, zero-cfg (solo #[cfg(test)]). Pendiente
   (owner): Probar 10 s, in-game, coexistencia sin bandeja/ventana visible,
   Task Manager agrupado, Linux.
+
+### Storage Security + biblioteca por juego (2026-09-27)
+
+- **Secretos fuera de la DB**: `RestoreToken` del portal al keyring
+  (`portal_<input_id>`, reinyectado al construir el perfil de captura,
+  fallback a DB solo si no hay vault); password de obs-websocket efímera por
+  arranque (nunca persistida); migracion de arranque + scrub de filas legacy
+  (`engine_ws_password`/`engine_restore_token`). `portal_ready` deriva del
+  input de pantalla. Commits `2dba167`.
+- **Auto-purga LRU** (`max_storage_gb`, apagada por defecto): borra los mas
+  viejos no favoritos (archivo+thumb+fila) tras cada guardado/trim/export;
+  jamas el recien guardado ni un favorito. Commit `65baa72`.
+- **Reconciliacion** (arranque + comando): indexa archivos sin fila (patron
+  MoonClip en raiz + cualquier video en carpetas de juego) con probe y
+  thumbnail; nunca borra archivos. Filas huerfanas solo con
+  `purge_missing_clips`. Commit `573110f`.
+- **Endurecimiento**: WAL + foreign_keys + busy_timeout + migraciones en una
+  transaccion; permisos 0700/0600 en rutas de MoonClip (DB, edits, sesiones,
+  config del motor; el clips_dir del usuario no se toca); CSP real en la
+  webview y `asset://` eliminado (antes `$HOME/**/*`); feature
+  `protocol-asset` fuera. Verificado en vivo: UI, thumbnails y playback bajo
+  el CSP nuevo, DB 0600 con WAL. Commit `90e3ef6`.
+- **Biblioteca por juego**: migracion 013 (`clips.folder`,
+  `custom_apps.clips_folder`, indice) + guard de auto-reparacion de esquema;
+  `folders.rs` (sanitize Windows-safe, reuso case-insensitive); el guardado
+  mueve el replay de OBS a `<clips_dir>/<juego>/` (thumb incluido, dedupe
+  dentro de la carpeta), trim/export quedan en la carpeta del clip origen;
+  migracion automatica e idempotente de la biblioteca plana; validacion de
+  rutas de un solo nivel con rechazo de traversal; test de regresion: borrar
+  una app registrada no toca clips, carpeta ni grupo. Verificado en vivo:
+  23 clips movidos a 7 carpetas, reproduccion intacta. Commit `49fa70a`.
+- **Sidebar de juegos**: menu Todos/Favoritos/juegos con contador y seleccion
+  persistida (los grupos salen de los clips, no del registro: borrar una app
+  no elimina su grupo); labels con el display_name registrado (backfill de
+  enlace al arrancar); picker del editor agrupado; i18n es/en. Commit
+  `afde751`.
+- Gates: `cargo test` 163 passed (incluye keyring live, reconciliacion live
+  con ffmpeg, organize, traversal, cuota, regresion de borrado),
+  `cargo clippy --all-targets -- -D warnings` limpio, `pnpm build` limpio.
