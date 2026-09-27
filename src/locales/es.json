@@ -25,6 +25,13 @@
     "empty_group": "No hay clips en este grupo.",
     "cloud": "En Drive",
     "uploaded": "Subido",
+    "uploaded_section": "Subidos",
+    "cloud_section": "En Drive",
+    "search": "Buscar clips…",
+    "sort": "Ordenar",
+    "sort_recent": "Recientes",
+    "sort_name": "Nombre",
+    "sort_size": "Tamaño",
     "confirm_cloud_delete": "¿Borrar de Drive?",
     "downloading": "Descargando de Drive…"
   },
@@ -195,6 +202,9 @@
     "connecting": "Esperando al navegador…",
     "connected": "Conectado",
     "not_configured": "No configurado (social.json)"
+  },
+  "viewer": {
+    "hint": "← → navegar · Esc cerrar"
   },
   "game": {
     "running": "{{name}} en ejecución"

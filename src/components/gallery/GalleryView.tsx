@@ -1,22 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { thumbnailUrl } from "../../lib/media";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   Clapperboard,
   Cloud,
   CloudUpload,
-  FolderOpen,
   Gamepad2,
   HardDriveDownload,
-  Pencil,
-  Scissors,
+  Search,
   Star,
-  Trash2,
-  Wand2,
+  Upload,
 } from "lucide-react";
+import { ClipViewer, type ViewerActions } from "./ClipViewer";
 import { DriveBrowser } from "./DriveBrowser";
 import { ShareDialog } from "./ShareDialog";
 import { TrimPanel } from "./TrimPanel";
@@ -24,87 +20,16 @@ import { useClips } from "../../hooks/useClips";
 import { useRegisteredInputs } from "../../hooks/useRegisteredInputs";
 import type { ClipMetadata } from "../../types";
 
-// NOTE (Tauri v2 convention, do NOT "fix"): #[tauri::command] auto-converts
-// Rust snake_case params to camelCase wire keys. Rust `file_name` arrives as
-// `fileName` — the frontend must send camelCase, never mirror the Rust name.
-async function absOf(fileName: string): Promise<string> {
-  return invoke<string>("resolve_clip_src", { fileName });
-}
-
 /** "Game folder/Replay ….mp4" -> "Replay ….mp4" */
 function bareName(fileName: string): string {
   const i = fileName.lastIndexOf("/");
   return i >= 0 ? fileName.slice(i + 1) : fileName;
 }
 
-/** File stem (name without extension) — what the rename input edits. */
-function stemOf(fileName: string): string {
-  const bare = bareName(fileName);
-  const dot = bare.lastIndexOf(".");
-  return dot > 0 ? bare.slice(0, dot) : bare;
-}
-
 const GROUP_KEY = "moonclip.gallery.group";
+const SORT_KEY = "moonclip.gallery.sort";
 /** Clips whose row has no folder (missing legacy files). */
 const FLAT = "__flat__";
-
-function Thumb({
-  clip,
-  onOpen,
-  onError,
-}: {
-  clip: ClipMetadata;
-  onOpen: () => void;
-  onError: (msg: string) => void;
-}) {
-  const [src, setSrc] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    let url: string | null = null;
-    thumbnailUrl(clip.thumbnail_name).then(
-      (u) => {
-        if (cancelled) {
-          URL.revokeObjectURL(u);
-        } else {
-          url = u;
-          setSrc(u);
-        }
-      },
-      (e) => {
-        if (!cancelled) {
-          onError(`thumb: ${String(e)}`);
-          setSrc(null);
-        }
-      },
-    );
-    return () => {
-      cancelled = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip.thumbnail_name]);
-  if (!src) {
-    return (
-      <button
-        onClick={onOpen}
-        className="flex aspect-video w-full items-center justify-center rounded-lg bg-black/40 transition hover:bg-black/60 sm:aspect-auto sm:h-16 sm:w-28"
-        title={clip.file_name}
-      >
-        <Clapperboard size={18} className="text-slate-600" />
-      </button>
-    );
-  }
-  return (
-    <button onClick={onOpen} title={clip.file_name} className="w-full shrink-0 sm:w-auto">
-      <img
-        src={src}
-        alt=""
-        onError={() => onError(`thumb asset blocked: ${clip.thumbnail_name}`)}
-        className="aspect-video w-full rounded-lg object-cover transition hover:brightness-125 sm:aspect-auto sm:h-16 sm:w-28"
-      />
-    </button>
-  );
-}
 
 function fmtDuration(ms: number) {
   const s = Math.round(ms / 1000);
@@ -121,167 +46,117 @@ function timeNow() {
   return new Date().toLocaleTimeString();
 }
 
-interface RowActions {
-  onToggleFavorite: (id: string) => void;
-  onDelete: (id: string) => void;
-  onTrim: (clip: ClipMetadata) => void;
-  onAdvancedEdit: (clip: ClipMetadata) => void;
-  onRename: (clip: ClipMetadata, name: string) => void;
-  onShare: (clip: ClipMetadata) => void;
-  onError: (msg: string) => void;
-  onSuccess: () => void;
+/** Thumbnail bytes over IPC with a revocable blob URL. */
+function useThumbnail(clip: ClipMetadata, onError: (msg: string) => void) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let url: string | null = null;
+    setSrc(null);
+    thumbnailUrl(clip.thumbnail_name).then(
+      (u) => {
+        if (cancelled) {
+          URL.revokeObjectURL(u);
+        } else {
+          url = u;
+          setSrc(u);
+        }
+      },
+      (e) => {
+        if (!cancelled) onError(`thumb: ${String(e)}`);
+      },
+    );
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.thumbnail_name]);
+  return src;
 }
 
-function ClipRow({
+interface CardActions {
+  onToggleFavorite: (id: string) => void;
+  onShare: (clip: ClipMetadata) => void;
+  onError: (msg: string) => void;
+}
+
+/** Medal-style 16:9 card: thumbnail, duration, quick actions on hover. */
+function ClipCard({
   clip,
   gameLabel,
+  onOpen,
   actions,
 }: {
   clip: ClipMetadata;
   gameLabel: string;
-  actions: RowActions;
+  onOpen: () => void;
+  actions: CardActions;
 }) {
   const { t } = useTranslation();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const startRename = () => {
-    setDraft(stemOf(clip.file_name));
-    setEditing(true);
-  };
-  const commitRename = () => {
-    setEditing(false);
-    const name = draft.trim();
-    if (name && name !== stemOf(clip.file_name)) actions.onRename(clip, name);
-  };
-  const reveal = async () => {
-    try {
-      const abs = await absOf(clip.file_name);
-      try {
-        // Primary: select the file (needs a FileManager1 owner on the bus;
-        // often missing on KDE without Dolphin running).
-        await revealItemInDir(abs);
-      } catch {
-        // Fallback: plain-open the containing folder (xdg-open, guaranteed).
-        const sep = abs.includes("\\") ? "\\" : "/";
-        await openPath(abs.slice(0, abs.lastIndexOf(sep)));
-      }
-      actions.onSuccess();
-    } catch (e) {
-      actions.onError(`reveal: ${String(e)}`);
-    }
-  };
-
+  const src = useThumbnail(clip, actions.onError);
   const iconBtn =
-    "rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200";
+    "rounded-lg bg-black/60 p-1.5 text-slate-300 transition hover:bg-black/80 hover:text-cyan-200";
 
   return (
-    <li className="rounded-xl border border-white/5 bg-black/30 p-2.5 sm:pr-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-        <Thumb clip={clip} onOpen={() => actions.onTrim(clip)} onError={actions.onError} />
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="min-w-0 flex-1 text-sm">
-            {editing ? (
-              <input
-                autoFocus
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onFocus={(e) => e.currentTarget.select()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitRename();
-                  if (e.key === "Escape") setEditing(false);
-                }}
-                onBlur={() => setEditing(false)}
-                className="w-full rounded-md border border-cyan-400/30 bg-black/40 px-2 py-0.5 font-medium text-slate-100 outline-none focus:border-cyan-400/60"
-                title={t("gallery.rename")}
+    <div className="group overflow-hidden rounded-xl border border-white/5 bg-black/30 transition hover:border-cyan-500/20">
+      <div className="relative">
+        <button onClick={onOpen} className="block w-full" title={clip.file_name}>
+          <div className="flex aspect-video w-full items-center justify-center overflow-hidden bg-black/40">
+            {src ? (
+              <img
+                src={src}
+                alt=""
+                onError={() => actions.onError(`thumb asset blocked: ${clip.thumbnail_name}`)}
+                className="h-full w-full object-cover transition group-hover:brightness-110"
               />
             ) : (
-              <p className="truncate font-medium text-slate-200" title={clip.file_name}>
-                {bareName(clip.file_name)}
-              </p>
-            )}
-            <p className="truncate font-mono text-xs text-slate-500">
-              {gameLabel} ·{" "}
-              <span className="text-cyan-300/80">{fmtDuration(clip.duration_ms)}</span> ·{" "}
-              {fmtSize(clip.file_size_bytes)}{" "}
-              {clip.cloud ? (
-                <span className="inline-flex items-center gap-0.5 text-xs text-cyan-300/80">
-                  <Cloud size={11} /> {t("gallery.cloud")}
-                </span>
-              ) : clip.drive_file_id ? (
-                <span className="inline-flex items-center gap-0.5 text-xs text-emerald-300/80">
-                  <CloudUpload size={11} /> {t("gallery.uploaded")}
-                </span>
-              ) : (
-                !clip.exists && (
-                  <span className="text-xs text-amber-400">({t("gallery.missing")})</span>
-                )
-              )}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              onClick={() => actions.onAdvancedEdit(clip)}
-              className={`${iconBtn} text-cyan-300/80 hover:text-cyan-200`}
-              title={t("editor.open")}
-            >
-              <Wand2 size={15} />
-            </button>
-            <button onClick={startRename} className={iconBtn} title={t("gallery.rename")}>
-              <Pencil size={15} />
-            </button>
-            <button
-              onClick={() => actions.onShare(clip)}
-              className={`${iconBtn} text-cyan-300/80 hover:text-cyan-200`}
-              title={t("share.title")}
-            >
-              <CloudUpload size={15} />
-            </button>
-            <button
-              onClick={() => actions.onTrim(clip)}
-              className={iconBtn}
-              title={t("trim.title")}
-            >
-              <Scissors size={15} />
-            </button>
-            <button onClick={() => void reveal()} className={iconBtn} title={t("gallery.reveal")}>
-              <FolderOpen size={15} />
-            </button>
-            <button
-              onClick={() => actions.onToggleFavorite(clip.id)}
-              className={`rounded-lg p-1.5 transition ${clip.is_favorite ? "text-amber-300" : "text-slate-500 hover:text-amber-200"}`}
-              title={t("gallery.favorite")}
-            >
-              <Star size={15} fill={clip.is_favorite ? "currentColor" : "none"} />
-            </button>
-            {clip.cloud && confirmDelete ? (
-              <button
-                onClick={() => actions.onDelete(clip.id)}
-                className="rounded-lg bg-red-500/20 px-2 py-1 text-[10px] font-medium text-red-200 transition hover:bg-red-500/30"
-                title={t("gallery.confirm_cloud_delete")}
-              >
-                {t("gallery.confirm_cloud_delete")}
-              </button>
-            ) : (
-              <button
-                onClick={() => {
-                  if (clip.cloud) {
-                    setConfirmDelete(true);
-                    window.setTimeout(() => setConfirmDelete(false), 4000);
-                    return;
-                  }
-                  actions.onDelete(clip.id);
-                }}
-                className="rounded-lg p-1.5 text-slate-500 transition hover:bg-red-500/20 hover:text-red-300"
-                title={clip.cloud ? t("gallery.confirm_cloud_delete") : t("common.delete")}
-              >
-                <Trash2 size={15} />
-              </button>
+              <Clapperboard size={22} className="text-slate-600" />
             )}
           </div>
+        </button>
+        <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded bg-black/75 px-1.5 py-0.5 font-mono text-[10px] text-slate-200">
+          {fmtDuration(clip.duration_ms)}
+        </span>
+        {clip.cloud && (
+          <span className="pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center gap-0.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] text-cyan-300">
+            <Cloud size={10} /> {t("gallery.cloud")}
+          </span>
+        )}
+        <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-0 transition group-hover:opacity-100">
+          <button
+            onClick={() => actions.onToggleFavorite(clip.id)}
+            className={`${iconBtn} ${clip.is_favorite ? "text-amber-300" : ""}`}
+            title={t("gallery.favorite")}
+          >
+            <Star size={13} fill={clip.is_favorite ? "currentColor" : "none"} />
+          </button>
+          <button
+            onClick={() => actions.onShare(clip)}
+            className={iconBtn}
+            title={t("share.title")}
+          >
+            <CloudUpload size={13} />
+          </button>
         </div>
       </div>
-    </li>
+      <div className="min-w-0 px-2 py-1.5">
+        <p className="truncate text-sm font-medium text-slate-200" title={clip.file_name}>
+          {bareName(clip.file_name)}
+        </p>
+        <p className="truncate font-mono text-[11px] text-slate-500">
+          {gameLabel} · {fmtSize(clip.file_size_bytes)}{" "}
+          {!clip.cloud && clip.drive_file_id && (
+            <span className="inline-flex items-center gap-0.5 text-emerald-300/80">
+              <Upload size={10} /> {t("gallery.uploaded")}
+            </span>
+          )}
+          {!clip.cloud && !clip.drive_file_id && !clip.exists && (
+            <span className="text-amber-400">({t("gallery.missing")})</span>
+          )}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -293,7 +168,7 @@ export function GalleryView({
   onAdvancedEdit?: (clip: ClipMetadata) => void;
 }) {
   const { t } = useTranslation();
-  // Single shared instance: rows act on THIS list (a per-row instance would
+  // Single shared instance: cards act on THIS list (a per-card instance would
   // refresh a phantom copy and the UI would look dead).
   const { clips, loading, refresh, toggleFavorite, deleteClip, purgeMissing, renameClip } =
     useClips();
@@ -304,8 +179,11 @@ export function GalleryView({
   const [purged, setPurged] = useState<number | null>(null);
   const [trimClip, setTrimClip] = useState<ClipMetadata | null>(null);
   const [shareClip, setShareClip] = useState<ClipMetadata | null>(null);
+  const [viewerId, setViewerId] = useState<string | null>(null);
   const [showDrive, setShowDrive] = useState(false);
   const [download, setDownload] = useState<{ sent: number; total: number } | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<string>(() => localStorage.getItem(SORT_KEY) ?? "recent");
   const [group, setGroup] = useState<string>(
     () => localStorage.getItem(GROUP_KEY) ?? "all",
   );
@@ -354,7 +232,8 @@ export function GalleryView({
 
   // A deleted game group disappears only when its last clip is deleted.
   useEffect(() => {
-    if (group === "all" || group === "favorites") return;
+    const fixed = ["all", "favorites", "uploaded", "cloud"];
+    if (fixed.includes(group)) return;
     if (!groups.some((g) => g.key === group)) setGroup("all");
   }, [groups, group]);
 
@@ -364,13 +243,37 @@ export function GalleryView({
   };
 
   const visible = useMemo(() => {
-    if (group === "all") return clips;
-    if (group === "favorites") return clips.filter((c) => c.is_favorite);
-    return clips.filter((c) => (c.folder || FLAT) === group);
-  }, [clips, group]);
+    let list: ClipMetadata[];
+    if (group === "all") list = clips;
+    else if (group === "favorites") list = clips.filter((c) => c.is_favorite);
+    else if (group === "uploaded") list = clips.filter((c) => !!c.drive_file_id);
+    else if (group === "cloud") list = clips.filter((c) => c.cloud);
+    else list = clips.filter((c) => (c.folder || FLAT) === group);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (c) =>
+          bareName(c.file_name).toLowerCase().includes(q) ||
+          c.game_title.toLowerCase().includes(q),
+      );
+    }
+    const sorted = [...list];
+    if (sort === "name") {
+      sorted.sort((a, b) => bareName(a.file_name).localeCompare(bareName(b.file_name)));
+    } else if (sort === "size") {
+      sorted.sort((a, b) => b.file_size_bytes - a.file_size_bytes);
+    }
+    // "recent" keeps the backend order (created_at DESC).
+    return sorted;
+  }, [clips, group, query, sort]);
+
+  const changeSort = (value: string) => {
+    setSort(value);
+    localStorage.setItem(SORT_KEY, value);
+  };
 
   const fail = (msg: string) => setLastError(`${timeNow()} · ${msg}`);
-  const actions: RowActions = {
+  const actions: ViewerActions = {
     onToggleFavorite: (id) =>
       toggleFavorite(id).then(
         () => setLastError(null),
@@ -378,7 +281,10 @@ export function GalleryView({
       ),
     onDelete: (id) =>
       deleteClip(id).then(
-        () => setLastError(null),
+        () => {
+          setLastError(null);
+          setViewerId((current) => (current === id ? null : current));
+        },
         (e) => fail(String(e)),
       ),
     onTrim: (clip) => setTrimClip(clip),
@@ -391,6 +297,11 @@ export function GalleryView({
     onShare: (clip) => setShareClip(clip),
     onError: fail,
     onSuccess: () => setLastError(null),
+  };
+  const cardActions: CardActions = {
+    onToggleFavorite: actions.onToggleFavorite,
+    onShare: actions.onShare,
+    onError: actions.onError,
   };
 
   if (loading && clips.length === 0)
@@ -427,6 +338,8 @@ export function GalleryView({
   };
 
   const favCount = clips.filter((c) => c.is_favorite).length;
+  const uploadedCount = clips.filter((c) => !!c.drive_file_id).length;
+  const cloudCount = clips.filter((c) => c.cloud).length;
   const navBtn = (active: boolean) =>
     `flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition ${
       active
@@ -435,8 +348,26 @@ export function GalleryView({
     }`;
   const countBadge = "ml-auto font-mono text-[10px] text-slate-500";
 
+  const viewerClip = viewerId ? clips.find((c) => c.id === viewerId) ?? null : null;
+  const viewerIndex = viewerClip ? visible.findIndex((c) => c.id === viewerClip.id) : -1;
+  const navViewer = (dir: number) => {
+    if (viewerIndex < 0) return;
+    const next = visible[viewerIndex + dir];
+    if (next) setViewerId(next.id);
+  };
+
   return (
     <>
+      {viewerClip && (
+        <ClipViewer
+          clip={viewerClip}
+          gameLabel={labelFor(viewerClip.folder || FLAT)}
+          onClose={() => setViewerId(null)}
+          onPrev={viewerIndex > 0 ? () => navViewer(-1) : undefined}
+          onNext={viewerIndex >= 0 && viewerIndex < visible.length - 1 ? () => navViewer(1) : undefined}
+          actions={actions}
+        />
+      )}
       {shareClip && (
         <ShareDialog
           clip={shareClip}
@@ -478,6 +409,16 @@ export function GalleryView({
               <span className="truncate">{t("gallery.favorites")}</span>
               <span className={countBadge}>{favCount}</span>
             </button>
+            <button className={navBtn(group === "uploaded")} onClick={() => select("uploaded")}>
+              <Upload size={13} className="shrink-0" />
+              <span className="truncate">{t("gallery.uploaded_section")}</span>
+              <span className={countBadge}>{uploadedCount}</span>
+            </button>
+            <button className={navBtn(group === "cloud")} onClick={() => select("cloud")}>
+              <Cloud size={13} className="shrink-0" />
+              <span className="truncate">{t("gallery.cloud_section")}</span>
+              <span className={countBadge}>{cloudCount}</span>
+            </button>
             <p className="hidden px-2.5 pt-2 text-[10px] uppercase tracking-wide text-slate-600 lg:block">
               {t("gallery.games")}
             </p>
@@ -496,42 +437,74 @@ export function GalleryView({
           </nav>
         </aside>
         <div className="min-w-0 flex-1">
-          <div className="mb-2 flex flex-wrap items-center gap-2 sm:gap-3">
-            {lastError && (
-              <p className="flex-1 truncate font-mono text-xs text-red-400" title={lastError}>
-                {lastError}
-              </p>
-            )}
-            {purged !== null && !lastError && !download && (
-              <p className="flex-1 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
-            )}
-            {download && (
-              <p className="flex-1 text-xs text-cyan-300/80">
-                {t("gallery.downloading")}{" "}
-                {download.total > 0
-                  ? `${Math.min(100, Math.round((download.sent / download.total) * 100))}%`
-                  : ""}
-              </p>
-            )}
+          <div className="mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
+            <label className="relative min-w-0 flex-1 sm:max-w-xs">
+              <Search
+                size={13}
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"
+              />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("gallery.search")}
+                className="w-full rounded-lg border border-white/10 bg-black/30 py-1.5 pl-7 pr-2 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-500/40"
+              />
+            </label>
+            <select
+              value={sort}
+              onChange={(e) => changeSort(e.target.value)}
+              className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500/40"
+              title={t("gallery.sort")}
+            >
+              <option value="recent">{t("gallery.sort_recent")}</option>
+              <option value="name">{t("gallery.sort_name")}</option>
+              <option value="size">{t("gallery.sort_size")}</option>
+            </select>
             <button
               onClick={() => setShowDrive(true)}
-              className="ml-auto inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-cyan-200"
+              className="inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-cyan-200"
               title={t("drive.title")}
             >
               <HardDriveDownload size={12} /> {t("drive.browse")}
             </button>
-            <button onClick={onPurge} className="text-xs text-slate-500 transition hover:text-slate-200" title={t("gallery.purge")}>
+            <button
+              onClick={onPurge}
+              className="text-xs text-slate-500 transition hover:text-slate-200"
+              title={t("gallery.purge")}
+            >
               {t("gallery.purge")}
             </button>
           </div>
+          {lastError && (
+            <p className="mb-2 truncate font-mono text-xs text-red-400" title={lastError}>
+              {lastError}
+            </p>
+          )}
+          {purged !== null && !lastError && !download && (
+            <p className="mb-2 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
+          )}
+          {download && (
+            <p className="mb-2 text-xs text-cyan-300/80">
+              {t("gallery.downloading")}{" "}
+              {download.total > 0
+                ? `${Math.min(100, Math.round((download.sent / download.total) * 100))}%`
+                : ""}
+            </p>
+          )}
           {visible.length === 0 ? (
             <p className="text-xs text-slate-500">{t("gallery.empty_group")}</p>
           ) : (
-            <ul className="space-y-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {visible.map((c) => (
-                <ClipRow key={c.id} clip={c} gameLabel={labelFor(c.folder || FLAT)} actions={actions} />
+                <ClipCard
+                  key={c.id}
+                  clip={c}
+                  gameLabel={labelFor(c.folder || FLAT)}
+                  onOpen={() => setViewerId(c.id)}
+                  actions={cardActions}
+                />
               ))}
-            </ul>
+            </div>
           )}
         </div>
       </div>
