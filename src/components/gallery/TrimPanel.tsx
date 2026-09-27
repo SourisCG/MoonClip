@@ -61,6 +61,38 @@ export function TrimPanel({
     };
   }, [clip.id]);
 
+  // Tear the media pipeline down on close: WebKitGTK can keep playing audio
+  // from a removed <video> unless the source is cleared explicitly. The
+  // element is captured from the `url` effect (by unmount time the ref is
+  // already detached).
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    return () => {
+      try {
+        v.pause();
+        v.removeAttribute("src");
+        v.load();
+      } catch {
+        /* element already gone */
+      }
+    };
+  }, [url]);
+
+  // Leaving the app (alt-tab / minimize) must not keep the preview sounding.
+  useEffect(() => {
+    const pause = () => videoRef.current?.pause();
+    const onVisibility = () => {
+      if (document.hidden) pause();
+    };
+    window.addEventListener("blur", pause);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", pause);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
   // Trim progress for THIS clip (the backend emits per handled clip).
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -159,6 +191,7 @@ export function TrimPanel({
   };
 
   const save = async () => {
+    videoRef.current?.pause();
     setSaving(true);
     setError(null);
     setPercent(0);
