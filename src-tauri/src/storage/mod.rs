@@ -2,6 +2,7 @@
 //! RULE: only RELATIVE file names are stored in SQLite.
 
 pub mod db;
+pub mod folders;
 pub mod models;
 pub mod paths;
 pub mod reconcile;

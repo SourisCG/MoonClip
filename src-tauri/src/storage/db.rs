@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, RegisteredInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -22,6 +22,7 @@ const MIGRATION_009: &str = include_str!("../../migrations/009_engine_keys.sql")
 const MIGRATION_010: &str = include_str!("../../migrations/010_game_token.sql");
 const MIGRATION_011: &str = include_str!("../../migrations/011_registered_inputs.sql");
 const MIGRATION_012: &str = include_str!("../../migrations/012_window_identity.sql");
+const MIGRATION_013: &str = include_str!("../../migrations/013_clip_folders.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -29,10 +30,39 @@ pub struct DbState(pub Mutex<Connection>);
 #[cfg(test)]
 pub(crate) fn test_db() -> DbState {
     let conn = Connection::open_in_memory().unwrap();
-    for migration in [MIGRATION_001, MIGRATION_010, MIGRATION_011, MIGRATION_012] {
+    for migration in [
+        MIGRATION_001,
+        MIGRATION_010,
+        MIGRATION_011,
+        MIGRATION_012,
+        MIGRATION_013,
+    ] {
         conn.execute_batch(migration).unwrap();
     }
     DbState(Mutex::new(conn))
+}
+
+/// Add a column when it is missing (idempotent). Self-healing guard: a
+/// version stamped by a partially-built binary must never leave the schema
+/// behind (and costs one PRAGMA per open).
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), String> {
+    let exists = {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| format!("cannot inspect {table}: {e}"))?;
+        let cols = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| format!("cannot inspect {table}: {e}"))?
+            .filter_map(Result::ok)
+            .any(|c| c == column);
+        cols
+    };
+    if !exists {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))
+            .map_err(|e| format!("cannot add {table}.{column}: {e}"))?;
+        eprintln!("[moonclip] schema repair: added {table}.{column}");
+    }
+    Ok(())
 }
 
 /// Older builds persisted the obs-websocket password and the portal restore
@@ -116,11 +146,21 @@ impl DbState {
                 tx.execute_batch(MIGRATION_012)
                     .map_err(|e| format!("migration 012 failed: {e}"))?;
             }
+            if version < 13 {
+                tx.execute_batch(MIGRATION_013)
+                    .map_err(|e| format!("migration 013 failed: {e}"))?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
             tx.commit()
                 .map_err(|e| format!("cannot commit migrations: {e}"))?;
         }
+        // Self-healing: guarantee the game-folder columns exist even if the
+        // schema version was stamped by a partially-built binary.
+        ensure_column(&conn, "clips", "folder", "TEXT NOT NULL DEFAULT ''")?;
+        ensure_column(&conn, "custom_apps", "clips_folder", "TEXT NOT NULL DEFAULT ''")?;
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_clips_folder ON clips(folder)")
+            .map_err(|e| format!("cannot index clips.folder: {e}"))?;
         // Secrets never live in the DB: drop rows written by older builds
         // (the websocket password is generated per start; the portal token
         // now lives in the OS vault).
@@ -210,7 +250,8 @@ impl DbState {
         let mut stmt = conn
             .prepare(
                 "SELECT id, file_name, thumbnail_name, game_title, duration_ms,
-                        file_size_bytes, created_at, is_favorite, drive_file_id, drive_web_url
+                        file_size_bytes, created_at, is_favorite, drive_file_id, drive_web_url,
+                        folder
                  FROM clips ORDER BY created_at DESC",
             )
             .map_err(|e| format!("cannot prepare clips query: {e}"))?;
@@ -227,6 +268,7 @@ impl DbState {
                     is_favorite: r.get::<_, i64>(7)? != 0,
                     drive_file_id: r.get(8)?,
                     drive_web_url: r.get(9)?,
+                    folder: r.get(10)?,
                     exists: false, // filled below
                 })
             })
@@ -248,30 +290,35 @@ impl DbState {
         game_title: &str,
         duration_ms: i64,
         file_size_bytes: i64,
+        folder: &str,
     ) -> Result<ClipRecord, String> {
-        if file_name.contains("..") || file_name.starts_with('/') {
+        if !paths::is_safe_relative_media_name(file_name)
+            || !paths::is_safe_relative_media_name(thumbnail_name)
+        {
             return Err("invalid file name".into());
         }
         let id = uuid::Uuid::new_v4().to_string();
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO clips
-             (id, file_name, thumbnail_name, game_title, duration_ms, file_size_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (id, file_name, thumbnail_name, game_title, duration_ms, file_size_bytes, folder)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 id,
                 file_name,
                 thumbnail_name,
                 game_title,
                 duration_ms,
-                file_size_bytes
+                file_size_bytes,
+                folder
             ],
         )
         .map_err(|e| format!("cannot insert clip: {e}"))?;
         let clip: ClipRecord = conn
             .query_row(
                 "SELECT id, file_name, thumbnail_name, game_title, duration_ms,
-                        file_size_bytes, created_at, is_favorite, drive_file_id, drive_web_url
+                        file_size_bytes, created_at, is_favorite, drive_file_id, drive_web_url,
+                        folder
                  FROM clips WHERE id = ?1",
                 params![id],
                 |r| {
@@ -286,6 +333,7 @@ impl DbState {
                         is_favorite: r.get::<_, i64>(7)? != 0,
                         drive_file_id: r.get(8)?,
                         drive_web_url: r.get(9)?,
+                        folder: r.get(10)?,
                         exists: true,
                     })
                 },
@@ -346,6 +394,10 @@ impl DbState {
             .map_err(|e| format!("clips_directory not set: {e}"))?;
         let base = PathBuf::from(base);
         for name in [&file_name, &thumb_name] {
+            if !paths::is_safe_relative_media_name(name) {
+                // A corrupt row must never make us delete outside the library.
+                continue;
+            }
             let p = paths::resolve_clip_path(&base, name);
             if p.exists() {
                 std::fs::remove_file(&p)
@@ -565,7 +617,8 @@ impl DbState {
         let conn = self.lock()?;
         let sql = format!(
             "SELECT id, input_name, input_kind, display_name, window_title,
-                    window_app_id, target_exe, input_settings, source_uuid, icon_path
+                    window_app_id, target_exe, input_settings, source_uuid, icon_path,
+                    clips_folder
              FROM custom_apps
              WHERE input_name IS NOT NULL AND input_name != '' AND {filter}
              ORDER BY display_name COLLATE NOCASE"
@@ -586,6 +639,7 @@ impl DbState {
                     input_settings: r.get(7)?,
                     source_uuid: r.get(8)?,
                     icon_path: r.get(9)?,
+                    clips_folder: r.get(10)?,
                 })
             })
             .map_err(|e| format!("cannot list registered inputs: {e}"))?;
@@ -627,6 +681,7 @@ impl DbState {
             input_settings: None,
             source_uuid: uuid::Uuid::new_v4().to_string(),
             icon_path: None,
+            clips_folder: String::new(),
         };
         let conn = self.lock()?;
         conn.execute(
@@ -680,6 +735,35 @@ impl DbState {
         Ok(())
     }
 
+    /// Library folder assigned to a game (created/reused at registration).
+    pub fn set_input_folder(&self, input_name: &str, folder: &str) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE custom_apps SET clips_folder = ?1 WHERE input_name = ?2",
+            params![folder, input_name],
+        )
+        .map_err(|e| format!("cannot store game folder: {e}"))?;
+        Ok(())
+    }
+
+    /// Move a clip to another folder (library organization) and update both
+    /// relative names so the DB always matches the disk.
+    pub fn set_clip_folder(
+        &self,
+        id: &str,
+        folder: &str,
+        file_name: &str,
+        thumbnail_name: &str,
+    ) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE clips SET folder = ?1, file_name = ?2, thumbnail_name = ?3 WHERE id = ?4",
+            params![folder, file_name, thumbnail_name, id],
+        )
+        .map_err(|e| format!("cannot move clip row: {e}"))?;
+        Ok(())
+    }
+
     /// Remove a registered input (the engine drops its OBS source too).
     pub fn delete_registered_input(&self, id: &str) -> Result<(), String> {
         let conn = self.lock()?;
@@ -699,6 +783,48 @@ impl DbState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: removing a registered app must NEVER delete its clips,
+    /// its folder association or anything on disk. Users uninstall games.
+    #[test]
+    fn deleting_a_registered_input_never_touches_its_clips() {
+        let db = test_db();
+        let input = db.register_input("Game", "window", "Juego").unwrap();
+        db.set_input_folder("Game", "Juego").unwrap();
+        let clip = db
+            .insert_clip(
+                "Juego/Replay 1.mp4",
+                "Juego/thumb_Replay 1.jpg",
+                "Juego",
+                1000,
+                10,
+                "Juego",
+            )
+            .unwrap();
+        db.delete_registered_input(&input.id).unwrap();
+        assert!(db.list_registered_inputs().unwrap().is_empty());
+        let clips = db.list_clips().unwrap();
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].id, clip.id);
+        assert_eq!(clips[0].folder, "Juego");
+        assert_eq!(clips[0].file_name, "Juego/Replay 1.mp4");
+    }
+
+    #[test]
+    fn ensure_column_is_idempotent_and_repairs_partial_schemas() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE clips (id TEXT PRIMARY KEY);")
+            .unwrap();
+        ensure_column(&conn, "clips", "folder", "TEXT NOT NULL DEFAULT ''").unwrap();
+        ensure_column(&conn, "clips", "folder", "TEXT NOT NULL DEFAULT ''").unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(clips)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(cols, vec!["id", "folder"]);
+    }
 
     #[test]
     fn legacy_secret_settings_are_scrubbed_on_open() {
@@ -803,14 +929,14 @@ mod tests {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
         let old = db
-            .insert_clip("old.mp4", "thumb_old.jpg", "G", 1000, 900 * MB)
+            .insert_clip("old.mp4", "thumb_old.jpg", "G", 1000, 900 * MB, "")
             .unwrap();
         let fav = db
-            .insert_clip("fav.mp4", "thumb_fav.jpg", "G", 1000, 900 * MB)
+            .insert_clip("fav.mp4", "thumb_fav.jpg", "G", 1000, 900 * MB, "")
             .unwrap();
         db.toggle_favorite(&fav.id).unwrap();
         let new = db
-            .insert_clip("new.mp4", "thumb_new.jpg", "G", 1000, 900 * MB)
+            .insert_clip("new.mp4", "thumb_new.jpg", "G", 1000, 900 * MB, "")
             .unwrap();
         // 2.7 GB total with a 1 GB quota: only the oldest non-favorite goes.
         assert_eq!(db.enforce_quota(Some(&new.id), Some(1.0)).unwrap(), 1);
@@ -835,7 +961,7 @@ mod tests {
         let dir = quota_dir();
         db.set_setting("clips_directory", dir.to_str().unwrap())
             .unwrap();
-        let clip = db.insert_clip("a.mp4", "t.jpg", "G", 1000, 50 * MB).unwrap();
+        let clip = db.insert_clip("a.mp4", "t.jpg", "G", 1000, 50 * MB, "").unwrap();
         assert_eq!(db.enforce_quota(Some(&clip.id), None).unwrap(), 0);
         assert_eq!(db.enforce_quota(Some(&clip.id), Some(0.0)).unwrap(), 0);
         assert_eq!(db.list_clips().unwrap().len(), 1);
@@ -848,9 +974,9 @@ mod tests {
         let dir = quota_dir();
         db.set_setting("clips_directory", dir.to_str().unwrap())
             .unwrap();
-        let a = db.insert_clip("a.mp4", "t.jpg", "G", 1000, 2 * 1024 * MB).unwrap();
+        let a = db.insert_clip("a.mp4", "t.jpg", "G", 1000, 2 * 1024 * MB, "").unwrap();
         db.toggle_favorite(&a.id).unwrap();
-        let b = db.insert_clip("b.mp4", "t.jpg", "G", 1000, 2 * 1024 * MB).unwrap();
+        let b = db.insert_clip("b.mp4", "t.jpg", "G", 1000, 2 * 1024 * MB, "").unwrap();
         // All over quota but every row is protected: nothing may be deleted.
         assert_eq!(db.enforce_quota(Some(&b.id), Some(1.0)).unwrap(), 0);
         assert_eq!(db.list_clips().unwrap().len(), 2);

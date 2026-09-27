@@ -13,6 +13,9 @@ pub struct ClipRecord {
     pub is_favorite: bool,
     pub drive_file_id: Option<String>,
     pub drive_web_url: Option<String>,
+    /// Game folder the clip lives in ('' = legacy row still at the root).
+    /// The association is stable: it survives app renames/removals.
+    pub folder: String,
     /// Computed at query time: does the file still exist on disk?
     pub exists: bool,
 }
@@ -35,4 +38,6 @@ pub struct RegisteredInput {
     pub input_settings: Option<String>,
     pub source_uuid: String,
     pub icon_path: Option<String>,
+    /// Library folder for this game ('' until the first successful pick).
+    pub clips_folder: String,
 }

@@ -12,4 +12,6 @@ export interface RegisteredInput {
   input_settings?: string | null;
   source_uuid: string;
   icon_path?: string | null;
+  /** Library folder for this game ('' until the first successful pick). */
+  clips_folder: string;
 }

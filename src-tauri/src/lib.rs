@@ -462,17 +462,28 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 commands::backfill_durations(&handle).await;
             });
-            // Library reconciliation: index MoonClip-style files that appeared
-            // on disk outside the app (never deletes anything).
+            // Library reconciliation + organization: index MoonClip-style
+            // files that appeared on disk, then move legacy flat clips into
+            // their game folders (neither ever deletes anything).
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match commands::reconcile_library(handle).await {
+                match commands::reconcile_library(handle.clone()).await {
                     Ok(r) if r.indexed > 0 || r.failed > 0 => eprintln!(
                         "[moonclip] reconcile: {} indexed, {} failed",
                         r.indexed, r.failed
                     ),
                     Ok(_) => {}
                     Err(e) => eprintln!("[moonclip] reconcile failed: {e}"),
+                }
+                match storage::reconcile::organize_dir(
+                    handle.state::<storage::DbState>().inner(),
+                ) {
+                    Ok(r) if r.moved > 0 || r.failed > 0 => eprintln!(
+                        "[moonclip] organize: {} moved, {} skipped, {} failed",
+                        r.moved, r.skipped, r.failed
+                    ),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[moonclip] organize failed: {e}"),
                 }
             });
             // Registered-game poller: simplest Medal-style autopilot.
@@ -523,6 +534,7 @@ pub fn run() {
             commands::delete_clip,
             commands::purge_missing_clips,
             commands::reconcile_library,
+            commands::organize_library,
             commands::resolve_clip_src,
             commands::read_thumbnail,
             commands::get_settings,

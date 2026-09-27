@@ -129,6 +129,7 @@ mod tests {
             input_settings: None,
             source_uuid: "u".into(),
             icon_path: None,
+            clips_folder: String::new(),
         }
     }
 

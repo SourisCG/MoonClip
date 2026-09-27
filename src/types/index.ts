@@ -21,6 +21,8 @@ export interface ClipMetadata {
   is_favorite: boolean;
   drive_file_id?: string | null;
   drive_web_url?: string | null;
+  /** Game folder the clip lives in ('' = legacy row at the root). */
+  folder: string;
   /** Computed: file still on disk? */
   exists: boolean;
 }

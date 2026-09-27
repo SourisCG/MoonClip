@@ -92,6 +92,15 @@ pub async fn reconcile_library(
     crate::storage::reconcile::reconcile_dir(&db, &ffmpeg).await
 }
 
+/// Move legacy flat clips into their game folder (idempotent; also runs at
+/// boot). Never deletes anything.
+#[tauri::command]
+pub fn organize_library(
+    db: State<'_, DbState>,
+) -> Result<crate::storage::reconcile::OrganizeReport, String> {
+    crate::storage::reconcile::organize_dir(&db)
+}
+
 /// Drop DB rows whose files are gone from disk. Returns rows removed.
 #[tauri::command]
 pub fn purge_missing_clips(db: State<'_, DbState>) -> Result<u32, String> {
@@ -869,12 +878,7 @@ pub(crate) fn validated_media_path(
     base: &std::path::Path,
     name: &str,
 ) -> Result<std::path::PathBuf, String> {
-    if name.is_empty()
-        || name.contains("..")
-        || name.contains('/')
-        || name.contains('\\')
-        || std::path::Path::new(name).is_absolute()
-    {
+    if !crate::storage::paths::is_safe_relative_media_name(name) {
         return Err("invalid media name".into());
     }
     let path = base.join(name);
@@ -1289,11 +1293,10 @@ async fn pick_window(app: &AppHandle, input_name: &str) -> Result<(), String> {
     let identity = os::window_identity(&settings);
     {
         let db = app.state::<DbState>();
-        if let Some(row) = db.input_by_name(input_name)? {
-            persist_input_settings(&db, &row.id, input_name, &settings)?;
-        } else {
+        let Some(row) = db.input_by_name(input_name)? else {
             return Err("registered input vanished while picking".into());
-        }
+        };
+        persist_input_settings(&db, &row.id, input_name, &settings)?;
         match identity {
             Some(id) if !id.title.trim().is_empty() => {
                 db.set_input_identity(
@@ -1303,6 +1306,18 @@ async fn pick_window(app: &AppHandle, input_name: &str) -> Result<(), String> {
                     (!id.app_id.is_empty()).then_some(id.app_id.as_str()),
                     &id.exe,
                 )?;
+                // Every registered app gets its library folder; an existing
+                // one with the same name is reused (never recreated).
+                if row.clips_folder.trim().is_empty() {
+                    if let Ok(base) = db.clips_dir() {
+                        if let Ok(folder) = crate::storage::folders::ensure_game_folder(
+                            &base,
+                            id.title.trim(),
+                        ) {
+                            let _ = db.set_input_folder(input_name, &folder);
+                        }
+                    }
+                }
             }
             _ => {
                 // Identity unavailable: keep the placeholder name and let the
@@ -1496,47 +1511,95 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     };
     let t_engine = t_total.elapsed();
     let db = app.state::<DbState>();
+    let base = db.clips_dir()?;
+    // Which game folder does this clip belong to? `clips_folder` is assigned
+    // at registration; legacy rows derive it once and persist it. No game
+    // detected -> the shared Unknown folder (stable grouping, never deleted).
+    let (game_title, folder) = {
+        let st = app.state::<AppState>();
+        let g = st.game.lock().await;
+        match g.current.as_ref() {
+            Some(a) if !a.display_name.trim().is_empty() => {
+                let folder = if a.clips_folder.trim().is_empty() {
+                    let f = crate::storage::folders::ensure_game_folder(&base, &a.display_name)?;
+                    let _ = db.set_input_folder(&a.input_name, &f);
+                    f
+                } else {
+                    a.clips_folder.clone()
+                };
+                (a.display_name.clone(), folder)
+            }
+            _ => (
+                "Unknown".to_string(),
+                crate::storage::folders::ensure_game_folder(&base, "Unknown")?,
+            ),
+        }
+    };
+    // OBS writes the replay at the library root: move it into its game folder.
+    let mut path = path;
+    let folder_dir = base.join(&folder);
+    tokio::fs::create_dir_all(&folder_dir)
+        .await
+        .map_err(|e| format!("cannot create game folder {folder}: {e}"))?;
+    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+        let dest = folder_dir.join(name);
+        if path != dest {
+            if let Err(e) = tokio::fs::rename(&path, &dest).await {
+                tokio::fs::copy(&path, &dest)
+                    .await
+                    .map_err(|e2| format!("cannot move clip into {folder}: {e} / {e2}"))?;
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            path = dest;
+        }
+    }
     // Same-second double saves collide: OBS names replay files by timestamp,
     // so the second file could overwrite the first on disk and the DB would
-    // reject the duplicate. Rename to stem_2.mp4, stem_3.mp4… instead of
-    // failing and losing the clip.
-    let mut path = path;
-    {
+    // reject the duplicate. Rename to stem_2.mp4, stem_3.mp4… within the game
+    // folder instead of failing and losing the clip.
+    let file_name = {
         let taken: std::collections::HashSet<String> = db
             .list_clips()
             .map(|clips| clips.into_iter().map(|c| c.file_name).collect())
             .unwrap_or_default();
-        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            if taken.contains(name) {
-                let stem = path
-                    .file_stem()
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or("bad clip file name")?
+            .to_string();
+        if taken.contains(&format!("{folder}/{name}")) {
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or("bad clip file name")?
+                .to_string();
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
+            let mut n = 2u32;
+            loop {
+                let cand = path.with_file_name(format!("{stem}_{n}.{ext}"));
+                let cand_name = cand
+                    .file_name()
                     .and_then(|s| s.to_str())
-                    .ok_or("bad clip file name")?
-                    .to_string();
-                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
-                let mut n = 2u32;
-                loop {
-                    let cand = path.with_file_name(format!("{stem}_{n}.{ext}"));
-                    let cand_name = cand
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .ok_or("bad clip file name")?;
-                    if !taken.contains(cand_name) && !cand.exists() {
-                        tokio::fs::rename(&path, &cand)
-                            .await
-                            .map_err(|e| format!("cannot dedupe clip name: {e}"))?;
-                        path = cand;
-                        break;
-                    }
-                    n += 1;
-                    if n > 999 {
-                        return Err("cannot find a free clip name".into());
-                    }
+                    .ok_or("bad clip file name")?;
+                if !taken.contains(&format!("{folder}/{cand_name}")) && !cand.exists() {
+                    tokio::fs::rename(&path, &cand)
+                        .await
+                        .map_err(|e| format!("cannot dedupe clip name: {e}"))?;
+                    path = cand;
+                    break;
+                }
+                n += 1;
+                if n > 999 {
+                    return Err("cannot find a free clip name".into());
                 }
             }
         }
-    }
-    let base = db.clips_dir()?;
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or("bad clip file name")?;
+        format!("{folder}/{name}")
+    };
     let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(app)?;
     let size = tokio::fs::metadata(&path)
         .await
@@ -1546,12 +1609,7 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("bad clip file name")?;
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or("bad clip file name")?
-        .to_string();
-    let thumb_name = format!("thumb_{stem}.jpg");
+    let thumb_name = format!("{folder}/thumb_{stem}.jpg");
     let thumb_path = base.join(&thumb_name);
     // Duration probe + thumbnail are independent (same input): run them
     // together instead of paying two cold ffmpeg spawns in series.
@@ -1573,15 +1631,7 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
     }
     let t_tail_elapsed = t_tail.elapsed();
     let t_db = std::time::Instant::now();
-    let game_title = {
-        let st = app.state::<AppState>();
-        let g = st.game.lock().await;
-        g.current
-            .as_ref()
-            .map(|a| a.display_name.clone())
-            .unwrap_or_else(|| "Unknown".to_string())
-    };
-    let clip = db.insert_clip(&file_name, &thumb_name, &game_title, secs_ms, size)?;
+    let clip = db.insert_clip(&file_name, &thumb_name, &game_title, secs_ms, size, &folder)?;
     if let Ok(pruned) = db.enforce_quota(Some(&clip.id), None) {
         if pruned > 0 {
             eprintln!("[moonclip] quota: pruned {pruned} old clips");
@@ -2517,12 +2567,29 @@ pub async fn trim_clip(
         .and_then(|s| s.to_str())
         .unwrap_or("mp4")
         .to_ascii_lowercase();
+    // Derived clips stay in the source clip's game folder.
+    let folder = clip.folder.trim().to_string();
+    let out_dir = if folder.is_empty() {
+        base.clone()
+    } else {
+        let dir = base.join(&folder);
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| format!("cannot create game folder {folder}: {e}"))?;
+        dir
+    };
     let taken: std::collections::HashSet<String> = db
         .list_clips()?
         .into_iter()
-        .map(|c| c.file_name)
+        .filter(|c| c.folder == folder)
+        .map(|c| {
+            c.file_name
+                .rsplit_once('/')
+                .map(|(_, n)| n.to_string())
+                .unwrap_or(c.file_name)
+        })
         .collect();
-    let output = crate::editor::trim::unique_trim_path(&base, &stem, &ext, &taken);
+    let output = crate::editor::trim::unique_trim_path(&out_dir, &stem, &ext, &taken);
     let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
     let mode = if precise {
         crate::editor::trim::TrimMode::Precise
@@ -2545,18 +2612,27 @@ pub async fn trim_clip(
     if !output.is_file() {
         return Err("trim produced no output file".into());
     }
-    let out_name = output
+    let out_bare = output
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or("bad output file name")?
         .to_string();
+    let out_name = if folder.is_empty() {
+        out_bare
+    } else {
+        format!("{folder}/{out_bare}")
+    };
     let out_stem = output
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("bad output file name")?
         .to_string();
-    let thumb_name = format!("thumb_{out_stem}.jpg");
-    let thumb_path = base.join(&thumb_name);
+    let thumb_name = if folder.is_empty() {
+        format!("thumb_{out_stem}.jpg")
+    } else {
+        format!("{folder}/thumb_{out_stem}.jpg")
+    };
+    let thumb_path = out_dir.join(format!("thumb_{out_stem}.jpg"));
     if let Err(e) =
         crate::editor::ffmpeg::make_thumbnail(&ffmpeg, &output, &thumb_path, 0.3).await
     {
@@ -2576,6 +2652,7 @@ pub async fn trim_clip(
         &clip.game_title,
         duration_ms,
         size,
+        &folder,
     )?;
     let _ = db.enforce_quota(Some(&record.id), None);
     eprintln!(

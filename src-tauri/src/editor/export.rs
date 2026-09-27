@@ -974,16 +974,38 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
         ));
     }
 
-    let stem = clips
-        .iter()
-        .find(|c| c.id == sources[0].0)
+    let source_clip = clips.iter().find(|c| c.id == sources[0].0);
+    let stem = source_clip
         .and_then(|c| Path::new(&c.file_name).file_stem().and_then(|s| s.to_str()))
         .unwrap_or("clip")
         .to_string();
-    let taken: std::collections::HashSet<String> =
-        clips.iter().map(|c| c.file_name.clone()).collect();
-    let out_name = unique_edit_name(&base, &stem, &taken);
-    let output = base.join(&out_name);
+    // Derived clips stay in the source clip's game folder.
+    let folder = source_clip.map(|c| c.folder.clone()).unwrap_or_default();
+    let out_dir = if folder.trim().is_empty() {
+        base.clone()
+    } else {
+        let dir = base.join(folder.trim());
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("cannot create game folder {}: {e}", dir.display()))?;
+        dir
+    };
+    let taken: std::collections::HashSet<String> = clips
+        .iter()
+        .filter(|c| c.folder == folder)
+        .map(|c| {
+            c.file_name
+                .rsplit_once('/')
+                .map(|(_, n)| n.to_string())
+                .unwrap_or_else(|| c.file_name.clone())
+        })
+        .collect();
+    let out_bare = unique_edit_name(&out_dir, &stem, &taken);
+    let out_name = if folder.trim().is_empty() {
+        out_bare.clone()
+    } else {
+        format!("{}/{}", folder.trim(), out_bare)
+    };
+    let output = out_dir.join(&out_bare);
 
     let mut args: Vec<String> = vec![
         "-y".into(),
@@ -1062,8 +1084,12 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
         .and_then(|s| s.to_str())
         .ok_or("bad output name")?
         .to_string();
-    let thumb_name = format!("thumb_{out_stem}.jpg");
-    let thumb_path = base.join(&thumb_name);
+    let thumb_name = if folder.trim().is_empty() {
+        format!("thumb_{out_stem}.jpg")
+    } else {
+        format!("{}/thumb_{out_stem}.jpg", folder.trim())
+    };
+    let thumb_path = out_dir.join(format!("thumb_{out_stem}.jpg"));
     if let Err(e) =
         crate::editor::ffmpeg::make_thumbnail(&ffmpeg, &output, &thumb_path, 0.3).await
     {
@@ -1077,13 +1103,11 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
     let duration_ms = crate::editor::ffmpeg::probe_duration_ms(&ffmpeg, &output)
         .await
         .unwrap_or(total_ms);
-    let game_title = clips
-        .iter()
-        .find(|c| c.id == sources[0].0)
+    let game_title = source_clip
         .map(|c| c.game_title.clone())
         .unwrap_or_else(|| "Unknown".into());
     let db = app.state::<crate::storage::DbState>();
-    let record = db.insert_clip(&out_name, &thumb_name, &game_title, duration_ms, size)?;
+    let record = db.insert_clip(&out_name, &thumb_name, &game_title, duration_ms, size, &folder)?;
     let _ = db.enforce_quota(Some(&record.id), None);
     emit(100.0, "timeline", true);
     let _ = app.emit("moonclip://clip-saved", &record);

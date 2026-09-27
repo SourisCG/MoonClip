@@ -122,12 +122,17 @@ pub async fn reconcile_dir(db: &DbState, ffmpeg: &Path) -> Result<ReconcileRepor
                 continue;
             }
         }
-        let game_title = match rel.rsplit_once('/') {
+        let folder = match rel.rsplit_once('/') {
             Some((folder, _)) => folder.to_string(),
-            None => "Unknown".to_string(),
+            None => String::new(),
+        };
+        let game_title = if folder.is_empty() {
+            "Unknown".to_string()
+        } else {
+            folder.clone()
         };
         let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
-        match db.insert_clip(&rel, &thumb_rel, &game_title, duration, size) {
+        match db.insert_clip(&rel, &thumb_rel, &game_title, duration, size, &folder) {
             Ok(_) => {
                 report.indexed += 1;
                 eprintln!("[moonclip] reconcile: indexed {rel}");
@@ -137,6 +142,77 @@ pub async fn reconcile_dir(db: &DbState, ffmpeg: &Path) -> Result<ReconcileRepor
                 report.failed += 1;
             }
         }
+    }
+    Ok(report)
+}
+
+/// Result of one library organization pass.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct OrganizeReport {
+    pub moved: u32,
+    pub skipped: u32,
+    pub failed: u32,
+}
+
+/// Move legacy flat clips (folder = '') into their game folder, updating the
+/// DB names to match the disk. Idempotent; a clip whose file is missing is
+/// left untouched (the explicit purge owns orphan rows). Never deletes.
+pub fn organize_dir(db: &DbState) -> Result<OrganizeReport, String> {
+    let base = db.clips_dir()?;
+    let mut report = OrganizeReport::default();
+    for clip in db.list_clips()? {
+        if !clip.folder.trim().is_empty() {
+            continue;
+        }
+        let source = base.join(&clip.file_name);
+        if !source.is_file() {
+            report.skipped += 1;
+            continue;
+        }
+        let folder = crate::storage::folders::sanitize_game_folder(&clip.game_title);
+        let dir = base.join(&folder);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("[moonclip] organize: cannot create {}: {e}", dir.display());
+            report.failed += 1;
+            continue;
+        }
+        let Some(bare) = source.file_name().and_then(|n| n.to_str()) else {
+            report.failed += 1;
+            continue;
+        };
+        let dest = dir.join(bare);
+        if dest != source {
+            if let Err(e) = std::fs::rename(&source, &dest) {
+                if std::fs::copy(&source, &dest).is_err() {
+                    eprintln!("[moonclip] organize: cannot move {}: {e}", source.display());
+                    report.failed += 1;
+                    continue;
+                }
+                let _ = std::fs::remove_file(&source);
+            }
+        }
+        let thumb_source = base.join(&clip.thumbnail_name);
+        let thumb_bare = thumb_source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let thumb_name = format!("{folder}/{thumb_bare}");
+        if thumb_source.is_file() {
+            let thumb_dest = dir.join(&thumb_bare);
+            if thumb_dest != thumb_source && std::fs::rename(&thumb_source, &thumb_dest).is_err() {
+                let _ = std::fs::copy(&thumb_source, &thumb_dest);
+                let _ = std::fs::remove_file(&thumb_source);
+            }
+        }
+        let file_name = format!("{folder}/{bare}");
+        if let Err(e) = db.set_clip_folder(&clip.id, &folder, &file_name, &thumb_name) {
+            eprintln!("[moonclip] organize: cannot update row {}: {e}", clip.file_name);
+            report.failed += 1;
+            continue;
+        }
+        report.moved += 1;
+        eprintln!("[moonclip] organize: {} -> {}", clip.file_name, file_name);
     }
     Ok(report)
 }
@@ -249,6 +325,51 @@ mod tests {
         assert_eq!(again.indexed, 0);
         assert_eq!(again.scanned, 0);
         assert_eq!(db.list_clips().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn organize_moves_flat_clips_into_game_folders() {
+        let db = crate::storage::db::test_db();
+        let dir = std::env::temp_dir().join(format!(
+            "moonclip-organize-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        db.set_setting("clips_directory", dir.to_str().unwrap())
+            .unwrap();
+        std::fs::write(dir.join("Replay 2026.mp4"), b"v").unwrap();
+        std::fs::write(dir.join("thumb_Replay 2026.jpg"), b"t").unwrap();
+        let clip = db
+            .insert_clip(
+                "Replay 2026.mp4",
+                "thumb_Replay 2026.jpg",
+                "DOOM: Eternal",
+                1000,
+                10,
+                "",
+            )
+            .unwrap();
+        let report = organize_dir(&db).unwrap();
+        assert_eq!(report.moved, 1, "{report:?}");
+        assert!(!dir.join("Replay 2026.mp4").exists());
+        assert!(dir.join("DOOM- Eternal/Replay 2026.mp4").exists());
+        assert!(dir.join("DOOM- Eternal/thumb_Replay 2026.jpg").exists());
+        let updated = db
+            .list_clips()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id == clip.id)
+            .unwrap();
+        assert_eq!(updated.folder, "DOOM- Eternal");
+        assert_eq!(updated.file_name, "DOOM- Eternal/Replay 2026.mp4");
+        assert_eq!(updated.thumbnail_name, "DOOM- Eternal/thumb_Replay 2026.jpg");
+        // Second pass is a no-op.
+        assert_eq!(organize_dir(&db).unwrap().moved, 0);
+        // Missing files never break the pass (or delete the row).
+        db.insert_clip("gone.mp4", "t.jpg", "G", 1, 1, "").unwrap();
+        assert_eq!(organize_dir(&db).unwrap().skipped, 1);
+        assert_eq!(db.list_clips().unwrap().len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
