@@ -22,7 +22,10 @@
     "no_game": "No game",
     "unfiled": "Unfiled",
     "rename": "Rename clip",
-    "empty_group": "No clips in this group."
+    "empty_group": "No clips in this group.",
+    "cloud": "In Drive",
+    "confirm_cloud_delete": "Delete from Drive?",
+    "downloading": "Downloading from Drive…"
   },
   "audio": {
     "title": "Capture audio",
@@ -163,7 +166,9 @@
     "uploading": "Uploading…",
     "upload_done": "Uploaded to Drive",
     "copy_link": "Copy link",
-    "copied": "Link copied"
+    "copied": "Link copied",
+    "delete_local": "Delete the local video when done",
+    "delete_local_note": "It stays only in Drive (the thumbnail is kept)."
   },
   "drive": {
     "title": "Google Drive",

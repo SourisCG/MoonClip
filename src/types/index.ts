@@ -23,6 +23,8 @@ export interface ClipMetadata {
   drive_web_url?: string | null;
   /** Game folder the clip lives in ('' = legacy row at the root). */
   folder: string;
+  /** Drive-only clip: the video was deleted locally after upload. */
+  cloud: boolean;
   /** Computed: file still on disk? */
   exists: boolean;
 }

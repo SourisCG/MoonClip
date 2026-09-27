@@ -52,7 +52,7 @@ impl DriveClient {
 
     /// Test hook: point the client at a local mock server.
     #[cfg(test)]
-    fn with_base(base: String, token: impl Into<String>) -> Self {
+    pub(crate) fn with_base(base: String, token: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
             token: token.into(),
@@ -119,6 +119,24 @@ impl DriveClient {
             .list(&query, "files(id,name,mimeType,size,modifiedTime)")
             .await?;
         Ok(files.into_iter().next())
+    }
+
+    /// Move the file to the Drive trash (recoverable, unlike a hard delete).
+    pub async fn trash_file(&self, file_id: &str) -> Result<(), String> {
+        let response = self
+            .http
+            .patch(format!("{}/files/{}", self.api, file_id))
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({"trashed": true}))
+            .send()
+            .await
+            .map_err(|e| format!("Drive request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("cannot trash the Drive file ({status}): {text}"));
+        }
+        Ok(())
     }
 
     /// Anyone-with-the-link read access (Medal-style public link).
@@ -500,6 +518,24 @@ mod tests {
         assert_eq!(uploaded.id, "f1");
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn trash_marks_the_file_trashed() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let mut request = server.recv().unwrap();
+            assert_eq!(request.method(), &tiny_http::Method::Patch);
+            assert_eq!(request.url(), "/files/f1");
+            let mut body = Vec::new();
+            request.as_reader().read_to_end(&mut body).unwrap();
+            assert_eq!(String::from_utf8_lossy(&body), r#"{"trashed":true}"#);
+            request.respond(tiny_http::Response::empty(200)).unwrap();
+        });
+        let client = DriveClient::with_base(format!("http://127.0.0.1:{port}"), "tok");
+        client.trash_file("f1").await.unwrap();
+        handle.join().unwrap();
     }
 
     #[tokio::test]

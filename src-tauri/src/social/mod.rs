@@ -6,6 +6,7 @@
 //! Config lives OUTSIDE the repository: `social.json` in the app data dir
 //! (env vars win over the file). See `social.example.json`.
 
+pub mod cloud;
 pub mod commands;
 pub mod drive;
 pub mod google;
@@ -18,6 +19,16 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::storage::DbState;
+
+/// Authenticated Drive client from the vault (refreshes when needed).
+pub(crate) async fn drive_client_for(app: &AppHandle) -> Result<drive::DriveClient, String> {
+    let config = load_config(app);
+    let client = config
+        .google_drive
+        .ok_or_else(|| "Google Drive is not configured (social.json)".to_string())?;
+    let token = google::access_token(google::Provider::Drive, &client).await?;
+    Ok(drive::DriveClient::new(token))
+}
 
 /// Per-provider public credentials.
 #[derive(Debug, Clone, Deserialize, Serialize)]

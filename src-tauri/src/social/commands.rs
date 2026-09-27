@@ -9,8 +9,6 @@ use crate::storage::models::ClipRecord;
 use crate::storage::DbState;
 
 use super::drive::{DriveClient, DriveFile};
-use super::google::{self, Provider};
-use super::load_config;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DriveUploadResult {
@@ -39,16 +37,6 @@ impl From<DriveFile> for DriveEntry {
             modified_time: file.modified_time,
         }
     }
-}
-
-/// Authenticated Drive client from the vault (refreshes when needed).
-async fn client_for(app: &AppHandle) -> Result<DriveClient, String> {
-    let config = load_config(app);
-    let client = config
-        .google_drive
-        .ok_or_else(|| "Google Drive is not configured (social.json)".to_string())?;
-    let token = google::access_token(Provider::Drive, &client).await?;
-    Ok(DriveClient::new(token))
 }
 
 /// Root folder id (cached in settings) or a fresh one.
@@ -111,30 +99,55 @@ pub async fn drive_upload_clip(
     app: AppHandle,
     clip_id: String,
     make_public: bool,
+    delete_local: bool,
 ) -> Result<DriveUploadResult, String> {
-    let client = client_for(&app).await?;
-    let (path, folder, name) = {
-        let db = app.state::<DbState>();
-        let base = db.clips_dir()?;
-        let clip = db
-            .list_clips()?
-            .into_iter()
-            .find(|c| c.id == clip_id)
-            .ok_or_else(|| "clip not found".to_string())?;
-        let path = crate::commands::validated_media_path(&base, &clip.file_name)?;
-        let folder = if clip.folder.trim().is_empty() {
-            "Unknown".to_string()
-        } else {
-            clip.folder.clone()
-        };
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or("bad clip file name")?
-            .to_string();
-        (path, folder, name)
-    };
+    let client = super::drive_client_for(&app).await?;
     let db = app.state::<DbState>();
+    let clip = db
+        .list_clips()?
+        .into_iter()
+        .find(|c| c.id == clip_id)
+        .ok_or_else(|| "clip not found".to_string())?;
+    let bare_name = clip
+        .file_name
+        .rsplit('/')
+        .next()
+        .ok_or("bad clip file name")?
+        .to_string();
+    // Already in Drive (cloud clip): never upload a duplicate; reuse the
+    // remote file and only update the link state when asked.
+    if clip.cloud {
+        if let Some(file_id) = clip.drive_file_id.as_deref().filter(|id| !id.is_empty()) {
+            let mut web_link = clip.drive_web_url.clone();
+            if make_public && web_link.is_none() {
+                client.set_public(file_id).await?;
+                web_link = client
+                    .raw_file(file_id, "webViewLink")
+                    .await
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("webViewLink")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    });
+                db.set_clip_cloud(&clip_id, file_id, web_link.as_deref())?;
+            }
+            return Ok(DriveUploadResult {
+                file_id: file_id.to_string(),
+                name: bare_name,
+                web_link,
+            });
+        }
+    }
+    let base = db.clips_dir()?;
+    let path = crate::commands::validated_media_path(&base, &clip.file_name)?;
+    let folder = if clip.folder.trim().is_empty() {
+        "Unknown".to_string()
+    } else {
+        clip.folder.clone()
+    };
+    let name = bare_name;
     let root = root_folder(&db, &client).await?;
     let parent = remote_folder(&db, &client, &root, &folder).await?;
     let name = unique_remote_name(&client, &parent, &name).await?;
@@ -162,6 +175,15 @@ pub async fn drive_upload_clip(
                     .map(str::to_string)
             });
     }
+    if delete_local {
+        // Medal-style: keep only the thumbnail locally so the gallery still
+        // renders; the video lives in Drive from now on.
+        if let Err(e) = tokio::fs::remove_file(&path).await {
+            eprintln!("[moonclip] could not delete the local video: {e}");
+        }
+        let db = app.state::<DbState>();
+        db.set_clip_cloud(&clip_id, &file.id, web_link.as_deref())?;
+    }
     Ok(DriveUploadResult {
         file_id: file.id,
         name: file.name,
@@ -172,7 +194,7 @@ pub async fn drive_upload_clip(
 /// Browse the app's Drive tree (root when `folder_id` is None).
 #[tauri::command]
 pub async fn drive_browse(app: AppHandle, folder_id: Option<String>) -> Result<Vec<DriveEntry>, String> {
-    let client = client_for(&app).await?;
+    let client = super::drive_client_for(&app).await?;
     let parent = match folder_id {
         Some(id) if !id.trim().is_empty() => id,
         _ => {
@@ -196,7 +218,7 @@ pub async fn drive_download(
     file_id: String,
     folder: Option<String>,
 ) -> Result<ClipRecord, String> {
-    let client = client_for(&app).await?;
+    let client = super::drive_client_for(&app).await?;
     let meta = client.get_file(&file_id, "id,name,size").await?;
     let folder = folder
         .map(|f| f.trim().to_string())

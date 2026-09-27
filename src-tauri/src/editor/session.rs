@@ -252,20 +252,36 @@ pub async fn ensure_source(
         return Ok(hit);
     }
 
-    let (clip, input, ffmpeg) = {
+    let (clip, ffmpeg) = {
         let db = app.state::<crate::storage::DbState>();
         let clip = db
             .list_clips()?
             .into_iter()
             .find(|c| c.id == clip_id)
             .ok_or_else(|| "clip not found".to_string())?;
-        let base = db.clips_dir()?;
-        let input = crate::commands::validated_media_path(&base, &clip.file_name)?;
         let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(app)?;
-        (clip, input, ffmpeg)
+        (clip, ffmpeg)
     };
     let clip_dir = dir.join(clip_id);
     std::fs::create_dir_all(&clip_dir).map_err(|e| format!("cannot create source dir: {e}"))?;
+    // Cloud clips MUST be downloaded to edit; the copy lives in the session
+    // dir (wiped when the editor closes), never in the light cache.
+    let input = if clip.cloud {
+        let dest = crate::social::cloud::session_source_path(&dir, clip_id);
+        let file_id = clip
+            .drive_file_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "cloud clip without a Drive id".to_string())?;
+        let client = crate::social::drive_client_for(app).await?;
+        crate::social::cloud::download_with_progress(&client, file_id, &dest, app, clip_id)
+            .await?;
+        dest
+    } else {
+        let db = app.state::<crate::storage::DbState>();
+        let base = db.clips_dir()?;
+        crate::commands::validated_media_path(&base, &clip.file_name)?
+    };
 
     let stderr = tokio::process::Command::new(&ffmpeg)
         .args(["-hide_banner", "-i"])

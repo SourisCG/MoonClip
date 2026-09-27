@@ -22,7 +22,10 @@
     "no_game": "Sin juego",
     "unfiled": "Sin clasificar",
     "rename": "Renombrar clip",
-    "empty_group": "No hay clips en este grupo."
+    "empty_group": "No hay clips en este grupo.",
+    "cloud": "En Drive",
+    "confirm_cloud_delete": "¿Borrar de Drive?",
+    "downloading": "Descargando de Drive…"
   },
   "audio": {
     "title": "Audio de captura",
@@ -162,7 +165,9 @@
     "uploading": "Subiendo…",
     "upload_done": "Subido a Drive",
     "copy_link": "Copiar link",
-    "copied": "Link copiado"
+    "copied": "Link copiado",
+    "delete_local": "Borrar el video local al terminar",
+    "delete_local_note": "Queda solo en Drive (el thumbnail se conserva)."
   },
   "drive": {
     "title": "Google Drive",

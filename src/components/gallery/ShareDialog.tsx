@@ -20,14 +20,38 @@ interface Progress {
 
 /** Upload one clip to Google Drive (private by default; optional public
  *  anyone-with-the-link + copy). */
-export function ShareDialog({ clip, onClose }: { clip: ClipMetadata; onClose: () => void }) {
+export function ShareDialog({
+  clip,
+  onClose,
+  onUploaded,
+}: {
+  clip: ClipMetadata;
+  onClose: () => void;
+  onUploaded?: () => void;
+}) {
   const { t } = useTranslation();
   const [makePublic, setMakePublic] = useState(false);
+  const [deleteLocal, setDeleteLocal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [result, setResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    // Remember the last choice: deleting the local copy is opt-in.
+    invoke<Record<string, string>>("get_settings")
+      .then((s) => setDeleteLocal(s.share_delete_local === "1"))
+      .catch(() => {});
+  }, []);
+
+  const toggleDeleteLocal = (value: boolean) => {
+    setDeleteLocal(value);
+    void invoke("set_setting", {
+      key: "share_delete_local",
+      value: value ? "1" : "0",
+    }).catch(() => {});
+  };
 
   useEffect(() => {
     const unlisten = listen<Progress>("moonclip://upload-progress", (event) => {
@@ -46,8 +70,10 @@ export function ShareDialog({ clip, onClose }: { clip: ClipMetadata; onClose: ()
       const res = await invoke<UploadResult>("drive_upload_clip", {
         clipId: clip.id,
         makePublic,
+        deleteLocal,
       });
       setResult(res);
+      onUploaded?.();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -102,6 +128,20 @@ export function ShareDialog({ clip, onClose }: { clip: ClipMetadata; onClose: ()
                 {t("share.public")}
                 <span className="mt-0.5 block text-slate-500">
                   {makePublic ? t("share.public_note") : t("share.private_note")}
+                </span>
+              </span>
+            </label>
+            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={deleteLocal}
+                onChange={(e) => toggleDeleteLocal(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                {t("share.delete_local")}
+                <span className="mt-0.5 block text-slate-500">
+                  {t("share.delete_local_note")}
                 </span>
               </span>
             </label>

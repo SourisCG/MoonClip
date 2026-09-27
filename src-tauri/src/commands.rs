@@ -76,8 +76,26 @@ pub fn toggle_favorite(db: State<'_, DbState>, id: String) -> Result<bool, Strin
 }
 
 #[tauri::command]
-pub fn delete_clip(db: State<'_, DbState>, id: String) -> Result<(), String> {
+pub async fn delete_clip(app: AppHandle, db: State<'_, DbState>, id: String) -> Result<(), String> {
+    let clip = db
+        .list_clips()?
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| "clip not found".to_string())?;
+    if clip.cloud && clip.drive_file_id.as_deref().is_some_and(|v| !v.is_empty()) {
+        // Drive-only clip: the remote file is the only copy. Trash it first so
+        // a failure never leaves the user thinking it was deleted.
+        crate::social::cloud::trash_remote(&app, &clip).await?;
+        crate::social::cloud::cleanup_cache(&app, &id);
+    }
     db.delete_clip(&id)
+}
+
+/// Drop the on-demand cache of a cloud clip (quick-trim panel closed).
+#[tauri::command]
+pub fn cloud_cache_cleanup(app: AppHandle, clip_id: String) -> Result<(), String> {
+    crate::social::cloud::cleanup_cache(&app, &clip_id);
+    Ok(())
 }
 
 /// Rename a clip (file + thumbnail + DB row) inside its game folder.
@@ -110,13 +128,7 @@ pub fn organize_library(
 /// Drop DB rows whose files are gone from disk. Returns rows removed.
 #[tauri::command]
 pub fn purge_missing_clips(db: State<'_, DbState>) -> Result<u32, String> {
-    let base = db.clips_dir()?;
-    let missing: Vec<String> = db
-        .list_clips()?
-        .into_iter()
-        .filter(|c| !crate::storage::paths::resolve_clip_path(&base, &c.file_name).exists())
-        .map(|c| c.id)
-        .collect();
+    let missing: Vec<String> = db.missing_clip_ids()?;
     let n = missing.len() as u32;
     for id in &missing {
         db.delete_row(id)?;
@@ -125,13 +137,23 @@ pub fn purge_missing_clips(db: State<'_, DbState>) -> Result<u32, String> {
 }
 
 /// Absolute filesystem path for a clip file name (for <video> / convertFileSrc).
+/// Cloud clips download on demand first.
 #[tauri::command]
-pub fn resolve_clip_src(db: State<'_, DbState>, file_name: String) -> Result<String, String> {
+pub async fn resolve_clip_src(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    file_name: String,
+) -> Result<String, String> {
     if file_name.contains("..") || file_name.starts_with('/') || file_name.starts_with('\\') {
         return Err("invalid file name".into());
     }
-    let base = db.clips_dir()?;
-    Ok(base.join(&file_name).to_string_lossy().to_string())
+    let clip = db
+        .list_clips()?
+        .into_iter()
+        .find(|c| c.file_name == file_name)
+        .ok_or_else(|| "clip not found".to_string())?;
+    let path = crate::social::cloud::ensure_local(&app, &clip).await?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -2440,17 +2462,13 @@ mod custom_mode_tests {
 pub async fn open_clip_external(app: AppHandle, clip_id: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let db = app.state::<DbState>();
-    let base = db.clips_dir()?;
     let clips = db.list_clips()?;
     let clip = clips
         .into_iter()
         .find(|c| c.id == clip_id)
         .ok_or("clip not found")?;
-    let abs = base.join(&clip.file_name);
+    let abs = crate::social::cloud::ensure_local(&app, &clip).await?;
     eprintln!("[moonclip] open_clip_external: {}", abs.display());
-    if !abs.exists() {
-        return Err(format!("file gone from disk: {}", clip.file_name));
-    }
     match app.opener().open_path(abs.to_string_lossy(), None::<&str>) {
         Ok(()) => {
             eprintln!("[moonclip] open_clip_external: opener ok");
@@ -2483,8 +2501,7 @@ pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Resul
         .into_iter()
         .find(|c| c.id == clip_id)
         .ok_or("clip not found")?;
-    let base = db.clips_dir()?;
-    let input = base.join(&clip.file_name);
+    let input = crate::social::cloud::ensure_local(&app, &clip).await?;
     let preview = std::env::temp_dir().join("moonclip-track-preview.m4a");
     let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
     let status = tokio::process::Command::new(&ffmpeg)
@@ -2518,14 +2535,17 @@ pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Resul
 /// backend serves the file over a loopback HTTP server with range support
 /// (starts on first use; nothing runs before the first editor/trim open).
 #[tauri::command]
-pub fn media_url(db: State<'_, DbState>, clip_id: String) -> Result<String, String> {
+pub async fn media_url(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    clip_id: String,
+) -> Result<String, String> {
     let clip = db
         .list_clips()?
         .into_iter()
         .find(|c| c.id == clip_id)
         .ok_or_else(|| "clip not found".to_string())?;
-    let base = db.clips_dir()?;
-    let path = validated_media_path(&base, &clip.file_name)?;
+    let path = crate::social::cloud::ensure_local(&app, &clip).await?;
     crate::editor::media_server::media_url(&path)
 }
 
@@ -2547,10 +2567,7 @@ pub async fn trim_clip(
         .find(|c| c.id == clip_id)
         .ok_or_else(|| "clip not found".to_string())?;
     let base = db.clips_dir()?;
-    let input = base.join(&clip.file_name);
-    if !input.is_file() {
-        return Err(format!("clip file missing: {}", clip.file_name));
-    }
+    let input = crate::social::cloud::ensure_local(&app, &clip).await?;
     // Clamp to the measured duration; a tiny selection is a UI bug.
     let total = clip.duration_ms.max(0);
     let start = start_ms.clamp(0, (total - 100).max(0));

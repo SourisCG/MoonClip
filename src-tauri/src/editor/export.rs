@@ -734,7 +734,18 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
             .iter()
             .find(|c| c.id == seg.source_clip_id)
             .ok_or_else(|| format!("source clip {} not found", seg.source_clip_id))?;
-        let path = crate::commands::validated_media_path(&base, &clip.file_name)?;
+        let path = if clip.cloud {
+            // The heavy editor already downloaded it into the session dir;
+            // otherwise fall back to the on-demand cache.
+            let session_copy = crate::social::cloud::session_source_path(&dir, &clip.id);
+            if session_copy.is_file() {
+                session_copy
+            } else {
+                crate::social::cloud::ensure_local(app, clip).await?
+            }
+        } else {
+            crate::commands::validated_media_path(&base, &clip.file_name)?
+        };
         let probe = crate::editor::ffmpeg::probe_video_stream(&ffmpeg, &path).await;
         let (w, h, fps) = probe
             .map(|p| (p.width, p.height, p.fps))

@@ -50,6 +50,13 @@ export function TrimPanel({
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState<"start" | "end" | "seek" | null>(null);
 
+  // Closing the panel releases the on-demand copy of a cloud clip (local
+  // clips have no cache, so this is a no-op for them).
+  const close = useCallback(() => {
+    void invoke("cloud_cache_cleanup", { clipId: clip.id }).catch(() => {});
+    onClose();
+  }, [clip.id, onClose]);
+
   useEffect(() => {
     let cancelled = false;
     // Loopback HTTP URL: `asset://` cannot play media on WebKitGTK.
@@ -205,7 +212,7 @@ export function TrimPanel({
         precise,
       });
       onSaved();
-      onClose();
+      close();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -227,7 +234,7 @@ export function TrimPanel({
             {clip.file_name}
           </span>
           <button
-            onClick={onClose}
+            onClick={close}
             disabled={saving}
             className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200 disabled:opacity-50"
           >
@@ -343,7 +350,7 @@ export function TrimPanel({
           {onAdvancedEdit && (
             <button
               onClick={() => {
-                onClose();
+                close();
                 onAdvancedEdit(clip);
               }}
               disabled={saving}
@@ -353,7 +360,7 @@ export function TrimPanel({
             </button>
           )}
           <button
-            onClick={onClose}
+            onClick={close}
             disabled={saving}
             className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-200 transition hover:bg-white/10 disabled:opacity-50"
           >

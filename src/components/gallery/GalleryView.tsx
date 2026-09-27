@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { thumbnailUrl } from "../../lib/media";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   Clapperboard,
+  Cloud,
   CloudUpload,
   FolderOpen,
   Gamepad2,
@@ -142,6 +144,7 @@ function ClipRow({
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const startRename = () => {
     setDraft(stemOf(clip.file_name));
     setEditing(true);
@@ -201,7 +204,15 @@ function ClipRow({
               {gameLabel} ·{" "}
               <span className="text-cyan-300/80">{fmtDuration(clip.duration_ms)}</span> ·{" "}
               {fmtSize(clip.file_size_bytes)}{" "}
-              {!clip.exists && <span className="text-xs text-amber-400">({t("gallery.missing")})</span>}
+              {clip.cloud ? (
+                <span className="inline-flex items-center gap-0.5 text-xs text-cyan-300/80">
+                  <Cloud size={11} /> {t("gallery.cloud")}
+                </span>
+              ) : (
+                !clip.exists && (
+                  <span className="text-xs text-amber-400">({t("gallery.missing")})</span>
+                )
+              )}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -239,13 +250,30 @@ function ClipRow({
             >
               <Star size={15} fill={clip.is_favorite ? "currentColor" : "none"} />
             </button>
-            <button
-              onClick={() => actions.onDelete(clip.id)}
-              className="rounded-lg p-1.5 text-slate-500 transition hover:bg-red-500/20 hover:text-red-300"
-              title={t("common.delete")}
-            >
-              <Trash2 size={15} />
-            </button>
+            {clip.cloud && confirmDelete ? (
+              <button
+                onClick={() => actions.onDelete(clip.id)}
+                className="rounded-lg bg-red-500/20 px-2 py-1 text-[10px] font-medium text-red-200 transition hover:bg-red-500/30"
+                title={t("gallery.confirm_cloud_delete")}
+              >
+                {t("gallery.confirm_cloud_delete")}
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (clip.cloud) {
+                    setConfirmDelete(true);
+                    window.setTimeout(() => setConfirmDelete(false), 4000);
+                    return;
+                  }
+                  actions.onDelete(clip.id);
+                }}
+                className="rounded-lg p-1.5 text-slate-500 transition hover:bg-red-500/20 hover:text-red-300"
+                title={clip.cloud ? t("gallery.confirm_cloud_delete") : t("common.delete")}
+              >
+                <Trash2 size={15} />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -273,6 +301,7 @@ export function GalleryView({
   const [trimClip, setTrimClip] = useState<ClipMetadata | null>(null);
   const [shareClip, setShareClip] = useState<ClipMetadata | null>(null);
   const [showDrive, setShowDrive] = useState(false);
+  const [download, setDownload] = useState<{ sent: number; total: number } | null>(null);
   const [group, setGroup] = useState<string>(
     () => localStorage.getItem(GROUP_KEY) ?? "all",
   );
@@ -281,6 +310,23 @@ export function GalleryView({
     if (refreshToken > 0) void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
+
+  // On-demand downloads (cloud clips) show a small progress note.
+  useEffect(() => {
+    let timer: number | undefined;
+    const unlisten = listen<{ sent: number; total: number }>(
+      "moonclip://download-progress",
+      (event) => {
+        setDownload(event.payload);
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => setDownload(null), 2500);
+      },
+    );
+    return () => {
+      window.clearTimeout(timer);
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
   const groups = useMemo(() => {
     const map = new Map<string, { count: number; last: string }>();
@@ -387,7 +433,15 @@ export function GalleryView({
 
   return (
     <>
-      {shareClip && <ShareDialog clip={shareClip} onClose={() => setShareClip(null)} />}
+      {shareClip && (
+        <ShareDialog
+          clip={shareClip}
+          onClose={() => setShareClip(null)}
+          onUploaded={() => {
+            void refresh();
+          }}
+        />
+      )}
       {showDrive && (
         <DriveBrowser
           onClose={() => setShowDrive(false)}
@@ -444,8 +498,16 @@ export function GalleryView({
                 {lastError}
               </p>
             )}
-            {purged !== null && !lastError && (
+            {purged !== null && !lastError && !download && (
               <p className="flex-1 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
+            )}
+            {download && (
+              <p className="flex-1 text-xs text-cyan-300/80">
+                {t("gallery.downloading")}{" "}
+                {download.total > 0
+                  ? `${Math.min(100, Math.round((download.sent / download.total) * 100))}%`
+                  : ""}
+              </p>
             )}
             <button
               onClick={() => setShowDrive(true)}

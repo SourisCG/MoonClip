@@ -16,6 +16,9 @@ pub struct ClipRecord {
     /// Game folder the clip lives in ('' = legacy row still at the root).
     /// The association is stable: it survives app renames/removals.
     pub folder: String,
+    /// Drive-only clip: the video was deleted locally after upload and the
+    /// thumbnail stays. Playback/editing downloads it on demand.
+    pub cloud: bool,
     /// Computed at query time: does the file still exist on disk?
     pub exists: bool,
 }

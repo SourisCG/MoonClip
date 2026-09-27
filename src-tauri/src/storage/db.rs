@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, RegisteredInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -24,6 +24,7 @@ const MIGRATION_011: &str = include_str!("../../migrations/011_registered_inputs
 const MIGRATION_012: &str = include_str!("../../migrations/012_window_identity.sql");
 const MIGRATION_013: &str = include_str!("../../migrations/013_clip_folders.sql");
 const MIGRATION_014: &str = include_str!("../../migrations/014_drive_folders.sql");
+const MIGRATION_015: &str = include_str!("../../migrations/015_cloud_clips.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -38,6 +39,7 @@ pub(crate) fn test_db() -> DbState {
         MIGRATION_012,
         MIGRATION_013,
         MIGRATION_014,
+        MIGRATION_015,
     ] {
         conn.execute_batch(migration).unwrap();
     }
@@ -156,6 +158,10 @@ impl DbState {
                 tx.execute_batch(MIGRATION_014)
                     .map_err(|e| format!("migration 014 failed: {e}"))?;
             }
+            if version < 15 {
+                tx.execute_batch(MIGRATION_015)
+                    .map_err(|e| format!("migration 015 failed: {e}"))?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
             tx.commit()
@@ -169,6 +175,7 @@ impl DbState {
             .map_err(|e| format!("cannot index clips.folder: {e}"))?;
         conn.execute_batch(MIGRATION_014)
             .map_err(|e| format!("cannot ensure drive_folders: {e}"))?;
+        ensure_column(&conn, "clips", "cloud", "INTEGER NOT NULL DEFAULT 0")?;
         // Secrets never live in the DB: drop rows written by older builds
         // (the websocket password is generated per start; the portal token
         // now lives in the OS vault).
@@ -259,7 +266,7 @@ impl DbState {
             .prepare(
                 "SELECT id, file_name, thumbnail_name, game_title, duration_ms,
                         file_size_bytes, created_at, is_favorite, drive_file_id, drive_web_url,
-                        folder
+                        folder, cloud
                  FROM clips ORDER BY created_at DESC",
             )
             .map_err(|e| format!("cannot prepare clips query: {e}"))?;
@@ -277,6 +284,7 @@ impl DbState {
                     drive_file_id: r.get(8)?,
                     drive_web_url: r.get(9)?,
                     folder: r.get(10)?,
+                    cloud: r.get::<_, i64>(11)? != 0,
                     exists: false, // filled below
                 })
             })
@@ -326,7 +334,7 @@ impl DbState {
             .query_row(
                 "SELECT id, file_name, thumbnail_name, game_title, duration_ms,
                         file_size_bytes, created_at, is_favorite, drive_file_id, drive_web_url,
-                        folder
+                        folder, cloud
                  FROM clips WHERE id = ?1",
                 params![id],
                 |r| {
@@ -342,6 +350,7 @@ impl DbState {
                         drive_file_id: r.get(8)?,
                         drive_web_url: r.get(9)?,
                         folder: r.get(10)?,
+                        cloud: r.get::<_, i64>(11)? != 0,
                         exists: true,
                     })
                 },
@@ -425,6 +434,18 @@ impl DbState {
         Ok(())
     }
 
+    /// Rows whose local file is gone and that are NOT Drive-only (cloud rows
+    /// have no local video on purpose). Used by purge-missing.
+    pub fn missing_clip_ids(&self) -> Result<Vec<String>, String> {
+        let base = self.clips_dir()?;
+        Ok(self
+            .list_clips()?
+            .into_iter()
+            .filter(|c| !c.cloud && !paths::resolve_clip_path(&base, &c.file_name).exists())
+            .map(|c| c.id)
+            .collect())
+    }
+
     /// LRU pruning for `max_storage_gb` (docs/05): when the library exceeds
     /// the quota, delete the OLDEST non-favorite clips (file + thumbnail +
     /// row) until it fits. `protected_id` (the clip just saved) and favorites
@@ -452,7 +473,7 @@ impl DbState {
             let conn = self.lock()?;
             let total: i64 = conn
                 .query_row(
-                    "SELECT COALESCE(SUM(file_size_bytes), 0) FROM clips",
+                    "SELECT COALESCE(SUM(file_size_bytes), 0) FROM clips WHERE cloud = 0",
                     [],
                     |r| r.get(0),
                 )
@@ -460,7 +481,7 @@ impl DbState {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, file_name, thumbnail_name, file_size_bytes FROM clips
-                     WHERE is_favorite = 0 AND id != COALESCE(?1, '')
+                     WHERE is_favorite = 0 AND cloud = 0 AND id != COALESCE(?1, '')
                      ORDER BY created_at ASC, rowid ASC",
                 )
                 .map_err(|e| format!("cannot list prune candidates: {e}"))?;
@@ -555,6 +576,7 @@ impl DbState {
             "engine_source_width",
             "engine_source_height",
             "drive_root_folder_id",
+            "share_delete_local",
         ];
         if !ALLOWED.contains(&key) {
             return Err(format!("unknown setting: {key}"));
@@ -741,6 +763,22 @@ impl DbState {
             params![display_name, window_title, window_app_id, target_exe, input_name],
         )
         .map_err(|e| format!("cannot store window identity: {e}"))?;
+        Ok(())
+    }
+
+    /// Mark a clip as Drive-only (video deleted after upload) with its ids.
+    pub fn set_clip_cloud(
+        &self,
+        id: &str,
+        drive_file_id: &str,
+        drive_web_link: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE clips SET cloud = 1, drive_file_id = ?1, drive_web_url = ?2 WHERE id = ?3",
+            params![drive_file_id, drive_web_link, id],
+        )
+        .map_err(|e| format!("cannot mark the clip as cloud: {e}"))?;
         Ok(())
     }
 
@@ -992,6 +1030,39 @@ mod tests {
             .collect();
         assert_eq!(remaining.len(), 2);
         assert!(!remaining.contains(&old.id));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cloud_clips_are_never_missing_nor_pruned() {
+        let db = test_db();
+        let dir = quota_dir();
+        db.set_setting("clips_directory", dir.to_str().unwrap())
+            .unwrap();
+        // A cloud clip: no local video, ids set, thumbnail may exist.
+        let cloud = db
+            .insert_clip("Gone/cloud.mp4", "Gone/thumb.jpg", "G", 1000, 2 * 1024 * MB, "Gone")
+            .unwrap();
+        db.set_clip_cloud(&cloud.id, "drive-file-1", Some("https://link"))
+            .unwrap();
+        // A truly missing local row, big enough to exceed the test quota.
+        let missing = db
+            .insert_clip(
+                "Gone/local.mp4",
+                "Gone/thumb2.jpg",
+                "G",
+                1000,
+                2 * 1024 * MB,
+                "Gone",
+            )
+            .unwrap();
+        let purged = db.missing_clip_ids().unwrap();
+        assert_eq!(purged, vec![missing.id.clone()]);
+        // Quota: cloud rows do not count and are never candidates.
+        assert_eq!(db.enforce_quota(Some("other"), Some(1.0)).unwrap(), 1);
+        let left: Vec<String> = db.list_clips().unwrap().into_iter().map(|c| c.id).collect();
+        assert!(left.contains(&cloud.id), "cloud row must survive pruning");
+        assert!(!left.contains(&missing.id));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
