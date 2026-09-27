@@ -21,6 +21,22 @@ export interface Segment {
   gainMix: number;
   gainGame: number;
   gainMic: number;
+  // Clip adjustments (E4.3/E4.5/E4.7)
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+  rotation: number;
+  cropLeft: number;
+  cropTop: number;
+  cropRight: number;
+  cropBottom: number;
+  opacity: number;
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  gamma: number;
+  temperature: number;
+  vignette: number;
 }
 
 export interface AudioTrack {

@@ -74,7 +74,30 @@ pub fn stage_a_args(
     let needs_scale = dims != src_dims;
     let needs_speed = (segment.speed - 1.0).abs() > f64::EPSILON;
     let needs_fps = fps > 0;
-    let copy = !needs_scale && !needs_speed && !needs_fps && segment.freeze_ms <= 0;
+    // Clip adjustments (E4.3/E4.5/E4.7).
+    let has_crop = segment.crop_left > 0.0
+        || segment.crop_top > 0.0
+        || segment.crop_right > 0.0
+        || segment.crop_bottom > 0.0;
+    let has_zoom = (segment.zoom - 1.0).abs() > f64::EPSILON;
+    let has_pan = segment.offset_x.abs() > f64::EPSILON || segment.offset_y.abs() > f64::EPSILON;
+    let has_rotation = segment.rotation.abs() > f64::EPSILON;
+    let has_opacity = (segment.opacity - 1.0).abs() > f64::EPSILON;
+    let has_eq = segment.brightness.abs() > f64::EPSILON
+        || (segment.contrast - 1.0).abs() > f64::EPSILON
+        || (segment.saturation - 1.0).abs() > f64::EPSILON
+        || (segment.gamma - 1.0).abs() > f64::EPSILON;
+    let has_temperature = segment.temperature.abs() > f64::EPSILON;
+    let has_vignette = segment.vignette > 0.0;
+    let has_adjust = has_crop
+        || has_zoom
+        || has_pan
+        || has_rotation
+        || has_opacity
+        || has_eq
+        || has_temperature
+        || has_vignette;
+    let copy = !needs_scale && !needs_speed && !needs_fps && !has_adjust && segment.freeze_ms <= 0;
 
     let mut a: Vec<String> = vec![
         "-y".into(),
@@ -94,12 +117,70 @@ pub fn stage_a_args(
         a.extend(["-c:v", "copy"].map(String::from));
     } else {
         let mut vf: Vec<String> = Vec::new();
-        if needs_scale {
-            // Cover + center crop (never letterbox a game clip).
+        // 1) Source crop (fractions).
+        if has_crop {
+            let l = segment.crop_left.clamp(0.0, 0.49);
+            let t = segment.crop_top.clamp(0.0, 0.49);
+            let r = segment.crop_right.clamp(0.0, 0.49);
+            let b = segment.crop_bottom.clamp(0.0, 0.49);
+            vf.push(format!(
+                "crop=iw*{:.4}:ih*{:.4}:iw*{l:.4}:ih*{t:.4}",
+                1.0 - l - r,
+                1.0 - t - b
+            ));
+        }
+        // 2) Fit the output frame (crop to cover, never letterbox).
+        if needs_scale || has_adjust {
             vf.push(format!(
                 "scale={}:{}:force_original_aspect_ratio=increase,crop={}:{}",
                 dims.0, dims.1, dims.0, dims.1
             ));
+        }
+        // 3) Zoom + pan around the center.
+        if has_zoom || has_pan {
+            let z = segment.zoom.clamp(1.0, 4.0);
+            vf.push(format!("scale=iw*{z:.4}:ih*{z:.4}"));
+            // The zoomed frame can shift at most half the extra size.
+            let max_off_x = dims.0 as f64 * (z - 1.0) / 2.0;
+            let max_off_y = dims.1 as f64 * (z - 1.0) / 2.0;
+            let ox = (segment.offset_x.clamp(-1.0, 1.0) * max_off_x).clamp(-max_off_x, max_off_x);
+            let oy = (segment.offset_y.clamp(-1.0, 1.0) * max_off_y).clamp(-max_off_y, max_off_y);
+            vf.push(format!(
+                "crop={}:{}:(iw-{})/2+({ox:.2}):(ih-{})/2+({oy:.2})",
+                dims.0, dims.1, dims.0, dims.1
+            ));
+        }
+        // 4) Rotation (same canvas, black corners).
+        if has_rotation {
+            let rad = segment.rotation * std::f64::consts::PI / 180.0;
+            vf.push(format!("rotate={rad:.6}:ow=iw:oh=ih:c=black"));
+        }
+        // 5) Opacity (fades to black, which is what the preview shows).
+        if has_opacity {
+            vf.push("format=rgba".into());
+            vf.push(format!(
+                "colorchannelmixer=aa={:.4}",
+                segment.opacity.clamp(0.0, 1.0)
+            ));
+            vf.push("format=yuv420p".into());
+        }
+        // 6) Adjustments.
+        if has_eq {
+            vf.push(format!(
+                "eq=brightness={:.4}:contrast={:.4}:saturation={:.4}:gamma={:.4}",
+                segment.brightness.clamp(-1.0, 1.0),
+                segment.contrast.clamp(0.0, 3.0),
+                segment.saturation.clamp(0.0, 3.0),
+                segment.gamma.clamp(0.1, 10.0),
+            ));
+        }
+        if has_temperature {
+            let tt = segment.temperature.clamp(-1.0, 1.0) * 0.3;
+            vf.push(format!("colorbalance=rs={tt:.4}:bs={:.4}", -tt));
+        }
+        if has_vignette {
+            let angle = std::f64::consts::PI * 0.45 * segment.vignette.clamp(0.0, 1.0);
+            vf.push(format!("vignette=angle={angle:.4}"));
         }
         if needs_speed {
             vf.push(format!("setpts=PTS/{}", segment.speed));
@@ -776,6 +857,63 @@ mod tests {
         assert!(graph.contains("amix=inputs=2:duration=longest:normalize=0"), "{graph}");
         assert!(graph.contains("atrim=0:3.000"));
         assert!(!graph.contains("rubberband"), "{graph}");
+    }
+
+    #[test]
+    fn stage_a_applies_crop_zoom_pan_rotation_opacity_and_filters() {
+        let mut s = seg(0, 2000);
+        s.crop_left = 0.1;
+        s.crop_right = 0.2;
+        s.zoom = 2.0;
+        s.offset_x = 0.5;
+        s.offset_y = -1.0;
+        s.rotation = 90.0;
+        s.opacity = 0.5;
+        s.brightness = 0.1;
+        s.contrast = 1.2;
+        s.saturation = 1.3;
+        s.gamma = 1.1;
+        s.temperature = 0.5;
+        s.vignette = 0.4;
+        let a = stage_a_args(
+            Path::new("/clips/in.mp4"),
+            Path::new("/tmp/seg.mp4"),
+            &s,
+            (1920, 1080),
+            (1920, 1080),
+            0,
+            "libx264",
+            0,
+        );
+        let vf = a
+            .windows(2)
+            .find(|w| w[0] == "-vf")
+            .map(|w| w[1].clone())
+            .expect("vf");
+        assert!(vf.contains("crop=iw*0.7000:ih*1.0000:iw*0.1000:ih*0.0000"), "{vf}");
+        assert!(vf.contains("scale=iw*2.0000:ih*2.0000"), "{vf}");
+        assert!(vf.contains("rotate=1.570796"), "{vf}");
+        assert!(vf.contains("colorchannelmixer=aa=0.5000"), "{vf}");
+        assert!(vf.contains("eq=brightness=0.1000:contrast=1.2000"), "{vf}");
+        assert!(vf.contains("colorbalance=rs=0.1500"), "{vf}");
+        assert!(vf.contains("vignette=angle=0.5655"), "{vf}");
+        assert!(a.windows(2).any(|w| w == ["-c:v", "libx264"]));
+    }
+
+    #[test]
+    fn stage_a_still_copies_when_nothing_is_set() {
+        let a = stage_a_args(
+            Path::new("/clips/in.mp4"),
+            Path::new("/tmp/seg.mp4"),
+            &seg(0, 1000),
+            (1920, 1080),
+            (1920, 1080),
+            0,
+            "libx264",
+            0,
+        );
+        assert!(a.windows(2).any(|w| w == ["-c:v", "copy"]));
+        assert!(!a.iter().any(|x| x == "-vf"));
     }
 
     #[test]

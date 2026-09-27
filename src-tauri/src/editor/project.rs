@@ -69,6 +69,43 @@ pub struct Segment {
     pub gain_game: f64,
     #[serde(default = "default_gain")]
     pub gain_mic: f64,
+    // ---- Clip adjustments (E4.3/E4.5/E4.7) --------------------------------
+    /// Zoom >= 1 (1 = fit).
+    #[serde(default = "default_gain")]
+    pub zoom: f64,
+    /// Pan as a fraction of the output frame (-1..1).
+    #[serde(default)]
+    pub offset_x: f64,
+    #[serde(default)]
+    pub offset_y: f64,
+    /// Degrees.
+    #[serde(default)]
+    pub rotation: f64,
+    /// Crops as fractions of the source (0..0.49).
+    #[serde(default)]
+    pub crop_left: f64,
+    #[serde(default)]
+    pub crop_top: f64,
+    #[serde(default)]
+    pub crop_right: f64,
+    #[serde(default)]
+    pub crop_bottom: f64,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
+    /// Adjustments: brightness/temperature -1..1, contrast/saturation/gamma
+    /// 1 = neutral, vignette 0..1.
+    #[serde(default)]
+    pub brightness: f64,
+    #[serde(default = "default_gain")]
+    pub contrast: f64,
+    #[serde(default = "default_gain")]
+    pub saturation: f64,
+    #[serde(default = "default_gain")]
+    pub gamma: f64,
+    #[serde(default)]
+    pub temperature: f64,
+    #[serde(default)]
+    pub vignette: f64,
 }
 
 impl Segment {
@@ -238,8 +275,23 @@ pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProje
             // so the preview never plays the same audio twice. Users raise the
             // stems and lower Mix to remix.
             gain_mix: 1.0,
-            gain_game: 0.0,
-            gain_mic: 0.0,
+            gain_game: 1.0,
+            gain_mic: 1.0,
+            zoom: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            rotation: 0.0,
+            crop_left: 0.0,
+            crop_top: 0.0,
+            crop_right: 0.0,
+            crop_bottom: 0.0,
+            opacity: 1.0,
+            brightness: 0.0,
+            contrast: 1.0,
+            saturation: 1.0,
+            gamma: 1.0,
+            temperature: 0.0,
+            vignette: 0.0,
         }],
         audio_tracks: Vec::new(),
         overlays: Vec::new(),

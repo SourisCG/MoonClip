@@ -194,6 +194,43 @@ function OverlayView({
   );
 }
 
+/** Small labelled slider used by the clip-adjustment panel. */
+function Adjust({
+  label,
+  value,
+  min,
+  max,
+  step = 0.01,
+  onChange,
+  format,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (v: number) => void;
+  format?: (v: number) => string;
+}) {
+  return (
+    <label className="space-y-0.5 text-[10px] text-slate-400">
+      <span className="flex items-center">
+        {label}
+        <span className="ml-auto font-mono">{format ? format(value) : value.toFixed(2)}</span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full accent-cyan-400"
+      />
+    </label>
+  );
+}
+
 /** Per-track level meters (own rAF, direct DOM writes: no React re-renders). */
 function LevelMeters({
   engineRef,
@@ -984,6 +1021,171 @@ export default function EditorApp({
             </div>
           )}
 
+          {selectedSegment && (
+            <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-2">
+              <p className="text-[11px] font-semibold text-slate-300">{t("editor.adjust")}</p>
+              <Adjust
+                label={t("editor.zoom")}
+                value={selectedSegment.zoom}
+                min={1}
+                max={3}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { zoom: v })
+                }
+                format={(v) => `${v.toFixed(2)}x`}
+              />
+              <Adjust
+                label={t("editor.pos_x")}
+                value={selectedSegment.offsetX}
+                min={-1}
+                max={1}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { offsetX: v })
+                }
+              />
+              <Adjust
+                label={t("editor.pos_y")}
+                value={selectedSegment.offsetY}
+                min={-1}
+                max={1}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { offsetY: v })
+                }
+              />
+              <Adjust
+                label={t("editor.rotation")}
+                value={selectedSegment.rotation}
+                min={-180}
+                max={180}
+                step={1}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { rotation: v })
+                }
+                format={(v) => `${Math.round(v)}°`}
+              />
+              <Adjust
+                label={t("editor.crop_l")}
+                value={selectedSegment.cropLeft}
+                min={0}
+                max={0.45}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { cropLeft: v })
+                }
+                format={(v) => `${Math.round(v * 100)}%`}
+              />
+              <Adjust
+                label={t("editor.crop_r")}
+                value={selectedSegment.cropRight}
+                min={0}
+                max={0.45}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { cropRight: v })
+                }
+                format={(v) => `${Math.round(v * 100)}%`}
+              />
+              <Adjust
+                label={t("editor.crop_t")}
+                value={selectedSegment.cropTop}
+                min={0}
+                max={0.45}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { cropTop: v })
+                }
+                format={(v) => `${Math.round(v * 100)}%`}
+              />
+              <Adjust
+                label={t("editor.crop_b")}
+                value={selectedSegment.cropBottom}
+                min={0}
+                max={0.45}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { cropBottom: v })
+                }
+                format={(v) => `${Math.round(v * 100)}%`}
+              />
+              <Adjust
+                label={t("editor.opacity")}
+                value={selectedSegment.opacity}
+                min={0}
+                max={1}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { opacity: v })
+                }
+                format={(v) => `${Math.round(v * 100)}%`}
+              />
+              <Adjust
+                label={t("editor.brightness")}
+                value={selectedSegment.brightness}
+                min={-0.6}
+                max={0.6}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { brightness: v })
+                }
+              />
+              <Adjust
+                label={t("editor.contrast")}
+                value={selectedSegment.contrast}
+                min={0.5}
+                max={1.8}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { contrast: v })
+                }
+              />
+              <Adjust
+                label={t("editor.saturation")}
+                value={selectedSegment.saturation}
+                min={0}
+                max={2}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { saturation: v })
+                }
+              />
+              <Adjust
+                label={t("editor.temperature")}
+                value={selectedSegment.temperature}
+                min={-1}
+                max={1}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { temperature: v })
+                }
+              />
+              <Adjust
+                label={t("editor.vignette")}
+                value={selectedSegment.vignette}
+                min={0}
+                max={1}
+                onChange={(v) =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, { vignette: v })
+                }
+                format={(v) => `${Math.round(v * 100)}%`}
+              />
+              <button
+                onClick={() =>
+                  useEditorStore.getState().updateSegment(selectedSegment.id, {
+                    zoom: 1,
+                    offsetX: 0,
+                    offsetY: 0,
+                    rotation: 0,
+                    cropLeft: 0,
+                    cropTop: 0,
+                    cropRight: 0,
+                    cropBottom: 0,
+                    opacity: 1,
+                    brightness: 0,
+                    contrast: 1,
+                    saturation: 1,
+                    gamma: 1,
+                    temperature: 0,
+                    vignette: 0,
+                  })
+                }
+                className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/10"
+              >
+                {t("editor.reset")}
+              </button>
+            </div>
+          )}
+
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
             <Volume2 size={12} /> {t("editor.audio")}
           </p>
@@ -1062,7 +1264,49 @@ export default function EditorApp({
                 onPlay={() => useEditorStore.getState().setPlaying(true)}
                 onPause={() => useEditorStore.getState().setPlaying(false)}
                 className="h-full w-full cursor-pointer object-contain"
+                style={
+                  selectedSegment
+                    ? {
+                        transform:
+                          `translate(${selectedSegment.offsetX * frame.w}px, ` +
+                          `${selectedSegment.offsetY * frame.h}px) ` +
+                          `scale(${selectedSegment.zoom}) rotate(${selectedSegment.rotation}deg)`,
+                        opacity: selectedSegment.opacity,
+                        clipPath:
+                          selectedSegment.cropLeft > 0 ||
+                          selectedSegment.cropTop > 0 ||
+                          selectedSegment.cropRight > 0 ||
+                          selectedSegment.cropBottom > 0
+                            ? `inset(${selectedSegment.cropTop * 100}% ${selectedSegment.cropRight * 100}% ${
+                                selectedSegment.cropBottom * 100
+                              }% ${selectedSegment.cropLeft * 100}%)`
+                            : undefined,
+                        filter:
+                          selectedSegment.brightness !== 0 ||
+                          selectedSegment.contrast !== 1 ||
+                          selectedSegment.saturation !== 1 ||
+                          selectedSegment.temperature !== 0
+                            ? `brightness(${1 + selectedSegment.brightness}) ` +
+                              `contrast(${selectedSegment.contrast}) ` +
+                              `saturate(${selectedSegment.saturation}) ` +
+                              (selectedSegment.temperature > 0
+                                ? `sepia(${selectedSegment.temperature * 0.5})`
+                                : `hue-rotate(${selectedSegment.temperature * 20}deg)`)
+                            : undefined,
+                      }
+                    : undefined
+                }
               />
+              {selectedSegment && selectedSegment.vignette > 0 && (
+                <div
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    background:
+                      "radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.9) 100%)",
+                    opacity: selectedSegment.vignette,
+                  }}
+                />
+              )}
               {project.overlays.map((o) => (
                 <OverlayLayer
                   key={o.id}

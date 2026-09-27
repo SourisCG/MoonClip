@@ -115,6 +115,21 @@ export const useEditorStore = create<EditorState>()(
             gainMix: 1,
             gainGame: 1,
             gainMic: 1,
+            zoom: 1,
+            offsetX: 0,
+            offsetY: 0,
+            rotation: 0,
+            cropLeft: 0,
+            cropTop: 0,
+            cropRight: 0,
+            cropBottom: 0,
+            opacity: 1,
+            brightness: 0,
+            contrast: 1,
+            saturation: 1,
+            gamma: 1,
+            temperature: 0,
+            vignette: 0,
           };
           p.segments.push(seg);
           s.selection = { kind: "segment", id: seg.id };
