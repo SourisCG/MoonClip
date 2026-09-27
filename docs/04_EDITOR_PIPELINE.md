@@ -48,11 +48,17 @@ Two separate pieces, by design:
   `http://127.0.0.1:<ephemeral>/m/<token>` with HTTP range support. The
   server starts on the first media request (never at boot), binds loopback
   only and serves exclusively paths the backend registered.
-- **Audio**: the 3 tracks (Mix/Game/Mic) are extracted once per clip to
-  `~/.cache/MoonClip/editor/<session>/` and shown as 3 synchronized
-  waveforms (`wavesurfer.js`) with per-track volume/mute/solo + music/uploads.
-  **Export always mixes down to ONE AAC track** (Medal parity), respecting the
-  editor mix. Temps are purged on close and stale sessions on boot.
+- **Audio (single clock)**: the 3 tracks (Mix/Game/Mic) are extracted once
+  per clip to `~/.cache/MoonClip/editor/<session>/`, decoded to AudioBuffers
+  and scheduled on ONE `AudioContext` (`src/editor/audioEngine.ts`): every
+  segment/track is an `AudioBufferSourceNode` through per-segment and per-track
+  `GainNode`s, so Mix/Game/Mic are fully modifiable live and cuts between
+  clips are sample-accurate. `ctx.currentTime` is the master clock for the
+  playhead, scrub bar and time readout; the `<video>` is muted and slaved
+  (corrective seek past 120 ms). Waveforms are drawn on canvas from the same
+  decoded buffers (no media element). **Export always mixes down to ONE AAC
+  track** (Medal parity), respecting the editor mix. Temps are purged on close
+  and stale sessions on boot.
 - **Export**: Rust builds a `filter_complex` graph and runs the ffmpeg sidecar
   with `-progress pipe:1` and cancel-by-kill; encoder chosen per vendor
   (`NVENC/QSV/AMF/VAAPI`, libx264 fallback). Non-WebView-playable sources
@@ -65,7 +71,7 @@ Two separate pieces, by design:
 |---|---|---|
 | `dnd-timeline` (headless, dnd-kit) | MIT | Timeline rows/items, resize, snapping, time axis, pan/zoom, drag-to-create |
 | `react-moveable` | MIT | Preview transform handles (drag/resize/rotate/snap/group) |
-| `wavesurfer.js` | BSD-3 | Stems + music waveforms and regions |
+| canvas 2D (own) | — | Stems waveforms drawn from the decoded buffers |
 | `zustand` + `zundo` + `immer` | MIT | Editor store + undo/redo |
 | `react-colorful` | MIT | Color pickers |
 | `@fontsource/*` | OFL | Bundled fonts for preview and libass `fontsdir` |

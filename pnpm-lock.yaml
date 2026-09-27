@@ -56,9 +56,6 @@ importers:
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.6.0
-      wavesurfer.js:
-        specifier: ^7.12.11
-        version: 7.12.11
       zundo:
         specifier: ^2.3.0
         version: 2.3.0(zustand@5.0.15(@types/react@19.2.18)(immer@11.1.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8)))
@@ -937,9 +934,6 @@ packages:
       yaml:
         optional: true
 
-  wavesurfer.js@7.12.11:
-    resolution: {integrity: sha512-Sx0yZIz7jRJ9J9p7UL+pl9y0UQBB6UN/XNo+R7Gy4tCR5xZI9jMyA0dnt1R8TMVSQ4LZ10SeB2HJYQ+dV2dPSA==}
-
   zundo@2.3.0:
     resolution: {integrity: sha512-4GXYxXA17SIKYhVbWHdSEU04P697IMyVGXrC2TnzoyohEAWytFNOKqOp5gTGvaW93F/PM5Y0evbGtOPF0PWQwQ==}
     peerDependencies:
@@ -1664,8 +1658,6 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
       jiti: 1.21.7
-
-  wavesurfer.js@7.12.11: {}
 
   zundo@2.3.0(zustand@5.0.15(@types/react@19.2.18)(immer@11.1.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8))):
     dependencies:

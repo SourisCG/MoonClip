@@ -109,15 +109,18 @@ function ScrubBar({
   );
 }
 
-/** Single source of truth for an overlay's transform: React renders exactly
- *  what Moveable produces, so the control box always hugs the content. */
-function overlayTransform(o: Overlay, frame: { w: number; h: number }): string {
-  const cx = o.x * frame.w;
-  const cy = o.y * frame.h;
-  return `translate(${cx}px, ${cy}px) translate(-50%, -50%) scale(${o.scale}) rotate(${o.rotation}deg)`;
+/** Fraction (or absolute) rotation snapped to 45° steps within `tolerance`. */
+function snapDegrees(rotation: number, tolerance = 7): number {
+  const snapped = Math.round(rotation / 45) * 45;
+  return Math.abs(rotation - snapped) <= tolerance ? snapped : rotation;
 }
 
-/** Absolutely-positioned text overlay on the preview frame. */
+/** Absolutely-positioned text overlay on the preview frame.
+ *
+ *  Position uses left/top minus half the MEASURED layout size instead of a
+ *  percentage translate, and the transform carries only scale+rotate: that is
+ *  a transform react-moveable parses cleanly, so its control box always hugs
+ *  the content (the old translate(-50%,-50%) confused it). */
 function OverlayView({
   overlay,
   frame,
@@ -131,9 +134,25 @@ function OverlayView({
 }) {
   const scale = frame.h > 0 ? frame.h / 1080 : 1;
   const isText = overlay.kind === "text";
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+    const measure = () => setSize({ w: el.offsetWidth, h: el.offsetHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [overlay.text, overlay.fontSize, overlay.kind]);
+
   return (
     <div
-      ref={(el) => refCb(overlay.id, el)}
+      ref={(el) => {
+        elRef.current = el;
+        refCb(overlay.id, el);
+      }}
       onClick={(e) => {
         e.stopPropagation();
         useEditorStore.getState().select({ kind: "overlay", id: overlay.id });
@@ -142,9 +161,9 @@ function OverlayView({
         selected ? "outline outline-1 outline-dashed outline-cyan-300/70" : ""
       }`}
       style={{
-        left: 0,
-        top: 0,
-        transform: overlayTransform(overlay, frame),
+        left: overlay.x * frame.w - size.w / 2,
+        top: overlay.y * frame.h - size.h / 2,
+        transform: `scale(${overlay.scale}) rotate(${overlay.rotation}deg)`,
         opacity: overlay.opacity,
         color: overlay.color,
         fontSize: `${Math.max(8, overlay.fontSize * scale)}px`,
@@ -500,6 +519,13 @@ export default function EditorApp({
     setFrame({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, [session]);
+
+  // Selecting an overlay mounts its element in the same commit; one extra
+  // render makes the ref available to Moveable.
+  const overlaySelId = selection?.kind === "overlay" ? selection.id : null;
+  useEffect(() => {
+    forceTick((n) => n + 1);
+  }, [overlaySelId]);
 
   // ---- Autosave ----------------------------------------------------------
   useEffect(() => {
@@ -929,8 +955,15 @@ export default function EditorApp({
                     lastScale.current = 1;
                     forceTick((n) => n + 1);
                   }}
-                  onRotate={({ rotation }) => {
-                    lastRotation.current = rotation;
+                  onRotate={({ target, transform, rotation }) => {
+                    const snapped = snapDegrees(rotation);
+                    lastRotation.current = snapped;
+                    // Apply the snapped rotation ourselves so what you see and
+                    // what gets stored always match.
+                    (target as HTMLElement).style.transform =
+                      snapped === rotation
+                        ? transform
+                        : transform.replace(/rotate\([^)]*\)/, `rotate(${snapped}deg)`);
                   }}
                   onRotateEnd={() => {
                     useEditorStore

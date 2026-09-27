@@ -64,7 +64,8 @@ component shipped inside MoonClip installers and what the GPL requires for each.
 
 ## Editor frontend libraries (lazy chunk, only loaded while editing)
 
-- **wavesurfer.js** — BSD-3. Waveforms/regions for the 3 audio stems + music.
+- **Web Audio API (browser)** — native. Single-clock playback/mixing of the
+  three stems; waveforms are canvas-rendered from the decoded buffers.
 - **dnd-timeline** — MIT (headless, built on dnd-kit). Timeline rows/items,
   resize, snapping, time axis, pan/zoom, drag-to-create.
 - **react-moveable** — MIT. Preview transform handles (drag/resize/rotate/
