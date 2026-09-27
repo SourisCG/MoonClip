@@ -323,7 +323,7 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
             .into_iter()
             .find(|c| c.id == clip_id)
             .ok_or_else(|| "clip not found".to_string())?;
-        let project = load_project(app, clip_id).unwrap_or_else(|| {
+        let mut project = load_project(app, clip_id).unwrap_or_else(|| {
             let name = Path::new(&clip.file_name)
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -331,6 +331,10 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
                 .to_string();
             project::default_project(clip_id, &name, clip.duration_ms)
         });
+        if project::normalize_default_gains(&mut project) {
+            eprintln!("[moonclip] editor: normalized legacy gain defaults for {clip_id}");
+            let _ = save_project(app, &project);
+        }
         let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(app)?;
         let encoders = encoders::detect(&ffmpeg).await;
         (clip, project, encoders)

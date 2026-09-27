@@ -136,7 +136,7 @@ function Lane({
       <div
         ref={setNodeRef}
         style={rowStyle}
-        className="border-b border-white/5 bg-black/20"
+        className="overflow-hidden border-b border-white/5 bg-black/20"
       >
         {children}
       </div>

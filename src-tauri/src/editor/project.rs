@@ -235,6 +235,24 @@ pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProje
     }
 }
 
+/// Fix projects saved before the mix/stem defaults were corrected: with all
+/// three gains at 1.0 the preview played the same audio twice (track 1 is the
+/// pre-mixed Game+Mic). Returns true when something changed.
+pub fn normalize_default_gains(project: &mut EditProject) -> bool {
+    let mut changed = false;
+    for seg in &mut project.segments {
+        if (seg.gain_mix - 1.0).abs() < f64::EPSILON
+            && (seg.gain_game - 1.0).abs() < f64::EPSILON
+            && (seg.gain_mic - 1.0).abs() < f64::EPSILON
+        {
+            seg.gain_game = 0.0;
+            seg.gain_mic = 0.0;
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +279,21 @@ mod tests {
         // A gap (segment moved right) extends the timeline too.
         p.segments[0].timeline_start_ms = 1000;
         assert_eq!(p.duration_ms(), 1800);
+    }
+
+    #[test]
+    fn normalization_fixes_old_all_one_projects_only() {
+        let mut p = default_project("c", "n", 1000);
+        p.segments[0].gain_game = 1.0;
+        p.segments[0].gain_mic = 1.0;
+        assert!(normalize_default_gains(&mut p));
+        assert_eq!(p.segments[0].gain_game, 0.0);
+        assert_eq!(p.segments[0].gain_mic, 0.0);
+        // Already-fine projects are untouched.
+        assert!(!normalize_default_gains(&mut p));
+        // Deliberate remixes survive.
+        p.segments[0].gain_game = 0.5;
+        assert!(!normalize_default_gains(&mut p));
     }
 
     #[test]

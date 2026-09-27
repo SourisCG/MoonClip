@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import Moveable from "react-moveable";
@@ -107,6 +107,14 @@ function ScrubBar({
   );
 }
 
+/** Single source of truth for an overlay's transform: React renders exactly
+ *  what Moveable produces, so the control box always hugs the content. */
+function overlayTransform(o: Overlay, frame: { w: number; h: number }): string {
+  const cx = o.x * frame.w;
+  const cy = o.y * frame.h;
+  return `translate(${cx}px, ${cy}px) translate(-50%, -50%) scale(${o.scale}) rotate(${o.rotation}deg)`;
+}
+
 /** Absolutely-positioned text overlay on the preview frame. */
 function OverlayView({
   overlay,
@@ -132,9 +140,9 @@ function OverlayView({
         selected ? "outline outline-1 outline-dashed outline-cyan-300/70" : ""
       }`}
       style={{
-        left: `${overlay.x * 100}%`,
-        top: `${overlay.y * 100}%`,
-        transform: `translate(-50%, -50%) scale(${overlay.scale}) rotate(${overlay.rotation}deg)`,
+        left: 0,
+        top: 0,
+        transform: overlayTransform(overlay, frame),
         opacity: overlay.opacity,
         color: overlay.color,
         fontSize: `${Math.max(8, overlay.fontSize * scale)}px`,
@@ -456,6 +464,53 @@ export default function EditorApp({
     applyGains();
   }, [applyGains, session]);
 
+  // Waveform scale: wavesurfer stretches the WHOLE stem over its container,
+  // while the timeline maps only the visible window; without pinning the
+  // width the waves drift from the ruler/playhead. The plate width matches
+  // `valueToPixels(sourceDuration)` and it is offset so source time lines up
+  // with timeline time (correct for the first segment of each source; later
+  // splits of the same source reuse the same plate).
+  const [laneWidth, setLaneWidth] = useState(0);
+  useEffect(() => {
+    const el = laneRefs.current[0];
+    const parent = el?.parentElement ?? null;
+    if (!parent) return;
+    const ro = new ResizeObserver(() => setLaneWidth(parent.clientWidth));
+    ro.observe(parent);
+    setLaneWidth(parent.clientWidth);
+    return () => ro.disconnect();
+  }, [session]);
+
+  const waveSourceId = useMemo(() => {
+    const first = project?.segments
+      .slice()
+      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
+    if (!first) return null;
+    // Prefer the source under the playhead (multi-clip), else the first.
+    const under = project ? segmentAt(project.segments, playhead) : undefined;
+    return (under ?? first).sourceClipId;
+  }, [project, playhead]);
+
+  useEffect(() => {
+    if (!laneWidth || !waveSourceId) return;
+    const store = useEditorStore.getState();
+    const source = store.sources[waveSourceId];
+    const plate = store.project?.segments
+      .filter((s) => s.sourceClipId === waveSourceId)
+      .sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
+    if (!source || !plate) return;
+    const pxPerMs = laneWidth / Math.max(1000, visibleMs);
+    const width = Math.max(8, source.durationMs * pxPerMs);
+    const offset = (plate.timelineStartMs - plate.inMs) * pxPerMs;
+    laneRefs.current.forEach((el, i) => {
+      if (!el) return;
+      const hasStem = Boolean(source.stems[i]);
+      el.style.width = `${width}px`;
+      el.style.marginLeft = `${offset}px`;
+      el.style.opacity = hasStem ? "1" : "0.15";
+    });
+  }, [laneWidth, visibleMs, waveSourceId, session, project]);
+
   // Frame size (font scaling / overlay coordinates).
   useEffect(() => {
     const el = frameRef.current;
@@ -660,7 +715,7 @@ export default function EditorApp({
           >
             <Trash2 size={15} />
           </button>
-          <button onClick={() => setVisibleMs((v) => Math.max(1000, v / 1.6))} className={iconBtn} title={t("editor.zoom_in")}>
+          <button onClick={() => setVisibleMs((v) => Math.max(4000, v / 1.6))} className={iconBtn} title={t("editor.zoom_in")}>
             <ZoomIn size={15} />
           </button>
           <button
@@ -861,8 +916,9 @@ export default function EditorApp({
                   keepRatio
                   origin={false}
                   onDrag={({ target, transform }) => {
-                    (target as HTMLElement).style.transform =
-                      `translate(-50%, -50%) ${transform}`;
+                    // Moveable already decomposed our transform (translate +
+                    // centering + scale + rotate): keep it verbatim.
+                    (target as HTMLElement).style.transform = transform;
                   }}
                   onDragEnd={({ target }) => {
                     const frect = frameRef.current?.getBoundingClientRect();
@@ -881,6 +937,7 @@ export default function EditorApp({
                       scale: Math.max(0.1, (selectedOverlay?.scale ?? 1) * lastScale.current),
                     });
                     lastScale.current = 1;
+                    forceTick((n) => n + 1);
                   }}
                   onRotate={({ rotation }) => {
                     lastRotation.current = rotation;
@@ -889,6 +946,7 @@ export default function EditorApp({
                     useEditorStore
                       .getState()
                       .updateOverlay(selection!.id, { rotation: lastRotation.current });
+                    forceTick((n) => n + 1);
                   }}
                 />
               )}
