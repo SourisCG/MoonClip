@@ -167,6 +167,17 @@
     "delete": "Delete",
     "no_identity": "Window not identified: use Edit to pick it again."
   },
+  "trim": {
+    "title": "Trim clip",
+    "precise": "Precise (re-encode)",
+    "hint": "Lossless cuts at the previous keyframe (±1–2 s); Precise is exact.",
+    "save": "Save copy",
+    "saving_short": "Trimming…",
+    "saving": "Trimming with ffmpeg, do not close the app…",
+    "cancel": "Cancel",
+    "play": "Play",
+    "pause": "Pause"
+  },
   "common": { "loading": "Loading…", "delete": "Delete" },
   "rec": {
     "start": "Start buffer",

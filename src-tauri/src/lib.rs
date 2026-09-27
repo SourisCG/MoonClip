@@ -531,6 +531,7 @@ pub fn run() {
             commands::repair_obs_config,
             commands::list_audio_devices,
             commands::preview_track,
+            commands::trim_clip,
             commands::open_clip_external,
             commands::video_options,
             commands::test_hardware,

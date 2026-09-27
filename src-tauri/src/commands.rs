@@ -2335,6 +2335,122 @@ pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// Clip editing (Phase 5)
+// ---------------------------------------------------------------------------
+
+/// Gallery quick trim: lossless stream copy (fast, keyframe-aligned) or a
+/// short precise re-encode (frame-exact, keeps every audio track). Always
+/// creates a NEW clip; the source file is never modified.
+#[tauri::command]
+pub async fn trim_clip(
+    app: AppHandle,
+    clip_id: String,
+    start_ms: i64,
+    end_ms: i64,
+    precise: bool,
+) -> Result<ClipRecord, String> {
+    let db = app.state::<DbState>();
+    let clip = db
+        .list_clips()?
+        .into_iter()
+        .find(|c| c.id == clip_id)
+        .ok_or_else(|| "clip not found".to_string())?;
+    let base = db.clips_dir()?;
+    let input = base.join(&clip.file_name);
+    if !input.is_file() {
+        return Err(format!("clip file missing: {}", clip.file_name));
+    }
+    // Clamp to the measured duration; a tiny selection is a UI bug.
+    let total = clip.duration_ms.max(0);
+    let start = start_ms.clamp(0, (total - 100).max(0));
+    let end = end_ms.clamp(start + 100, total.max(start + 100));
+    if end - start < 100 {
+        return Err("selection too short to trim".into());
+    }
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("bad clip file name")?
+        .to_string();
+    let ext = input
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mp4")
+        .to_ascii_lowercase();
+    let taken: std::collections::HashSet<String> = db
+        .list_clips()?
+        .into_iter()
+        .map(|c| c.file_name)
+        .collect();
+    let output = crate::editor::trim::unique_trim_path(&base, &stem, &ext, &taken);
+    let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
+    let mode = if precise {
+        crate::editor::trim::TrimMode::Precise
+    } else {
+        crate::editor::trim::TrimMode::Lossless
+    };
+    crate::editor::trim::run_trim(
+        &app,
+        &ffmpeg,
+        &crate::editor::trim::TrimSpec {
+            clip_id: &clip_id,
+            input: &input,
+            output: &output,
+            start_ms: start,
+            end_ms: end,
+            mode,
+        },
+    )
+    .await?;
+    if !output.is_file() {
+        return Err("trim produced no output file".into());
+    }
+    let out_name = output
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or("bad output file name")?
+        .to_string();
+    let out_stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("bad output file name")?
+        .to_string();
+    let thumb_name = format!("thumb_{out_stem}.jpg");
+    let thumb_path = base.join(&thumb_name);
+    if let Err(e) =
+        crate::editor::ffmpeg::make_thumbnail(&ffmpeg, &output, &thumb_path, 0.3).await
+    {
+        let _ = tokio::fs::remove_file(&output).await;
+        return Err(e);
+    }
+    let size = tokio::fs::metadata(&output)
+        .await
+        .map_err(|e| format!("cannot stat trimmed clip: {e}"))?
+        .len() as i64;
+    let duration_ms = crate::editor::ffmpeg::probe_duration_ms(&ffmpeg, &output)
+        .await
+        .unwrap_or(end - start);
+    let record = db.insert_clip(
+        &out_name,
+        &thumb_name,
+        &clip.game_title,
+        duration_ms,
+        size,
+    )?;
+    eprintln!(
+        "[moonclip] trim {} -> {} ({}ms..{}ms, {})",
+        clip.file_name,
+        out_name,
+        start,
+        end,
+        if precise { "precise" } else { "lossless" }
+    );
+    crate::cue::play_ding();
+    let _ = app.emit("moonclip://clip-saved", &record);
+    Ok(record)
+}
+
+// ---------------------------------------------------------------------------
 // Hardware test (first-run wizard, optional)
 // ---------------------------------------------------------------------------
 

@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { thumbnailUrl } from "../../lib/media";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Clapperboard, FolderOpen, Star, Trash2 } from "lucide-react";
+import { Clapperboard, FolderOpen, Scissors, Star, Trash2 } from "lucide-react";
+import { TrimPanel } from "./TrimPanel";
 import { useClips } from "../../hooks/useClips";
 import type { ClipMetadata } from "../../types";
 
@@ -90,6 +91,7 @@ function timeNow() {
 interface RowActions {
   onToggleFavorite: (id: string) => void;
   onDelete: (id: string) => void;
+  onTrim: (clip: ClipMetadata) => void;
   onError: (msg: string) => void;
   onSuccess: () => void;
 }
@@ -143,6 +145,13 @@ function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions })
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <button
+              onClick={() => actions.onTrim(clip)}
+              className={iconBtn}
+              title={t("trim.title")}
+            >
+              <Scissors size={15} />
+            </button>
             <button onClick={() => void reveal()} className={iconBtn} title={t("gallery.reveal")}>
               <FolderOpen size={15} />
             </button>
@@ -174,6 +183,7 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
   const { clips, loading, refresh, toggleFavorite, deleteClip, purgeMissing } = useClips();
   const [lastError, setLastError] = useState<string | null>(null);
   const [purged, setPurged] = useState<number | null>(null);
+  const [trimClip, setTrimClip] = useState<ClipMetadata | null>(null);
 
   useEffect(() => {
     if (refreshToken > 0) void refresh();
@@ -192,6 +202,7 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
         () => setLastError(null),
         (e) => fail(String(e)),
       ),
+    onTrim: (clip) => setTrimClip(clip),
     onError: fail,
     onSuccess: () => setLastError(null),
   };
@@ -231,6 +242,16 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
 
   return (
     <>
+      {trimClip && (
+        <TrimPanel
+          clip={trimClip}
+          onClose={() => setTrimClip(null)}
+          onSaved={() => {
+            setLastError(null);
+            void refresh();
+          }}
+        />
+      )}
       <div className="mb-2 flex flex-wrap items-center gap-2 sm:gap-3">
         {lastError && (
           <p className="flex-1 truncate font-mono text-xs text-red-400" title={lastError}>

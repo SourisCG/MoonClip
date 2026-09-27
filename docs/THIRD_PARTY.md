@@ -62,6 +62,31 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   PipeWire portal on Linux). `game_capture` (the hooking source) is forbidden
   and asserted in tests. Audio comes from WASAPI loopback / PulseAudio.
 
+## Editor frontend libraries (lazy chunk, only loaded while editing)
+
+- **wavesurfer.js** — BSD-3. Waveforms/regions for the 3 audio stems + music.
+- **dnd-timeline** — MIT (headless, built on dnd-kit). Timeline rows/items,
+  resize, snapping, time axis, pan/zoom, drag-to-create.
+- **react-moveable** — MIT. Preview transform handles (drag/resize/rotate/
+  snap/group) for text, stickers and images.
+- **zustand / zundo / immer** — MIT. Editor state and undo/redo.
+- **react-colorful** — MIT. Color pickers.
+- **@fontsource fonts** — SIL OFL. Bundled fonts used by the preview and by
+  libass (`fontsdir`) during export.
+- **lucide-react** — ISC. Icons (already shipped).
+
+None of these are loaded by the main bundle: they live in the lazy editor
+chunk and are unmounted when the editor closes.
+
+## GIF search providers (network, no bundled code)
+
+- **Openverse API** (anonymous tier: 1 request/second, page size ≤ 20) and
+  **Wikimedia Commons API** as fallback. Both are public and need no
+  registration. Results are CC/public-domain: the picker shows author and
+  license (CC-BY requires attribution).
+- Giphy/Tenor/Klipy are intentionally not used: they require registered API
+  keys and Google shut down the Tenor API in June 2026.
+
 ## FFmpeg (editor pipeline + thumbnails/probes)
 
 - **What:** `ffmpeg` CLI sidecar for thumbnails, duration probes, lossless cuts

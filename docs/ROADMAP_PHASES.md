@@ -26,10 +26,20 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 - Frontend `AppManager` + process picker (running / click-window / browse).
 - **Accept:** native + Wine/Proton + Minecraft report correct titles; custom app overrides duration.
 
-## Phase 5 — Lazy editor + FFmpeg
+## Phase 5 — Editor (quick trim + Medal-style advanced editor)
 
-- `ClipEditor` lazy + Wavesurfer Regions + dual waveforms + `destroy` + temp purge; Rust `ffmpeg.rs` (thumb, extract, lossless, vertical HW, remix).
-- **Accept:** landscape <1s lossless; vertical 1080x1920 HW; RAM back to baseline on close.
+Detail in `04_EDITOR_PIPELINE.md`. Two components:
+
+- **Quick trim (E1):** gallery panel + one ffmpeg run (lossless `-c copy`,
+  precise libx264). New clip indexed with thumbnail.
+- **Advanced editor (E2–E6):** in-app **maximized** Medal-style view,
+  lazy-loaded and unmounted on close (nothing resident when closed). Timeline
+  (`dnd-timeline`), preview overlays (`react-moveable`), text/stickers/effects,
+  multi-clip + transitions, **3 audio tracks visible** (wavesurfer) and
+  **single-track audio export**; project JSON with autosave; export through the
+  ffmpeg sidecar with progress/cancel; libx264 fallback for encoders.
+- **Accept (E1):** lossless <1 s; precise exact; 3 audio tracks preserved.
+  **Accept (E6):** RAM back to baseline on close; export E2E 1 video + 1 audio.
 
 ## Phase 6 — Sharing (Drive + social)
 

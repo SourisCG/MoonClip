@@ -21,12 +21,21 @@ Any phase with per-OS code is implemented and tested on Linux first, then
 in reverse whenever needed. No phase closes with an untested platform stub.
 Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 | 4 | Game detection + launchers + custom apps | ⬜ pending | — | Native + Wine/Proton + Minecraft detected |
-| 5 | Lazy editor + FFmpeg pipeline | ⬜ pending | — | Lossless <1s, vertical HW, no leak |
+| 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | 🚧 in progress | — | E1 lossless <1s + precise exact + 3 tracks; E6 RAM baseline + 1 audio export |
 | 6 | Drive + social sharing | ⬜ pending | — | Public link copied + notified |
 | 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
 
 ## Log
 
+- **E0+E1 — editor foundation + quick trim (2026-09-26)** — `docs/04_EDITOR_PIPELINE.md`
+  rewritten for the two-component editor (in-app maximized lazy advanced
+  editor + light quick trim), tooling/licenses audited
+  (`dnd-timeline`/`react-moveable`/`zustand+zundo`/`react-colorful`/fonts,
+  ffmpeg sidecar), GIF search via Openverse/Wikimedia (no registration; Tenor
+  API is gone). Quick trim shipped: `editor/trim.rs` (lossless `-c copy` /
+  precise libx264 keeping all 3 audio tracks), `trim_clip` command with
+  `moonclip://edit-progress` events, gallery `TrimPanel` with dual-handle bar
+  and loop-in-selection preview; live ffmpeg acceptance test.
 - **V3.6 — identity & isolation (2026-09-24)** — the engine is invisible as
   "OBS" to the user and to other apps (Discord scans `/proc`):
   - **Reproducible patch set** `build-aux/patches/0001..0007`, applied by

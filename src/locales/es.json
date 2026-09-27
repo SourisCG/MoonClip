@@ -166,6 +166,17 @@
     "delete": "Borrar",
     "no_identity": "Sin ventana identificada: usa Editar para elegirla de nuevo."
   },
+  "trim": {
+    "title": "Recortar clip",
+    "precise": "Preciso (re-encode)",
+    "hint": "Sin pérdida corta en el keyframe anterior (±1–2 s); Preciso es exacto.",
+    "save": "Guardar copia",
+    "saving_short": "Recortando…",
+    "saving": "Recortando con ffmpeg, no cierres la app…",
+    "cancel": "Cancelar",
+    "play": "Reproducir",
+    "pause": "Pausar"
+  },
   "common": { "loading": "Cargando…", "delete": "Eliminar" },
   "rec": {
     "start": "Iniciar búfer",

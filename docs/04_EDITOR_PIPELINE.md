@@ -1,65 +1,116 @@
-# 04 — Editor Pipeline (Lazy + FFmpeg)
+# 04 — Editor Pipeline (Quick trim + Advanced editor)
 
-Goal: Medal-style trim (In/Out) with waveform. No NLE. Preview in web, processing in Rust+FFmpeg.
+Two separate pieces, by design:
 
-## 1. References (study, do not copy blindly)
+1. **Quick trim** — light panel inside the gallery. No timeline, no editor
+   chunk, no background process: `<video>` + In/Out handles + one ffmpeg run.
+2. **Advanced editor** — a Medal-style editor that opens **as a maximized view
+   inside the app window** (the window is maximized on open and the previous
+   size is restored on close). It is lazy-loaded: `React.lazy()` chunk that
+   only exists while the editor is open, and all its libraries (timeline,
+   canvas transforms, waveforms, undo) load with it. Nothing of the editor
+   runs or is resident when it is closed.
 
-- **Cap (CapSoftware/Cap, AGPL-3.0):** Tauri+React+FFmpeg architecture, player↔Rust IPC layout.
-- **LosslessCut (mifi/lossless-cut, GPL-3.0):** exact FFmpeg cut args, keyframe handling.
-- MoonClip is GPL-3.0-compatible (bundled OBS Studio is GPL-2.0-or-later, shipped as a separate process), so studying both is license-safe. Prefer MIT/Apache libs at runtime (`wavesurfer.js` BSD-3).
+## 1. Quick trim (Phase E1)
 
-## 2. Frontend: `ClipEditor.tsx` (must be lazy)
+- Rust `editor/trim.rs` builds one ffmpeg argument list (pure, unit-tested):
+  - `lossless` (default): `-ss IN -i src -t DUR -c copy -avoid_negative_ts make_zero`.
+    Sub-second; the head snaps to the previous keyframe (documented 0–2 s
+    tolerance, same rule as LosslessCut).
+  - `precise`: `-map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 18
+    -c:a aac -b:a 192k` — frame-exact and **keeps every audio track**
+    (Mix/Game/Mic). libx264 is in both bundled GPL sidecars.
+- `-progress pipe:1` → `moonclip://edit-progress` events; cancel by dropping
+  the child (future). Output is a NEW clip (`<stem>_trim.mp4`), indexed with
+  probe + thumbnail and emitted as `moonclip://clip-saved`.
+- UI `components/gallery/TrimPanel.tsx`: video preview, dual-handle bar,
+  loop-inside-selection playback, precise toggle, progress bar.
+- Acceptance: lossless trim of a real clip produces the cut in <1 s; precise
+  is within one frame; the three audio tracks survive (probe).
 
-```tsx
-const ClipEditor = lazy(() => import('./components/editor/ClipEditor'));
-// <Suspense fallback={...}><ClipEditor clip={editingClip} onClose={()=>setEditingClip(null)} /></Suspense>
-```
+## 2. Advanced editor (Phases E2–E6)
 
-- `<video src={convertFileSrc(clipPath)} muted={false}>` — HW-decoded by WebView (NVDEC/VA-API).
-- `wavesurfer.js v7 + RegionsPlugin`: one region draggable/resizable, `region.on('update-end')` → `onRangeChange(start,end)`.
-- Dual-track preview problem: HTML `<video>` plays only track 0:1. Solution: on open, Rust extracts audios to temp (`/tmp/moonclip/*.aac`), React loads **two** Wavesurfer instances (game + mic) with independent volume/mute sliders; keep `<video muted>` and sync web audio to `video.currentTime`.
-- Cleanup (mandatory):
-  ```tsx
-  useEffect(() => {
-    const ws = WaveSurfer.create({...}); ws.load(url);
-    return () => { ws.destroy(); };
-  }, [clip.id]);
-  // + invoke('cleanup_editing_session')
-  ```
-- Alternative isolation: secondary Tauri window `editor-window` + `window.destroy()` on close (kills WebView process).
+### Architecture
 
-## 3. Backend: `editor/ffmpeg.rs` (sidecar CLI, no libav linking)
+- **In-app maximized view** (like Medal's "Open in Editor"): switching to the
+  editor fills the app window; closing unmounts the chunk and calls
+  `cleanup_editing_session` (temps, running exports). RAM returns to gallery
+  baseline.
+- **Project** = versioned JSON (serde) stored in app data (`edits/<id>.json`),
+  autosaved with debounce; reopening restores the timeline. Exports write a
+  new clip into the library.
+- **Preview**: `<video muted>` (hardware-decoded by the WebView) + DOM
+  overlays in normalized coordinates with `react-moveable` handles; multi-clip
+  uses a virtual player that swaps sources at cuts; transitions previewed as
+  canvas/DOM cross-fades.
+- **Audio**: the 3 tracks (Mix/Game/Mic) are extracted once per clip to
+  `~/.cache/MoonClip/editor/<session>/` and shown as 3 synchronized
+  waveforms (`wavesurfer.js`) with per-track volume/mute/solo + music/uploads.
+  **Export always mixes down to ONE AAC track** (Medal parity), respecting the
+  editor mix. Temps are purged on close and stale sessions on boot.
+- **Export**: Rust builds a `filter_complex` graph and runs the ffmpeg sidecar
+  with `-progress pipe:1` and cancel-by-kill; encoder chosen per vendor
+  (`NVENC/QSV/AMF/VAAPI`, libx264 fallback). Non-WebView-playable sources
+  (HEVC/AV1) get an H.264 proxy for preview only; exports always use the
+  original.
 
-Sidecar binary per arch in `src-tauri/binaries/` (`ffmpeg-x86_64-pc-windows-msvc.exe`, `ffmpeg-x86_64-unknown-linux-gnu`). Static builds: BtbN `win64-gpl` / `linux64-gpl`. Keeps LGPL/GPL boundary at process level.
+### Tools (licenses audited in `THIRD_PARTY.md`)
 
-Commands:
+| Tool | License | Role |
+|---|---|---|
+| `dnd-timeline` (headless, dnd-kit) | MIT | Timeline rows/items, resize, snapping, time axis, pan/zoom, drag-to-create |
+| `react-moveable` | MIT | Preview transform handles (drag/resize/rotate/snap/group) |
+| `wavesurfer.js` | BSD-3 | Stems + music waveforms and regions |
+| `zustand` + `zundo` + `immer` | MIT | Editor store + undo/redo |
+| `react-colorful` | MIT | Color pickers |
+| `@fontsource/*` | OFL | Bundled fonts for preview and libass `fontsdir` |
+| `lucide-react` | ISC | Icons |
+| ffmpeg sidecar (BtbN GPL) | GPL | Render: drawtext/libass, overlay, zoompan, rotate, chromakey, eq, xfade, amix, gif |
 
-```bash
-# Thumbnail
-ffmpeg -ss 00:00:01 -i input.mp4 -vframes 1 -q:v 2 thumb.jpg
-# Temp audio extract (track layout is 1=mix, 2=game, 3=mic — NOT game/mic)
-ffmpeg -i clip.mp4 -map 0:1 /tmp/audio_mix.aac -map 0:2 /tmp/audio_game.aac -map 0:3 /tmp/audio_mic.aac
-# Lossless trim (default landscape)
-ffmpeg -ss {IN} -to {OUT} -accurate_seek -i input.mp4 -c copy output.mp4
-# Keep only game track
-ffmpeg -i clip.mp4 -map 0:v -map 0:1 -c copy export.mp4
-# Remix volumes for social (single stereo, from game+mic stems 0:2/0:3)
-ffmpeg -i clip.mp4 -filter_complex "[0:2]volume=0.7[a1];[0:3]volume=1.5[a2];[a1][a2]amix=inputs=2:duration=longest[aout]" -map 0:v -map "[aout]" -c:v copy -c:a aac export_social.mp4
-# Vertical 9:16 blurred (TikTok/Shorts, HW encode per vendor: nvenc/qsv/amf —
-# see os::transcode_encoder; never assume nvenc on user machines)
-ffmpeg -ss {IN} -to {OUT} -i input.mp4 -lavfi "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2" -c:v h264_nvenc -preset p4 output_tiktok.mp4
-# Use h264_nvenc / h264_qsv / h264_amf (or hevc variants) depending on probe; fallback libx264 only if no HW.
-```
+Discarded: GES/GStreamer (packaging + native preview sink on Wayland), MLT
+(bindings abandoned), libav linking (sidecar rule), Konva (DOM + Moveable is
+enough), in-browser WebCodecs (optional future accelerator only).
 
-## 4. Keyframe (I-frame) gotcha
+### Medal → ffmpeg mapping
 
-H.264/H.265 stores full images only on keyframes (every 1–2s). Cutting `-c copy` off-keyframe → frozen/black head.
+trim/split/duplicate → `trim/concat`; speed → `setpts/atempo`; freeze →
+`tpad/loop`; zoom/pos/rotation keyframes → `overlay/zoompan/rotate` with `t`
+expressions; crop → `crop/scale`; filters → `eq/curves/colorbalance/hue`;
+chroma/alpha → `chromakey/despill/format=rgba`; text → **ASS/libass** (font,
+color, stroke, highlight, `\fad/\move/\t`); stickers/GIFs → `overlay` with
+`enable` + expressions (GIF as its own input); transitions → `xfade`; audio →
+`volume/amix/pan/adelay` to **1 track**; export → `zscale` + resolution/FPS/
+bitrate preset.
 
-- MVP: `-accurate_seek` (seek to prior keyframe, no hang) + document 0–1s tolerance.
-- Optional smart-cut: re-encode head GOP only. Simpler: full HW re-encode for <60s clips (~1.5s with NVENC/VA-API) when ms-exactness required.
+### GIF search (no registration)
 
-## 5. Acceptance (Phase 5)
+`Openverse` (anonymous: 1 req/s, page ≤ 20, CC-licensed GIFs) with Wikimedia
+Commons fallback. Author/license is shown in the picker (CC-BY requires
+attribution). Giphy/Tenor/Klipy are out: all require an API key and Google
+**shut down the Tenor API in June 2026**.
 
-- [ ] Landscape trim exports <1s, no quality loss (`-c copy` verified via `ffprobe`).
-- [ ] Vertical preset produces centered 1080x1920 with blurred bg via HW.
-- [ ] Closing editor returns RAM to gallery baseline (no Wavesurfer leak, temps purged).
+### Sub-phases
+
+- **E1** Quick trim (done when lossless <1 s, precise exact, 3 tracks kept).
+- **E2** In-app maximized editor view + project JSON + single-clip timeline
+  (trim/split/duplicate, undo/redo, Ctrl+K/S/D) + export presets with
+  progress/cancel.
+- **E3** Overlays: text (all properties + entrance/exit/effects), local
+  stickers/images/GIFs, upload, Openverse search, Moveable interactions.
+- **E4** Effects: speed 0.25x+, freeze, zoom/crop/rotate keyframes, filters,
+  chroma, opacity.
+- **E5** Multi-clip + transitions + 3-stem mixing and music → 1-track export.
+- **E6** Polish: autosave/reopen, full hotkeys, complete export dialog, E2E
+  and cross-platform close (Linux + Windows).
+
+Every sub-phase: Rust golden-arg tests for the graph, `cargo test/clippy`,
+`pnpm build`, and an E2E export of a 3 s clip asserting 1 video + 1 audio.
+
+## 3. References (study only, never copy)
+
+- **Cap (CapSoftware/Cap, AGPL-3.0):** Tauri+React+FFmpeg architecture. AGPL
+  code cannot be relicensed into this GPL-3 project: read for ideas only.
+- **LosslessCut (mifi/lossless-cut, GPL-3.0):** exact cut args, keyframe
+  handling.
+- **Medal editor (proprietary):** UX target only — in-app maximized editor,
+  multi-track timeline, text/stickers/effects, single-audio export.
