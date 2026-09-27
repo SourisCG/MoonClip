@@ -43,6 +43,18 @@ function fmt(ms: number) {
   return `${m}:${(s % 60).toFixed(1).padStart(4, "0")}`;
 }
 
+/** Library clips grouped by game folder (for the add-clip picker). */
+function groupLibrary(clips: ClipMetadata[]): { key: string; clips: ClipMetadata[] }[] {
+  const map = new Map<string, ClipMetadata[]>();
+  for (const c of clips) {
+    const key = c.folder || "__flat__";
+    const list = map.get(key);
+    if (list) list.push(c);
+    else map.set(key, [c]);
+  }
+  return [...map.entries()].map(([key, list]) => ({ key, clips: list }));
+}
+
 const segmentAt = (segments: Segment[], ms: number) =>
   segments.find(
     (s) => ms >= s.timelineStartMs && ms < s.timelineStartMs + segmentDurationMs(s),
@@ -1717,26 +1729,36 @@ export default function EditorApp({
               {library.filter((c) => c.exists).length === 0 && (
                 <p className="text-xs text-slate-500">{t("editor.no_clips")}</p>
               )}
-              {library
-                .filter((c) => c.exists)
-                .slice(0, 60)
-                .map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => {
-                      setShowLibrary(false);
-                      void addClip(c);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-1.5 text-left text-xs text-slate-200 transition hover:bg-cyan-500/10"
-                    title={c.file_name}
-                  >
-                    <Plus size={13} className="shrink-0 text-cyan-300" />
-                    <span className="min-w-0 flex-1 truncate">{c.game_title}</span>
-                    <span className="font-mono text-[10px] text-slate-500">
-                      {fmt(c.duration_ms)}
-                    </span>
-                  </button>
-                ))}
+              {groupLibrary(library.filter((c) => c.exists)).map((group) => (
+                <div key={group.key}>
+                  <p className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-500">
+                    {group.key === "__flat__"
+                      ? t("gallery.unfiled")
+                      : group.key === "Unknown"
+                        ? t("gallery.no_game")
+                        : group.key}
+                  </p>
+                  {group.clips.slice(0, 60).map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setShowLibrary(false);
+                        void addClip(c);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-1.5 text-left text-xs text-slate-200 transition hover:bg-cyan-500/10"
+                      title={c.file_name}
+                    >
+                      <Plus size={13} className="shrink-0 text-cyan-300" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {c.file_name.split("/").pop() ?? c.file_name}
+                      </span>
+                      <span className="font-mono text-[10px] text-slate-500">
+                        {fmt(c.duration_ms)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
             </div>
           </div>
         </div>

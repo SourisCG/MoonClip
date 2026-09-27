@@ -56,23 +56,32 @@ pub fn sanitize_game_folder(name: &str) -> String {
     cleaned
 }
 
+/// Existing folder matching `desired` (case-insensitive), without creating
+/// anything. Used to link registrations that predate `clips_folder`.
+pub fn find_existing_folder(base: &Path, desired: &str) -> Option<String> {
+    let sanitized = sanitize_game_folder(desired);
+    let entries = std::fs::read_dir(base).ok()?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if name.to_lowercase() == sanitized.to_lowercase() {
+            return Some(name);
+        }
+    }
+    None
+}
+
 /// Existing folder for `desired` (case-insensitive) or a fresh one. Returns
 /// the folder NAME as it exists on disk. Never deletes anything.
 pub fn ensure_game_folder(base: &Path, desired: &str) -> Result<String, String> {
-    let sanitized = sanitize_game_folder(desired);
-    if let Ok(entries) = std::fs::read_dir(base) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            if !entry.path().is_dir() {
-                continue;
-            }
-            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-                continue;
-            };
-            if name.to_lowercase() == sanitized.to_lowercase() {
-                return Ok(name);
-            }
-        }
+    if let Some(existing) = find_existing_folder(base, desired) {
+        return Ok(existing);
     }
+    let sanitized = sanitize_game_folder(desired);
     let dir = base.join(&sanitized);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("cannot create game folder {}: {e}", dir.display()))?;

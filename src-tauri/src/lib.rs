@@ -485,6 +485,8 @@ pub fn run() {
                     Ok(_) => {}
                     Err(e) => eprintln!("[moonclip] organize failed: {e}"),
                 }
+                // After organizing, link old registrations to their folders.
+                storage::link_input_folders(handle.state::<storage::DbState>().inner());
             });
             // Registered-game poller: simplest Medal-style autopilot.
             let handle = app.handle().clone();

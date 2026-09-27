@@ -1,11 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { thumbnailUrl } from "../../lib/media";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Clapperboard, FolderOpen, Scissors, Star, Trash2, Wand2 } from "lucide-react";
+import {
+  Clapperboard,
+  FolderOpen,
+  Gamepad2,
+  Scissors,
+  Star,
+  Trash2,
+  Wand2,
+} from "lucide-react";
 import { TrimPanel } from "./TrimPanel";
 import { useClips } from "../../hooks/useClips";
+import { useRegisteredInputs } from "../../hooks/useRegisteredInputs";
 import type { ClipMetadata } from "../../types";
 
 // NOTE (Tauri v2 convention, do NOT "fix"): #[tauri::command] auto-converts
@@ -14,6 +23,16 @@ import type { ClipMetadata } from "../../types";
 async function absOf(fileName: string): Promise<string> {
   return invoke<string>("resolve_clip_src", { fileName });
 }
+
+/** "Game folder/Replay ….mp4" -> "Replay ….mp4" */
+function bareName(fileName: string): string {
+  const i = fileName.lastIndexOf("/");
+  return i >= 0 ? fileName.slice(i + 1) : fileName;
+}
+
+const GROUP_KEY = "moonclip.gallery.group";
+/** Clips whose row has no folder (missing legacy files). */
+const FLAT = "__flat__";
 
 function Thumb({
   clip,
@@ -97,7 +116,15 @@ interface RowActions {
   onSuccess: () => void;
 }
 
-function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions }) {
+function ClipRow({
+  clip,
+  gameLabel,
+  actions,
+}: {
+  clip: ClipMetadata;
+  gameLabel: string;
+  actions: RowActions;
+}) {
   const { t } = useTranslation();
   const reveal = async () => {
     try {
@@ -127,10 +154,10 @@ function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions })
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <div className="min-w-0 flex-1 text-sm">
             <p className="truncate font-medium text-slate-200" title={clip.file_name}>
-              {clip.file_name}
+              {bareName(clip.file_name)}
             </p>
             <p className="truncate font-mono text-xs text-slate-500">
-              {clip.game_title} ·{" "}
+              {gameLabel} ·{" "}
               <span className="text-cyan-300/80">{fmtDuration(clip.duration_ms)}</span> ·{" "}
               {fmtSize(clip.file_size_bytes)}{" "}
               {!clip.exists && <span className="text-xs text-amber-400">({t("gallery.missing")})</span>}
@@ -186,14 +213,57 @@ export function GalleryView({
   // Single shared instance: rows act on THIS list (a per-row instance would
   // refresh a phantom copy and the UI would look dead).
   const { clips, loading, refresh, toggleFavorite, deleteClip, purgeMissing } = useClips();
+  // Registered games only provide nicer labels; the groups themselves come
+  // from the clips, so a deleted registration keeps its group forever.
+  const { inputs } = useRegisteredInputs();
   const [lastError, setLastError] = useState<string | null>(null);
   const [purged, setPurged] = useState<number | null>(null);
   const [trimClip, setTrimClip] = useState<ClipMetadata | null>(null);
+  const [group, setGroup] = useState<string>(
+    () => localStorage.getItem(GROUP_KEY) ?? "all",
+  );
 
   useEffect(() => {
     if (refreshToken > 0) void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, { count: number; last: string }>();
+    for (const c of clips) {
+      const key = c.folder || FLAT;
+      const g = map.get(key) ?? { count: 0, last: "" };
+      g.count += 1;
+      if (c.created_at > g.last) g.last = c.created_at;
+      map.set(key, g);
+    }
+    return [...map.entries()]
+      .map(([key, g]) => ({ key, ...g }))
+      .sort((a, b) => b.last.localeCompare(a.last));
+  }, [clips]);
+
+  const labelFor = (key: string) => {
+    if (key === FLAT) return t("gallery.unfiled");
+    if (key === "Unknown") return t("gallery.no_game");
+    return inputs.find((i) => i.clips_folder === key)?.display_name ?? key;
+  };
+
+  // A deleted game group disappears only when its last clip is deleted.
+  useEffect(() => {
+    if (group === "all" || group === "favorites") return;
+    if (!groups.some((g) => g.key === group)) setGroup("all");
+  }, [groups, group]);
+
+  const select = (key: string) => {
+    setGroup(key);
+    localStorage.setItem(GROUP_KEY, key);
+  };
+
+  const visible = useMemo(() => {
+    if (group === "all") return clips;
+    if (group === "favorites") return clips.filter((c) => c.is_favorite);
+    return clips.filter((c) => (c.folder || FLAT) === group);
+  }, [clips, group]);
 
   const fail = (msg: string) => setLastError(`${timeNow()} · ${msg}`);
   const actions: RowActions = {
@@ -246,6 +316,15 @@ export function GalleryView({
     );
   };
 
+  const favCount = clips.filter((c) => c.is_favorite).length;
+  const navBtn = (active: boolean) =>
+    `flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition ${
+      active
+        ? "border border-cyan-400/20 bg-cyan-500/10 text-cyan-200"
+        : "border border-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"
+    }`;
+  const countBadge = "ml-auto font-mono text-[10px] text-slate-500";
+
   return (
     <>
       {trimClip && (
@@ -259,24 +338,61 @@ export function GalleryView({
           }}
         />
       )}
-      <div className="mb-2 flex flex-wrap items-center gap-2 sm:gap-3">
-        {lastError && (
-          <p className="flex-1 truncate font-mono text-xs text-red-400" title={lastError}>
-            {lastError}
-          </p>
-        )}
-        {purged !== null && !lastError && (
-          <p className="flex-1 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
-        )}
-        <button onClick={onPurge} className="ml-auto text-xs text-slate-500 transition hover:text-slate-200" title={t("gallery.purge")}>
-          {t("gallery.purge")}
-        </button>
+      <div className="mt-2 flex flex-col gap-4 lg:flex-row">
+        <aside className="shrink-0 lg:w-52">
+          <nav className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
+            <button className={navBtn(group === "all")} onClick={() => select("all")}>
+              <Clapperboard size={13} className="shrink-0" />
+              <span className="truncate">{t("gallery.all")}</span>
+              <span className={countBadge}>{clips.length}</span>
+            </button>
+            <button className={navBtn(group === "favorites")} onClick={() => select("favorites")}>
+              <Star size={13} className="shrink-0" />
+              <span className="truncate">{t("gallery.favorites")}</span>
+              <span className={countBadge}>{favCount}</span>
+            </button>
+            <p className="hidden px-2.5 pt-2 text-[10px] uppercase tracking-wide text-slate-600 lg:block">
+              {t("gallery.games")}
+            </p>
+            {groups.map((g) => (
+              <button
+                key={g.key}
+                className={navBtn(group === g.key)}
+                onClick={() => select(g.key)}
+                title={g.key === FLAT ? t("gallery.unfiled") : g.key}
+              >
+                <Gamepad2 size={13} className="shrink-0" />
+                <span className="truncate">{labelFor(g.key)}</span>
+                <span className={countBadge}>{g.count}</span>
+              </button>
+            ))}
+          </nav>
+        </aside>
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-2 sm:gap-3">
+            {lastError && (
+              <p className="flex-1 truncate font-mono text-xs text-red-400" title={lastError}>
+                {lastError}
+              </p>
+            )}
+            {purged !== null && !lastError && (
+              <p className="flex-1 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
+            )}
+            <button onClick={onPurge} className="ml-auto text-xs text-slate-500 transition hover:text-slate-200" title={t("gallery.purge")}>
+              {t("gallery.purge")}
+            </button>
+          </div>
+          {visible.length === 0 ? (
+            <p className="text-xs text-slate-500">{t("gallery.empty_group")}</p>
+          ) : (
+            <ul className="space-y-2">
+              {visible.map((c) => (
+                <ClipRow key={c.id} clip={c} gameLabel={labelFor(c.folder || FLAT)} actions={actions} />
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
-      <ul className="mt-2 space-y-2">
-        {clips.map((c) => (
-          <ClipRow key={c.id} clip={c} actions={actions} />
-        ))}
-      </ul>
     </>
   );
 }

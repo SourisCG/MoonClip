@@ -15,7 +15,13 @@
     "hear_mic": "Hear microphone track",
     "reveal": "Show in folder",
     "purge": "Clean missing",
-    "purged": "Removed {{count}} missing entries"
+    "purged": "Removed {{count}} missing entries",
+    "all": "All",
+    "favorites": "Favorites",
+    "games": "Games",
+    "no_game": "No game",
+    "unfiled": "Unfiled",
+    "empty_group": "No clips in this group."
   },
   "audio": {
     "title": "Capture audio",
