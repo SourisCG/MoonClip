@@ -34,6 +34,9 @@ import {
 } from "./types";
 import type { ClipMetadata } from "../types";
 
+declare const __MOONCLIP_BUILD__: string | undefined;
+const BUILD = typeof __MOONCLIP_BUILD__ !== "undefined" ? __MOONCLIP_BUILD__ : "dev";
+
 function fmt(ms: number) {
   const s = Math.max(0, ms) / 1000;
   const m = Math.floor(s / 60);
@@ -905,6 +908,7 @@ export default function EditorApp({
             {session.clip.gameTitle} · {session.clip.width}×{session.clip.height}
             {session.usingProxy ? ` · ${t("editor.proxy_active")}` : ""}
             {dirty ? " · …" : ""}
+            <span className="ml-1 font-mono text-[9px] text-slate-600">build {BUILD}</span>
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
@@ -1592,7 +1596,11 @@ export default function EditorApp({
           plates={plates}
           master={masterGain}
           visibleEnd={visibleMs}
-          onVisibleEnd={(ms) => setVisibleMs(Math.max(5000, ms))}
+          onVisibleEnd={(ms) =>
+            setVisibleMs(
+              Math.min(Math.max(5000, ms), Math.max(total * 4 + 5000, 60_000)),
+            )
+          }
           onSeek={seek}
           onScrubStart={() => {
             if (useEditorStore.getState().playing) {
