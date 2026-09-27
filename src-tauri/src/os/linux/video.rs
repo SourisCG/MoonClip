@@ -174,9 +174,11 @@ fn va_driver_for(vendor: &str) -> Option<String> {
 }
 
 /// Package providing the VA-API driver per vendor+distro (name only).
+/// Fedora renamed the NVIDIA bridge to `libva-nvidia-driver` (F44; older
+/// releases/RPM Fusion used `nvidia-vaapi-driver`).
 fn decode_package(vendor: &str, distro: &str) -> Option<String> {
     let name = match (vendor, distro) {
-        ("nvidia", "arch") => "libva-nvidia-driver",
+        ("nvidia", "arch") | ("nvidia", "fedora") => "libva-nvidia-driver",
         ("nvidia", _) => "nvidia-vaapi-driver",
         ("amd", "arch") | ("amd", "suse") => "libva-mesa-driver",
         ("amd", _) => "mesa-va-drivers",
@@ -280,6 +282,10 @@ mod tests {
     fn package_names_per_distro() {
         assert_eq!(
             decode_package("nvidia", "fedora").as_deref(),
+            Some("libva-nvidia-driver")
+        );
+        assert_eq!(
+            decode_package("nvidia", "debian").as_deref(),
             Some("nvidia-vaapi-driver")
         );
         assert_eq!(

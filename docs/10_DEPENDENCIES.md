@@ -431,7 +431,7 @@ shows `Decode: Software` plus the package name when it is missing.
 
 | GPU | Driver file | Fedora | Debian/Ubuntu | Arch |
 |---|---|---|---|---|
-| NVIDIA (proprietary) | `nvidia_drv_video.so` | `nvidia-vaapi-driver` (RPM Fusion nonfree) | `nvidia-vaapi-driver` | `libva-nvidia-driver` |
+| NVIDIA (proprietary) | `nvidia_drv_video.so` | `libva-nvidia-driver` (renamed in F44; older: `nvidia-vaapi-driver`, RPM Fusion nonfree) | `nvidia-vaapi-driver` | `libva-nvidia-driver` |
 | AMD (radeonsi) | `radeonsi_drv_video.so` | `mesa-va-drivers` | `mesa-va-drivers` | `libva-mesa-driver` |
 | Intel (iHD, Gen8+) | `iHD_drv_video.so` | `intel-media-driver` | `intel-media-va-driver` | `intel-media-driver` |
 | Intel (i965, legacy) | `i965_drv_video.so` | `libva-intel-driver` | `i965-va-driver` | `libva-intel-driver` |
@@ -443,11 +443,21 @@ Fedora/Arch, `libva2` on Debian/Ubuntu). NVIDIA also needs the proprietary
 driver loaded (`nvidia_drm.modeset=1`); the VA-API driver is a userspace
 bridge on top of NVDEC. Verify with `vainfo` after installing.
 
+> **Fedora 44 note (checked 2026-09-27):** `vainfo` works after installing
+> `libva-nvidia-driver` (NVDEC reports H.264/HEVC/AV1), but
+> `gstreamer1-plugins-bad-free` 1.28.7 registers **0 features** in its `va`
+> plugin (`gst-inspect-1.0 va`), and the separate `gstreamer1-vaapi`
+> package is merged/obsoleted (`dnf` reports "Nothing to do"). WebKitGTK
+> therefore still decodes in software on this release until the distro
+> ships the VA elements again. The driver install is still correct and
+> forward-compatible; AMD/Intel Mesa drivers expose their VA elements
+> through the same GStreamer plugin, so the same caveat applies there.
+
 ### Install commands (this section only; the app never runs these)
 
 ```bash
 # Fedora (RPM Fusion nonfree must be enabled for NVIDIA)
-sudo dnf install nvidia-vaapi-driver     # NVIDIA
+sudo dnf install libva-nvidia-driver     # NVIDIA (older releases: nvidia-vaapi-driver)
 sudo dnf install mesa-va-drivers         # AMD / Nouveau
 sudo dnf install intel-media-driver      # Intel Gen8+
 
