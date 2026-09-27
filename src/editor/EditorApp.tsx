@@ -335,6 +335,7 @@ export default function EditorApp({
   const [, forceTick] = useState(0);
 
   const project = useEditorStore((s) => s.project);
+  const sources = useEditorStore((s) => s.sources);
   const selection = useEditorStore((s) => s.selection);
   const playing = useEditorStore((s) => s.playing);
   const activeSourceId = useEditorStore((s) => s.activeSourceId);
@@ -409,14 +410,9 @@ export default function EditorApp({
     return engineRef.current;
   }, []);
 
-  const trackGains = useMemo(
-    () => ({
-      master: project?.gainMaster ?? 1,
-      game: project?.gainGame ?? 1,
-      mic: project?.gainMic ?? 1,
-    }),
-    [project?.gainMaster, project?.gainGame, project?.gainMic],
-  );
+  const masterGain = project?.gainMaster ?? 1;
+  /** Selected clip's own audio mix (falls back to the active source). */
+  const clipSegment = selectedSegment ?? null;
 
   /** Decode every source used by the project so playback never stalls. */
   const decodeProject = useCallback(
@@ -602,7 +598,7 @@ export default function EditorApp({
     setVideoClock(!hasAudio);
     syncVideo(ms, true);
     if (hasAudio) {
-      await engine.play(p.segments, ms, trackGains);
+      await engine.play(p.segments, ms, masterGain);
       const v = videoRef.current;
       if (v) {
         v.muted = true;
@@ -612,11 +608,11 @@ export default function EditorApp({
       const v = videoRef.current;
       if (v) {
         v.muted = false;
-        v.volume = Math.min(1, Math.max(0, seg?.gainMix ?? 1));
+        v.volume = Math.min(1, Math.max(0, (seg?.gainMix ?? 1) * masterGain));
       }
     }
     useEditorStore.getState().setPlaying(true);
-  }, [decodeProject, trackGains, syncVideo]);
+  }, [decodeProject, masterGain, syncVideo]);
 
   const toggle = useCallback(() => {
     if (useEditorStore.getState().playing) pause();
@@ -635,9 +631,9 @@ export default function EditorApp({
       useEditorStore.getState().setActiveSource(srcId);
       setStems(engineRef.current?.peaksFor(srcId ?? "") ?? []);
       syncVideo(target, wasPlaying);
-      void engineRef.current?.seek(target, p.segments, wasPlaying, trackGains);
+      void engineRef.current?.seek(target, p.segments, wasPlaying, masterGain);
     },
-    [trackGains, syncVideo],
+    [masterGain, syncVideo],
   );
 
   // Single clock: the playhead always follows the audio (or the video when the
@@ -681,21 +677,26 @@ export default function EditorApp({
     return () => cancelAnimationFrame(raf);
   }, [playing, videoClock, syncVideo, pause]);
 
-  // Live track mix (shared GainNodes, no reschedule ever).
+  // Live output level (shared GainNode, no reschedule ever).
   useEffect(() => {
     const engine = engineRef.current;
-    engine?.setGains(trackGains);
+    engine?.setMaster(masterGain);
     const v = videoRef.current;
     if (!v) return;
     if (videoClock) {
       // Fallback: single-track audio comes from the video itself.
       v.muted = false;
-      v.volume = Math.min(1, Math.max(0, trackGains.master));
+      v.volume = Math.min(1, Math.max(0, masterGain));
     } else {
       // Invariant: the engine is the only audio source.
       v.muted = true;
     }
-  }, [trackGains, videoClock, session]);
+  }, [masterGain, videoClock, session]);
+
+  // Per-clip mix sliders update the already-scheduled nodes in place.
+  useEffect(() => {
+    if (project) engineRef.current?.applySegmentGains(project.segments);
+  }, [project]);
 
   // Frame size (font scaling / overlay coordinates) before paint too.
   useLayoutEffect(() => {
@@ -835,12 +836,22 @@ export default function EditorApp({
 
   const iconBtn =
     "rounded-lg border border-white/10 bg-white/5 p-2 text-slate-300 transition hover:bg-white/10 disabled:opacity-40";
-  type GainField = "gainMaster" | "gainGame" | "gainMic";
-  const trackSliders: [GainField, string][] = [
-    ["gainMaster", t("editor.mix")],
-    ["gainGame", t("editor.game")],
-    ["gainMic", t("editor.mic")],
-  ];
+  // Clip audio panel: Game/Mic for multi-stem sources, one Volume (the mix
+  // fallback) otherwise. The selected clip's own source decides, not the one
+  // under the playhead.
+  const clipStems = clipSegment
+    ? (sources[clipSegment.sourceClipId]?.stems.length ?? 0)
+    : 0;
+  const selectedClipTitle = clipSegment
+    ? (sources[clipSegment.sourceClipId]?.gameTitle ?? "")
+    : "";
+  const clipGainSliders: ["gainGame" | "gainMic" | "gainMix", string][] =
+    clipStems > 1
+      ? [
+          ["gainGame", t("editor.game")],
+          ["gainMic", t("editor.mic")],
+        ]
+      : [["gainMix", t("editor.clip_volume")]];
   const moveableTarget =
     selection?.kind === "overlay" ? overlayEls.current[selection.id] : null;
 
@@ -944,44 +955,89 @@ export default function EditorApp({
             <div className="flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100">
               <span className="min-w-0 flex-1">{t("editor.master_zero")}</span>
               <button
-                onClick={() =>
-                  useEditorStore.getState().setProjectGain("gainMaster", 1)
-                }
+                onClick={() => useEditorStore.getState().setMasterGain(1)}
                 className="rounded border border-amber-300/40 bg-amber-300/20 px-2 py-0.5 font-semibold"
               >
                 {t("editor.master_reset")}
               </button>
             </div>
           )}
-          {trackSliders.map(([field, label]) => {
-            const disabled = field !== "gainMaster" && stems.length <= 1;
-            return (
-              <label
-                key={field}
-                className={`space-y-1 text-[11px] ${disabled ? "opacity-40" : "text-slate-400"}`}
-              >
-                <span className="flex items-center gap-1">
-                  {label}
-                  <span className="ml-auto font-mono">
-                    {Math.round(project[field] * 100)}%
-                  </span>
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={200}
-                  disabled={disabled}
-                  value={Math.round(project[field] * 100)}
-                  onChange={(e) =>
-                    useEditorStore
-                      .getState()
-                      .setProjectGain(field, Number(e.target.value) / 100)
+          <label className="space-y-1 text-[11px] text-slate-400">
+            <span className="flex items-center gap-1">
+              {t("editor.master_global")}
+              <span className="ml-auto font-mono">
+                {Math.round(project.gainMaster * 100)}%
+              </span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={200}
+              value={Math.round(project.gainMaster * 100)}
+              onChange={(e) =>
+                useEditorStore.getState().setMasterGain(Number(e.target.value) / 100)
+              }
+              className="w-full accent-cyan-400"
+            />
+          </label>
+
+          <div className="space-y-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-200/80">
+              {t("editor.clip_audio")}
+            </p>
+            {!clipSegment && (
+              <p className="text-[10px] leading-snug text-slate-500">
+                {t("editor.clip_audio_hint")}
+              </p>
+            )}
+            {clipSegment && (
+              <>
+                {selectedClipTitle && (
+                  <p className="truncate font-mono text-[10px] text-slate-500">
+                    {selectedClipTitle}
+                  </p>
+                )}
+                {clipGainSliders.map(([field, label]) => (
+                  <label key={field} className="space-y-1 text-[11px] text-slate-400">
+                    <span className="flex items-center gap-1">
+                      {label}
+                      <span className="ml-auto font-mono">
+                        {Math.round(clipSegment[field] * 100)}%
+                      </span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={Math.round(clipSegment[field] * 100)}
+                      onChange={(e) =>
+                        useEditorStore
+                          .getState()
+                          .setSegmentGain(
+                            clipSegment.id,
+                            field,
+                            Number(e.target.value) / 100,
+                          )
+                      }
+                      className="w-full accent-cyan-400"
+                    />
+                  </label>
+                ))}
+                <button
+                  onClick={() =>
+                    useEditorStore.getState().updateSegment(clipSegment.id, {
+                      gainMix: 1,
+                      gainGame: 1,
+                      gainMic: 1,
+                    })
                   }
-                  className="w-full accent-cyan-400"
-                />
-              </label>
-            );
-          })}
+                  className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/10"
+                >
+                  {t("editor.clip_audio_reset")}
+                </button>
+              </>
+            )}
+          </div>
           <div className="mt-1 flex gap-2">
             <button
               onClick={() => setShowLibrary(true)}

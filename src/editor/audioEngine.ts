@@ -49,13 +49,6 @@ export function computePeaks(buffer: AudioBuffer, buckets = 900): number[][] {
   return out;
 }
 
-/** Project track mix (Master scales the Game+Mic stems). */
-export interface TrackGains {
-  master: number;
-  game: number;
-  mic: number;
-}
-
 export class AudioTimeline {
   private ctx: AudioContext;
   private master: GainNode;
@@ -66,6 +59,8 @@ export class AudioTimeline {
   private levelBuf: Float32Array<ArrayBuffer>;
   private sources = new Map<string, DecodedSource>();
   private nodes: AudioBufferSourceNode[] = [];
+  /** Live per-segment gain nodes so each clip is mixed independently. */
+  private segGains: { segId: string; kind: "mix" | "game" | "mic"; node: GainNode }[] = [];
 
   /** Timeline ms at `t0`; playback position = base + (ctx.now - t0). */
   private baseMs = 0;
@@ -168,19 +163,31 @@ export class AudioTimeline {
     return (this.sources.get(clipId)?.stems.length ?? 0) > 0;
   }
 
-  /** Live track mix. Shared GainNodes, so no reschedule is ever needed. */
-  setGains(gains: TrackGains) {
-    this.master.gain.value = Math.max(0, Math.min(4, gains.master));
-    this.game.gain.value = Math.max(0, Math.min(4, gains.game));
-    this.mic.gain.value = Math.max(0, Math.min(4, gains.mic));
+  /** Global output level. Shared GainNode: no reschedule is ever needed. */
+  setMaster(value: number) {
+    this.master.gain.value = Math.max(0, Math.min(4, value));
+  }
+
+  /** Reflect per-clip slider moves on the already-scheduled nodes. */
+  applySegmentGains(segments: Segment[]) {
+    if (this.segGains.length === 0) return;
+    const byId = new Map(segments.map((s) => [s.id, s]));
+    for (const g of this.segGains) {
+      const seg = byId.get(g.segId);
+      if (!seg) continue;
+      const value =
+        g.kind === "mic" ? seg.gainMic : g.kind === "game" ? seg.gainGame : seg.gainMix;
+      g.node.gain.value = Math.max(0, Math.min(4, value));
+    }
   }
 
   /** Schedule every segment from `fromMs` and start the clock. Track 1 of a
-   *  recording is the sum of Game+Mic, so only the stems are scheduled. */
-  async play(segments: Segment[], fromMs: number, gains: TrackGains): Promise<void> {
+   *  recording is the sum of Game+Mic, so only the stems are scheduled. Each
+   *  clip's own gains (and the global master) are applied on its own nodes. */
+  async play(segments: Segment[], fromMs: number, master: number): Promise<void> {
     this.stopNodes();
     await this.ctx.resume();
-    this.setGains(gains);
+    this.setMaster(master);
     const lookahead = 0.06;
     this.t0 = this.ctx.currentTime + lookahead;
     this.baseMs = fromMs;
@@ -193,7 +200,8 @@ export class AudioTimeline {
       diag(
         `seg ${seg.id.slice(0, 8)} src=${seg.sourceClipId.slice(0, 8)} ` +
           `tl=${Math.round(seg.timelineStartMs)} in=${Math.round(seg.inMs)} ` +
-          `out=${Math.round(seg.outMs)} speed=${seg.speed}`,
+          `out=${Math.round(seg.outMs)} speed=${seg.speed} ` +
+          `g=${seg.gainGame} m=${seg.gainMic} mix=${seg.gainMix}`,
       );
       // Multi-stem sources: Game/Mic only (the Mix stem duplicates them).
       const wanted =
@@ -201,15 +209,20 @@ export class AudioTimeline {
           ? decoded.stems.filter((s) => s.label === "game" || s.label === "mic")
           : decoded.stems;
       for (const stem of wanted) {
-        const target = decoded.stems.length > 1
-          ? stem.label === "mic"
-            ? this.mic
-            : this.game
-          : this.master;
+        const kind: "mix" | "game" | "mic" =
+          decoded.stems.length > 1 ? (stem.label === "mic" ? "mic" : "game") : "mix";
+        const value =
+          kind === "mic" ? seg.gainMic : kind === "game" ? seg.gainGame : seg.gainMix;
+        const target =
+          kind === "mic" ? this.mic : kind === "game" ? this.game : this.master;
         const src = this.ctx.createBufferSource();
         src.buffer = stem.buffer;
         src.playbackRate.value = seg.speed;
-        src.connect(target);
+        const gainNode = this.ctx.createGain();
+        gainNode.gain.value = Math.max(0, Math.min(4, value));
+        src.connect(gainNode);
+        gainNode.connect(target);
+        this.segGains.push({ segId: seg.id, kind, node: gainNode });
 
         const inside = fromMs > seg.timelineStartMs;
         const consumedMs = inside ? fromMs - seg.timelineStartMs : 0;
@@ -227,7 +240,7 @@ export class AudioTimeline {
     }
     diag(
       `play from ${Math.round(fromMs)}ms: scheduled ${this.nodes.length} node(s), ` +
-        `gains master=${gains.master} game=${gains.game} mic=${gains.mic}`,
+        `master=${master}`,
     );
     this.started = true;
     this.paused = false;
@@ -248,13 +261,13 @@ export class AudioTimeline {
     ms: number,
     segments: Segment[],
     keepPlaying: boolean,
-    gains: TrackGains,
+    master: number,
   ): Promise<void> {
     this.stopNodes();
     this.started = false;
     this.paused = true;
     if (keepPlaying) {
-      await this.play(segments, ms, gains);
+      await this.play(segments, ms, master);
     } else {
       this.baseMs = ms;
     }
@@ -280,6 +293,8 @@ export class AudioTimeline {
       n.disconnect();
     }
     this.nodes = [];
+    for (const g of this.segGains) g.node.disconnect();
+    this.segGains = [];
   }
 
   dispose() {

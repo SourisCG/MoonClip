@@ -7,6 +7,9 @@ export interface OutputSettings {
   bitrateKbps: number;
   encoder: string;
   container: string;
+  /** "mix" = one AAC track with the Game+Mic mix; "tracks" = separate
+   *  Game/Mic tracks. The recording's Mix track is never included. */
+  audio: string;
 }
 
 export interface Segment {

@@ -189,6 +189,18 @@ export function ExportDialog({
               <option value="mkv">MKV</option>
             </select>
           </label>
+          <label className="space-y-1">
+            <span className="text-slate-400">{t("editor.audio_out")}</span>
+            <select
+              className={`${select} w-full`}
+              value={output.audio ?? "mix"}
+              disabled={running}
+              onChange={(e) => setOutput({ audio: e.target.value })}
+            >
+              <option value="mix">{t("editor.audio_out_mix")}</option>
+              <option value="tracks">{t("editor.audio_out_tracks")}</option>
+            </select>
+          </label>
         </div>
 
         {(running || percent > 0) && (

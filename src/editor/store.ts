@@ -29,7 +29,12 @@ interface EditorState {
   pxPerSecond: number;
 
   setProject: (project: EditProject) => void;
-  setProjectGain: (field: "gainMaster" | "gainGame" | "gainMic", value: number) => void;
+  setMasterGain: (value: number) => void;
+  setSegmentGain: (
+    id: string,
+    field: "gainMix" | "gainGame" | "gainMic",
+    value: number,
+  ) => void;
   setSources: (sources: EditorSourceInfo[]) => void;
   setActiveSource: (clipId: string | null) => void;
   upsertSource: (source: EditorSourceInfo) => void;
@@ -92,9 +97,15 @@ export const useEditorStore = create<EditorState>()(
           s.playheadMs = 0;
         }),
 
-      setProjectGain: (field, value) =>
+      setMasterGain: (value) =>
         set((s) => {
-          if (s.project) s.project[field] = Math.max(0, Math.min(4, value));
+          if (s.project) s.project.gainMaster = Math.max(0, Math.min(4, value));
+        }),
+
+      setSegmentGain: (id, field, value) =>
+        set((s) => {
+          const seg = s.project?.segments.find((x) => x.id === id);
+          if (seg) seg[field] = Math.max(0, Math.min(4, value));
         }),
 
       setSources: (sources) =>
