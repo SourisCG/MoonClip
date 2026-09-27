@@ -314,6 +314,28 @@ pub async fn ensure_source(
     Ok(info)
 }
 
+/// Remove session dirs left behind by crashes or force-kills: a session only
+/// lives in memory, so anything on disk at boot is stale (and can be many MB
+/// of stems/proxies). Called once at startup.
+pub fn cleanup_stale_sessions(app: &AppHandle) {
+    let Ok(root) = app.path().app_cache_dir() else {
+        return;
+    };
+    let dir = root.join("editor");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        if entry.path().is_dir() && std::fs::remove_dir_all(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        eprintln!("[moonclip] cleaned {removed} stale editor session dir(s)");
+    }
+}
+
 /// Open (or resume) an editor session for a clip.
 pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, String> {
     let (clip, project, encoders) = {

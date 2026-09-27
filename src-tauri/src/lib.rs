@@ -450,6 +450,9 @@ pub fn run() {
             // --- Global shortcut (configurable, default F9) ---
             register_stored_hotkey(app.handle());
 
+            // Editor sessions never survive a restart: wipe leftovers.
+            crate::editor::session::cleanup_stale_sessions(app.handle());
+
             // One-time duration backfill for pre-probing rows (background).
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
