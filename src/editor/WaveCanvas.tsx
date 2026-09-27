@@ -40,11 +40,16 @@ export function WaveCanvas({
       const chans = peaks.length;
       const per = peaks[0].length / 2;
       // Exact window: each bar aggregates the buckets under its own fraction
-      // of [from, to] (no floor/ceil stretching; the wave ends on the edge).
+      // of [from, to]. NEVER draw more bars than pixels: with a 1px floor the
+      // waveform became `count` px wide instead of `width` and got clipped,
+      // so zoomed-out clips showed their peaks at ~2x their real position.
       const a = Math.max(0, Math.min(1, from)) * per;
       const b = Math.max(a, Math.min(1, to) * per);
-      const count = Math.max(1, Math.min(per, Math.round(b - a)));
-      const barW = Math.max(1, width / count);
+      const count = Math.max(
+        1,
+        Math.min(Math.max(1, Math.floor(width)), Math.round(b - a)),
+      );
+      const barW = width / count;
       const volume = Math.max(0, gain);
       const band = height / chans;
       ctx.fillStyle = color;
