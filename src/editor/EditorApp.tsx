@@ -34,8 +34,6 @@ import {
 } from "./types";
 import type { ClipMetadata } from "../types";
 
-const SIDEBAR_WIDTH = 88;
-
 function fmt(ms: number) {
   const s = Math.max(0, ms) / 1000;
   const m = Math.floor(s / 60);
@@ -314,13 +312,13 @@ export default function EditorApp({
   const [showLibrary, setShowLibrary] = useState(false);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
   const [stems, setStems] = useState<{ label: string; peaks: number[][] }[]>([]);
-  const [laneWidth, setLaneWidth] = useState(0);
+
   /** Fallback clock when the active source has no decodable audio. */
   const [videoClock, setVideoClock] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
-  const timelineWrapRef = useRef<HTMLDivElement | null>(null);
+
   const overlayEls = useRef<Record<string, HTMLDivElement | null>>({});
   const engineRef = useRef<AudioTimeline | null>(null);
   const videoSegRef = useRef<Segment | null>(null);
@@ -466,27 +464,13 @@ export default function EditorApp({
   // not re-render every frame.
   const waveSourceId = activeSourceId;
 
-  // Lane width + waveform plate (same time->px mapping as the ruler).
-  useEffect(() => {
-    const el = timelineWrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setLaneWidth(Math.max(0, el.clientWidth - SIDEBAR_WIDTH)));
-    ro.observe(el);
-    setLaneWidth(Math.max(0, el.clientWidth - SIDEBAR_WIDTH));
-    return () => ro.disconnect();
-  }, [session]);
-
-  // One waveform plate PER SEGMENT (a source can appear many times): the box
-  // is the segment's place on the timeline and the canvas draws only that
-  // segment's [inMs, outMs] window of the source, so every clip gets its own
-  // waveform (a single plate per source left later clips blank).
+  // One waveform plate PER SEGMENT (a source can appear many times). The
+  // timeline position/size are computed inside TimelineView with dnd-timeline's
+  // own `valueToPixels`, so the waves share the clip bars' scale exactly.
   const plates = useMemo(() => {
     if (!project || !waveSourceId) return [];
     const source = useEditorStore.getState().sources[waveSourceId];
-    if (!source || laneWidth <= 0) return [];
-    // Same span as dnd-timeline's range (TimelineView clamps to 5000 ms):
-    // any other value drew the waves at a different scale than the clips.
-    const pxPerMs = laneWidth / Math.max(5000, visibleMs);
+    if (!source) return [];
     // Prefer the decoded stem length over the container metadata (a few ms).
     const decoded = engineRef.current?.durationMsFor(waveSourceId) ?? null;
     const dur = Math.max(1, decoded ?? source.durationMs);
@@ -495,8 +479,8 @@ export default function EditorApp({
       .sort((a, b) => a.timelineStartMs - b.timelineStartMs)
       .map((seg) => ({
         id: seg.id,
-        left: seg.timelineStartMs * pxPerMs,
-        width: Math.max(2, segmentDurationMs(seg) * pxPerMs),
+        startMs: seg.timelineStartMs,
+        durationMs: segmentDurationMs(seg),
         from: Math.min(1, Math.max(0, seg.inMs / dur)),
         to: Math.min(1, Math.max(0, seg.outMs / dur)),
         gainMix: seg.gainMix,
@@ -504,7 +488,22 @@ export default function EditorApp({
         gainMic: seg.gainMic,
       }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, waveSourceId, laneWidth, visibleMs, session, stems]);
+  }, [project, waveSourceId, session, stems]);
+
+  // Paused, clicking a clip shows ITS waveforms even when the playhead is
+  // elsewhere. Only on an actual selection change: scrubbing/playing must not
+  // be overridden by an old selection.
+  const lastWaveSelRef = useRef<string | null>(null);
+  useEffect(() => {
+    const selId = selection?.kind === "segment" ? selection.id : null;
+    if (selId === lastWaveSelRef.current) return;
+    lastWaveSelRef.current = selId;
+    if (!selId || playing) return;
+    const seg = useEditorStore.getState().project?.segments.find((s) => s.id === selId);
+    if (!seg || seg.sourceClipId === useEditorStore.getState().activeSourceId) return;
+    useEditorStore.getState().setActiveSource(seg.sourceClipId);
+    setStems(engineRef.current?.peaksFor(seg.sourceClipId) ?? []);
+  }, [selection, playing]);
 
   // Grow the visible window with the timeline (single source of truth).
   useEffect(() => {
@@ -1564,7 +1563,7 @@ export default function EditorApp({
       </div>
 
       {/* Timeline */}
-      <div ref={timelineWrapRef} className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
+      <div className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
         <TimelineView
           audioTracks={session.audioTracks}
           stems={stems}

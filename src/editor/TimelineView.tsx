@@ -191,8 +191,8 @@ function Inner({
   stems: { label: string; peaks: number[][] }[];
   plates: {
     id: string;
-    left: number;
-    width: number;
+    startMs: number;
+    durationMs: number;
     from: number;
     to: number;
     gainMix: number;
@@ -205,7 +205,8 @@ function Inner({
   onScrubStart: () => void;
   onScrubEnd: () => void;
 }) {
-  const { setTimelineRef, style, pixelsToValue, range, sidebarWidth } = useTimelineContext();
+  const { setTimelineRef, style, pixelsToValue, valueToPixels, range, sidebarWidth } =
+    useTimelineContext();
   const segments = useEditorStore((s) => s.project?.segments ?? []);
   const overlays = useEditorStore((s) => s.project?.overlays ?? []);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -279,6 +280,11 @@ function Inner({
                 return (
                   <div className="relative h-full w-full">
                     {plates.map((pl) => {
+                      // Position and size with dnd-timeline's own mapping: the
+                      // exact same function used by the clip bars, the ruler
+                      // and the playhead, so waves can never drift at any zoom.
+                      const left = valueToPixels(pl.startMs - range.start);
+                      const width = Math.max(2, valueToPixels(pl.durationMs));
                       // Scale each clip's wave by its own gain for this stem
                       // (x the global master), so the graph follows the mixer.
                       const laneGain =
@@ -291,7 +297,7 @@ function Inner({
                         <div
                           key={pl.id}
                           className="absolute bottom-0 top-0 overflow-hidden"
-                          style={{ left: pl.left, width: pl.width }}
+                          style={{ left, width }}
                         >
                           <WaveCanvas
                             peaks={stem?.peaks}
@@ -331,8 +337,8 @@ export function TimelineView({
   stems: { label: string; peaks: number[][] }[];
   plates: {
     id: string;
-    left: number;
-    width: number;
+    startMs: number;
+    durationMs: number;
     from: number;
     to: number;
     gainMix: number;
