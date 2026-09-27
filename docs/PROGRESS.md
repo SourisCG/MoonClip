@@ -1058,3 +1058,21 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 - Gates: `cargo test` 163 passed (incluye keyring live, reconciliacion live
   con ffmpeg, organize, traversal, cuota, regresion de borrado),
   `cargo clippy --all-targets -- -D warnings` limpio, `pnpm build` limpio.
+
+### Detección de ventanas + renombrar clips (2026-09-27)
+
+- **Fix Dolphin/Explorer**: `window_matches` excluye gestores de archivos
+  (dolphin/nautilus/thunar/nemo/pcmanfm/krusader/doublecmd/files +
+  `CabinetWClass`/`ExploreWClass`) y exige app_ids compatibles cuando ambos
+  lados lo reportan (tolerante al formato picker `steam_app_X` vs KRunner
+  `steam_icon_X`/`steam`; ids desconocidos mantienen el match por título).
+  Windows ahora reporta la clase de ventana (`GetClassNameW`) y el log de
+  diagnóstico muestra `título [app_id]`. Verificado en vivo: con Dolphin en la
+  carpeta "Overwatch" el poller registra "no registered window match" y el
+  buffer no arranca. Commit `e956ebe`.
+- **Renombrar clips**: `storage/rename.rs` (archivo + thumbnail + fila,
+  conserva extensión y carpeta; colisión/nombre inválido = error, mismo
+  nombre = no-op, archivo faltante no toca la DB), `sanitize_file_stem`
+  reutilizable, comando `rename_clip`, lápiz con edición inline en la galería
+  (Enter guarda, Esc/blur cancela) e i18n. Tests: movimiento real, colisión,
+  inválidos, no-op y faltante. Commit `63f7bd9`.
