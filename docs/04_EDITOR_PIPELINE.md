@@ -43,6 +43,11 @@ Two separate pieces, by design:
   overlays in normalized coordinates with `react-moveable` handles; multi-clip
   uses a virtual player that swaps sources at cuts; transitions previewed as
   canvas/DOM cross-fades.
+- **Media playback on Linux:** `asset://` cannot play audio/video on
+  WebKitGTK (WebKit bug 146351), so `editor/media_server.rs` serves clips over
+  `http://127.0.0.1:<ephemeral>/m/<token>` with HTTP range support. The
+  server starts on the first media request (never at boot), binds loopback
+  only and serves exclusively paths the backend registered.
 - **Audio**: the 3 tracks (Mix/Game/Mic) are extracted once per clip to
   `~/.cache/MoonClip/editor/<session>/` and shown as 3 synchronized
   waveforms (`wavesurfer.js`) with per-track volume/mute/solo + music/uploads.

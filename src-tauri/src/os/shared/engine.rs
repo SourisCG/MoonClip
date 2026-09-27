@@ -1028,6 +1028,43 @@ impl ObsEngine {
             .as_ref()?
             .set_video_settings(bw, bh, out_w, out_h)
             .await;
+        // OBS refuses video changes while an output runs (`OutputRunning`).
+        // The replay buffer was started before the real capture size was
+        // known, so bounce it: stop, resize, start again. Without this the
+        // whole start failed as "no screen captured" even though the stream
+        // was live (any window that is not exactly the profile canvas).
+        let res = match res {
+            Err(e) if e.contains("OutputRunning") => {
+                eprintln!("[moonclip] engine canvas resize needs a buffer bounce: {bw}x{bh}");
+                let obsws = self.obsws.as_ref()?;
+                let _ = obsws.replay_stop().await;
+                let mut retried = Err(e);
+                for _ in 0..12 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    retried = obsws.set_video_settings(bw, bh, out_w, out_h).await;
+                    if retried.is_ok() {
+                        break;
+                    }
+                }
+                let _ = obsws.replay_start().await;
+                // Confirm the bounced buffer is really running again.
+                if retried.is_ok() {
+                    let mut active = false;
+                    for _ in 0..20 {
+                        if obsws.replay_status().await.unwrap_or(false) {
+                            active = true;
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    if !active {
+                        eprintln!("[moonclip] warning: replay buffer did not resume after resize");
+                    }
+                }
+                retried
+            }
+            other => other,
+        };
         match res {
             Ok(()) => {
                 if let Some(p) = self.profile.as_mut() {

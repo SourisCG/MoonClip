@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2, Pause, Play, Scissors, X } from "lucide-react";
 import type { ClipMetadata } from "../../types";
@@ -18,10 +18,6 @@ function fmt(ms: number) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}.${String(
     Math.max(0, Math.round(ms / 100)) % 10,
   )}`;
-}
-
-async function absOf(fileName: string): Promise<string> {
-  return invoke<string>("resolve_clip_src", { fileName });
 }
 
 /**
@@ -54,15 +50,16 @@ export function TrimPanel({
 
   useEffect(() => {
     let cancelled = false;
-    absOf(clip.file_name)
-      .then((abs) => {
-        if (!cancelled) setUrl(convertFileSrc(abs));
+    // Loopback HTTP URL: `asset://` cannot play media on WebKitGTK.
+    invoke<string>("media_url", { clipId: clip.id })
+      .then((u) => {
+        if (!cancelled) setUrl(u);
       })
       .catch((e) => !cancelled && setError(String(e)));
     return () => {
       cancelled = true;
     };
-  }, [clip.file_name]);
+  }, [clip.id]);
 
   // Trim progress for THIS clip (the backend emits per handled clip).
   useEffect(() => {
@@ -206,6 +203,10 @@ export function TrimPanel({
               onLoadedMetadata={onLoaded}
               onTimeUpdate={onTimeUpdate}
               onClick={togglePlay}
+              onError={() => {
+                const code = videoRef.current?.error?.code;
+                setError(`${t("trim.play_error")} (${code ?? "?"})`);
+              }}
               className="mx-auto max-h-[46vh] w-full cursor-pointer object-contain"
             />
           ) : (

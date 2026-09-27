@@ -2338,6 +2338,21 @@ pub async fn preview_track(app: AppHandle, clip_id: String, track: u32) -> Resul
 // Clip editing (Phase 5)
 // ---------------------------------------------------------------------------
 
+/// Playable URL for a clip. `asset://` cannot play media on WebKitGTK, so the
+/// backend serves the file over a loopback HTTP server with range support
+/// (starts on first use; nothing runs before the first editor/trim open).
+#[tauri::command]
+pub fn media_url(db: State<'_, DbState>, clip_id: String) -> Result<String, String> {
+    let clip = db
+        .list_clips()?
+        .into_iter()
+        .find(|c| c.id == clip_id)
+        .ok_or_else(|| "clip not found".to_string())?;
+    let base = db.clips_dir()?;
+    let path = validated_media_path(&base, &clip.file_name)?;
+    crate::editor::media_server::media_url(&path)
+}
+
 /// Gallery quick trim: lossless stream copy (fast, keyframe-aligned) or a
 /// short precise re-encode (frame-exact, keeps every audio track). Always
 /// creates a NEW clip; the source file is never modified.

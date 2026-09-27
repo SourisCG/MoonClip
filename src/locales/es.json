@@ -175,6 +175,7 @@
     "saving": "Recortando con ffmpeg, no cierres la app…",
     "cancel": "Cancelar",
     "play": "Reproducir",
+    "play_error": "No se pudo reproducir el video (¿códec no soportado por WebKitGTK?).",
     "pause": "Pausar"
   },
   "common": { "loading": "Cargando…", "delete": "Eliminar" },

@@ -176,6 +176,7 @@
     "saving": "Trimming with ffmpeg, do not close the app…",
     "cancel": "Cancel",
     "play": "Play",
+    "play_error": "Could not play the video (codec unsupported by WebKitGTK?).",
     "pause": "Pause"
   },
   "common": { "loading": "Loading…", "delete": "Delete" },

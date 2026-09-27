@@ -532,6 +532,7 @@ pub fn run() {
             commands::list_audio_devices,
             commands::preview_track,
             commands::trim_clip,
+            commands::media_url,
             commands::open_clip_external,
             commands::video_options,
             commands::test_hardware,
