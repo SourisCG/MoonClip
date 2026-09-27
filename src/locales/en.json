@@ -200,6 +200,8 @@
     "mic": "Mic",
     "no_clip": "No clip on the timeline",
     "clips": "Clips",
+    "add_clip": "Add clip",
+    "no_clips": "No clips in the gallery.",
     "add_text": "Add text",
     "text": "Text",
     "text_size": "Size",

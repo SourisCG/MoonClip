@@ -10,6 +10,7 @@ import {
   Loader2,
   Pause,
   Play,
+  Plus,
   Redo2,
   Scissors,
   Trash2,
@@ -888,9 +889,12 @@ export default function EditorApp({
         {/* Tool rail */}
         <aside className="flex w-56 shrink-0 flex-col gap-3 overflow-y-auto border-r border-white/10 p-3">
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            <Film size={12} /> {t("editor.clips")}
+            <Film size={12} /> {t("editor.add_clip")}
           </p>
-          <div className="max-h-40 space-y-1 overflow-y-auto pr-1">
+          <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
+            {library.filter((c) => c.exists).length === 0 && (
+              <p className="text-[10px] text-slate-600">{t("editor.no_clips")}</p>
+            )}
             {library
               .filter((c) => c.exists)
               .slice(0, 40)
@@ -898,9 +902,10 @@ export default function EditorApp({
                 <button
                   key={c.id}
                   onClick={() => void addClip(c)}
-                  className="flex w-full items-center gap-2 rounded-lg border border-white/5 bg-black/20 px-2 py-1 text-left text-[11px] text-slate-300 transition hover:bg-white/10"
+                  className="flex w-full items-center gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-2 py-1 text-left text-[11px] text-slate-200 transition hover:bg-cyan-500/15"
                   title={c.file_name}
                 >
+                  <Plus size={12} className="shrink-0 text-cyan-300" />
                   <span className="min-w-0 flex-1 truncate">{c.game_title}</span>
                   <span className="font-mono text-[10px] text-slate-500">
                     {fmt(c.duration_ms)}
