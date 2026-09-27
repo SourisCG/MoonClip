@@ -99,6 +99,20 @@ fn dmabuf_state_after_paint(state: &str) -> Option<&'static str> {
 ///     before painting: retry with `__NV_DISABLE_EXPLICIT_SYNC=1`; if that
 ///     also fails, fall back to software compositing for good.
 pub fn prepare_environment() {
+    // GStreamer (WebKit's media backend) refuses VA drivers outside its
+    // allowlist unless `GST_VA_ALL_DRIVERS` is set; NVIDIA's NVDEC bridge is
+    // one of them, and without this the `va` plugin registers zero decoders
+    // and playback stays software. Set before any webview exists; a user-set
+    // value always wins.
+    if std::env::var_os("GST_VA_ALL_DRIVERS").is_none() {
+        if let Some(value) = video::va_allow_all_drivers(&video::vendor_blocking()) {
+            eprintln!(
+                "[moonclip] NVIDIA VA driver: enabling GST_VA_ALL_DRIVERS={value} for hardware decode"
+            );
+            std::env::set_var("GST_VA_ALL_DRIVERS", value);
+        }
+    }
+
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
         return;
     }

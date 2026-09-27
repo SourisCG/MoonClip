@@ -19,40 +19,56 @@ fn read_sysfs(path: &Path) -> Option<String> {
 }
 
 /// GPU vendor from sysfs; prefers the boot VGA card on hybrid systems.
-pub async fn vendor() -> String {
-    tokio::task::spawn_blocking(|| {
-        let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
-            return "unknown".to_string();
-        };
-        let mut fallback: Option<String> = None;
-        for e in entries.flatten() {
-            let name = e.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if !(name.starts_with("card") && name[4..].chars().all(|c| c.is_ascii_digit())) {
-                continue;
-            }
-            let dir = e.path().join("device");
-            let Some(id) = read_sysfs(&dir.join("vendor")) else {
-                continue;
-            };
-            let slug = vendor_from_id(&id);
-            if slug == "unknown" {
-                continue;
-            }
-            let boot = read_sysfs(&dir.join("boot_vga"))
-                .map(|v| v.trim() == "1")
-                .unwrap_or(false);
-            if boot {
-                return slug.to_string();
-            }
-            if fallback.is_none() {
-                fallback = Some(slug.to_string());
-            }
+/// Sync: safe to call from `prepare_environment` before any runtime exists.
+pub fn vendor_blocking() -> String {
+    let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
+        return "unknown".to_string();
+    };
+    let mut fallback: Option<String> = None;
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.starts_with("card") && name[4..].chars().all(|c| c.is_ascii_digit())) {
+            continue;
         }
-        fallback.unwrap_or_else(|| "unknown".to_string())
-    })
-    .await
-    .unwrap_or_else(|_| "unknown".into())
+        let dir = e.path().join("device");
+        let Some(id) = read_sysfs(&dir.join("vendor")) else {
+            continue;
+        };
+        let slug = vendor_from_id(&id);
+        if slug == "unknown" {
+            continue;
+        }
+        let boot = read_sysfs(&dir.join("boot_vga"))
+            .map(|v| v.trim() == "1")
+            .unwrap_or(false);
+        if boot {
+            return slug.to_string();
+        }
+        if fallback.is_none() {
+            fallback = Some(slug.to_string());
+        }
+    }
+    fallback.unwrap_or_else(|| "unknown".to_string())
+}
+
+/// GPU vendor from sysfs (async wrapper for the Settings commands).
+pub async fn vendor() -> String {
+    tokio::task::spawn_blocking(vendor_blocking)
+        .await
+        .unwrap_or_else(|_| "unknown".into())
+}
+
+/// Value for `GST_VA_ALL_DRIVERS`, or None to leave GStreamer's default.
+///
+/// GStreamer's VA plugin refuses drivers outside its allowlist unless this
+/// upstream escape hatch is set (`_gst_va_display_filter_driver` in
+/// gstvadisplay.c): with the NVIDIA NVDEC bridge the `va` plugin registers
+/// ZERO decoders and WebKit falls back to software. AMD/Intel drivers are on
+/// the allowlist, so the override stays NVIDIA-only (setting it globally also
+/// lifts GStreamer's Intel i965 encoder blocklist).
+pub fn va_allow_all_drivers(vendor: &str) -> Option<&'static str> {
+    (vendor == "nvidia").then_some("1")
 }
 
 /// One capture monitor (empty on Linux: the portal dialog selects the screen).
@@ -220,7 +236,9 @@ pub async fn decode_status() -> DecodeStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_package, distro_family_from, va_driver_names, vendor_from_id};
+    use super::{
+        decode_package, distro_family_from, va_allow_all_drivers, va_driver_names, vendor_from_id,
+    };
 
     #[test]
     fn sysfs_ids_map() {
@@ -276,6 +294,14 @@ mod tests {
             Some("iHD_drv_video.so")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn va_override_is_nvidia_only() {
+        assert_eq!(va_allow_all_drivers("nvidia"), Some("1"));
+        assert_eq!(va_allow_all_drivers("amd"), None);
+        assert_eq!(va_allow_all_drivers("intel"), None);
+        assert_eq!(va_allow_all_drivers("unknown"), None);
     }
 
     #[test]

@@ -443,15 +443,20 @@ Fedora/Arch, `libva2` on Debian/Ubuntu). NVIDIA also needs the proprietary
 driver loaded (`nvidia_drm.modeset=1`); the VA-API driver is a userspace
 bridge on top of NVDEC. Verify with `vainfo` after installing.
 
-> **Fedora 44 note (checked 2026-09-27):** `vainfo` works after installing
-> `libva-nvidia-driver` (NVDEC reports H.264/HEVC/AV1), but
-> `gstreamer1-plugins-bad-free` 1.28.7 registers **0 features** in its `va`
-> plugin (`gst-inspect-1.0 va`), and the separate `gstreamer1-vaapi`
-> package is merged/obsoleted (`dnf` reports "Nothing to do"). WebKitGTK
-> therefore still decodes in software on this release until the distro
-> ships the VA elements again. The driver install is still correct and
-> forward-compatible; AMD/Intel Mesa drivers expose their VA elements
-> through the same GStreamer plugin, so the same caveat applies there.
+> **NVIDIA + GStreamer note (root-caused 2026-09-27):** GStreamer's VA
+> plugin (`gst-plugins-bad`, the replacement for the now-obsoleted
+> `gstreamer1-vaapi` package) refuses drivers outside its allowlist
+> (`_gst_va_display_filter_driver` in `gstvadisplay.c`): with the NVIDIA
+> NVDEC driver the plugin registers **0 decoders** and WebKitGTK would
+> silently decode in software even though `vainfo` works. The upstream
+> escape hatch is **`GST_VA_ALL_DRIVERS=1`**: with it the plugin registers
+> `vah264dec`/`vah265dec`/`vaav1dec`/`vavp8dec`/`vavp9dec`/`vajpegdec`
+> (rank 257, above software's 256) and a real H.264 clip decodes through
+> NVDEC (verified end-to-end on Fedora 44 + RTX 3060). **MoonClip sets this
+> variable itself at startup when the GPU vendor is NVIDIA**
+> (`os/linux/mod.rs`, `prepare_environment`, before any webview exists), so
+> users only need the driver package; a user-set value always wins.
+> AMD/Intel drivers are on GStreamer's allowlist and need no override.
 
 ### Install commands (this section only; the app never runs these)
 
@@ -482,6 +487,19 @@ sudo pacman -S intel-media-driver        # Intel Gen8+
   software compositing switches the UI to low-power mode automatically.
 - **Windows**: hardware decode ships with the GPU driver (D3D11/Media
   Foundation) — nothing to install.
+- **VA-API decode on NVIDIA (packaging checklist)**:
+  - Ship the GStreamer `va` plugin next to the webview (part of
+    `gst-plugins-bad`/`libgstva.so` on distro packages and in the GNOME
+    Flatpak runtime) — without it, installing the VA driver does nothing.
+  - The app exports `GST_VA_ALL_DRIVERS=1` itself on NVIDIA before the
+    webview exists; do **not** bake it into the bundle environment globally
+    (it also lifts GStreamer's Intel i965 encoder blocklist).
+  - Keep the VA driver packages optional (`Recommends`/`Suggests`, never
+    `Requires`): software decode is always the fallback and the app must
+    install/run on machines with no GPU at all.
+  - WebKit's child processes (where GStreamer decodes) inherit the app
+    environment; if a custom sandbox wrapper ever clears it, pass
+    `GST_VA_ALL_DRIVERS` through explicitly.
 - Tauri bundle `depends` (docs/08) covers the webview/appindicator floor;
   the generated table above is the complete engine truth for distro
   packaging.

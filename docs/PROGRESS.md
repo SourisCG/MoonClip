@@ -29,6 +29,17 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **VA-API decode root-caused (2026-09-27)** — the Fedora 44 note from
+  `0ba7444` was wrong: `gst-plugins-bad` does ship the `va` plugin (it
+  Obsoletes `gstreamer1-vaapi`). GStreamer 1.28's driver allowlist
+  (`_gst_va_display_filter_driver` in `gstvadisplay.c`) rejects the NVIDIA
+  NVDEC driver, so the plugin registered 0 decoders and WebKit decoded in
+  software even with the driver installed. `GST_VA_ALL_DRIVERS=1` unlocks 9
+  decoders (`vah264dec` rank 257 > software 256) and a real H.264 clip
+  decodes through NVDEC end-to-end. MoonClip now sets the variable itself
+  at startup on NVIDIA only (`os/linux/mod.rs::prepare_environment`, before
+  any webview exists; a user-set value wins). Packaging checklist in
+  `10_DEPENDENCIES.md` §4.
 - **E2 — heavy editor: lazy maximized view + timeline + staged export (2026-09-26)** —
   "Editar avanzado" opens a **separate Vite chunk** (verified: `EditorApp-*.js`
   not present in the main bundle) inside the app window maximized (window
