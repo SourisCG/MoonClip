@@ -37,16 +37,79 @@ pub fn memory_free_mb() -> Option<u64> {
     Some(kb / 1024)
 }
 
-/// WebKitGTK crashes at first paint on Wayland (Gdk `Error 71`) unless the
-/// DMA-BUF renderer is disabled. Cargo dev runs get this from
-/// `.cargo/config.toml`; packaged builds have no such injection, so apply it
-/// here before any window exists (respects a user-set override).
+/// App data dir matching Tauri's `app_data_dir()` on Linux.
+fn app_data_dir() -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|d| d.join("dev.souriscg.moonclip"))
+}
+
+fn dmabuf_state_path() -> Option<std::path::PathBuf> {
+    app_data_dir().map(|d| d.join("dmabuf.state"))
+}
+
+/// WebKitGTK's DMA-BUF renderer is the accelerated Wayland path. Older builds
+/// disabled it unconditionally (a first-paint crash on some drivers), which
+/// forces software compositing and makes video/UI sluggish on every GPU.
+/// Now it is vendor-neutral and self-healing:
+///   - `MOONCLIP_DMABUF=0/1` forces the choice.
+///   - otherwise the renderer stays ON; a `pending` marker is written before
+///     the window exists and the frontend flips it to `ok` on first paint.
+///   - if a start finds `pending` still there, the previous run crashed
+///     before painting: disable the renderer from then on.
 pub fn prepare_environment() {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some()
-        && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
-    {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return;
     }
+    if let Some(force) = std::env::var_os("MOONCLIP_DMABUF") {
+        if force == "0" {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        return;
+    }
+    let Some(state) = dmabuf_state_path() else {
+        return;
+    };
+    let current = std::fs::read_to_string(&state).unwrap_or_default();
+    match current.trim() {
+        "disabled" => {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        "pending" => {
+            eprintln!(
+                "[moonclip] previous start never painted with DMA-BUF; using the software fallback"
+            );
+            let _ = std::fs::write(&state, "disabled");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        "ok" => {}
+        _ => {
+            if let Some(dir) = app_data_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+            }
+            let _ = std::fs::write(&state, "pending");
+        }
+    }
+}
+
+/// Called once the frontend mounted (real first paint).
+pub fn mark_first_paint() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none()
+        || std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some()
+    {
+        return;
+    }
+    if let Some(state) = dmabuf_state_path() {
+        if std::fs::read_to_string(&state)
+            .map(|s| s.trim() == "pending")
+            .unwrap_or(false)
+        {
+            let _ = std::fs::write(&state, "ok");
+        }
+    }
+}
+
+/// Is the accelerated renderer disabled for this run?
+pub fn software_compositing() -> bool {
+    std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some()
 }
 
 /// OBS source id for a registered input kind on Linux.

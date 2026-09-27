@@ -21,11 +21,20 @@ pub mod linux;
 pub use api::{AudioDevice, CaptureConfig, CaptureEngine, CaptureInput, CustomEncoder, CustomVideo};
 
 #[cfg(target_os = "linux")]
-pub use linux::{backend_name, devices, open, paths, prepare_environment, video, Engine};
+pub use linux::{
+    backend_name, devices, mark_first_paint, open, paths, prepare_environment,
+    software_compositing, video, Engine,
+};
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub use linux::{backend_name, devices, open, paths, prepare_environment, video, Engine};
+pub use linux::{
+    backend_name, devices, mark_first_paint, open, paths, prepare_environment,
+    software_compositing, video, Engine,
+};
 #[cfg(target_os = "windows")]
-pub use windows::{backend_name, devices, open, paths, prepare_environment, video, Engine};
+pub use windows::{
+    backend_name, devices, mark_first_paint, open, paths, prepare_environment,
+    software_compositing, video, Engine,
+};
 
 /// New embedded-OBS engine for this OS.
 #[cfg(target_os = "linux")]

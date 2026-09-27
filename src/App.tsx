@@ -78,6 +78,18 @@ export default function App() {
     void refreshClips();
   }, [refreshClips]);
 
+  // First real paint + compositing mode: the DMA-BUF self-healing marks the
+  // accelerated path as working, and software compositing switches the UI to
+  // a low-power mode (no backdrop blur, no starfield).
+  useEffect(() => {
+    void invoke("first_paint").catch(() => {});
+    invoke<boolean>("compositing_status")
+      .then((software) =>
+        document.documentElement.classList.toggle("low-power", software),
+      )
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     invoke<Record<string, string>>("get_settings")

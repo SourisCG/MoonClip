@@ -543,6 +543,8 @@ pub fn run() {
             commands::purge_missing_clips,
             commands::rename_clip,
             commands::cloud_cache_cleanup,
+            commands::first_paint,
+            commands::compositing_status,
             social::social_status,
             social::connect_google_drive,
             social::disconnect_google_drive,

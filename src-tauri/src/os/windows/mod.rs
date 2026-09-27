@@ -26,6 +26,13 @@ pub fn backend_name() -> &'static str {
 /// power throttling (EcoQoS) disabled, so Windows cannot park our UI/IPC
 /// threads while the game runs. Windows (WebView2) needs no WebKitGTK/Wayland
 /// workarounds.
+/// The DMA-BUF renderer is a GTK/Wayland concept: Windows always composites.
+pub fn mark_first_paint() {}
+
+pub fn software_compositing() -> bool {
+    false
+}
+
 pub fn prepare_environment() {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Threading::{

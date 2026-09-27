@@ -1,14 +1,18 @@
 # MoonClip cargo config.
-# WEBKIT_DISABLE_DMABUF_RENDERER: mandatory on Wayland (Fedora/GNOME/KDE).
-# Without it WebKitGTK crashes at first paint with:
-#   Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.
-# Cargo injects [env] into everything it runs (incl. `cargo run` via `tauri dev`),
-# so plain `pnpm tauri:dev` works with no manual exports. Packaged builds have
-# no cargo env injection, so they set it from code instead
-# (os::prepare_environment, called at startup).
-# Fallback if Error 71 returns: GDK_BACKEND = "x11" (forces XWayland).
-[env]
-WEBKIT_DISABLE_DMABUF_RENDERER = "1"
+#
+# WebKitGTK's DMA-BUF renderer is the ACCELERATED Wayland path. Older builds
+# disabled it unconditionally because it crashed at first paint on some
+# drivers (Gdk-Message: Error 71), which forced software compositing and made
+# video/UI sluggish on every GPU. That is now handled in code
+# (os::prepare_environment, called before any window exists) and it is
+# vendor-neutral + self-healing:
+#   - default: renderer ON (accelerated). A `pending` marker is written and
+#     the frontend flips it to `ok` on first paint.
+#   - if a start finds `pending` still there, the previous run crashed before
+#     painting: the renderer is disabled from then on.
+#   - MOONCLIP_DMABUF=0/1 forces the choice (0 = software fallback).
+# Do NOT set WEBKIT_DISABLE_DMABUF_RENDERER here: cargo's [env] would leak
+# into dev runs and hide the accelerated path.
 
 # Zero-install on Windows: statically link the MSVC C runtime so the shipped
 # .exe needs no VC++ Redistributable (no VCRUNTIME140*.dll / MSVCP140.dll).

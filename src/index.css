@@ -28,3 +28,18 @@ textarea,
 ::selection {
   background: rgba(56, 189, 248, 0.3);
 }
+
+/* Low-power mode (software compositing: no accelerated WebKit renderer).
+   Full-window backdrop blurs and the twinkle canvas are per-frame costs that
+   a CPU-only compositor cannot afford while playing video. */
+.low-power .backdrop-blur-sm,
+.low-power .backdrop-blur-md,
+.low-power .backdrop-blur-lg,
+.low-power .backdrop-blur-xl {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.low-power .starfield {
+  display: none;
+}

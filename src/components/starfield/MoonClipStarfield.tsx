@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { onOverlayChange } from "../../lib/overlay";
 
 interface Star {
   x: number;
@@ -83,6 +84,13 @@ export function MoonClipStarfield() {
       if (!document.hidden) resume();
     };
 
+    // Any modal on screen pauses the twinkle: repainting it under the shell's
+    // backdrop blur costs a full-window blur per frame.
+    const offOverlay = onOverlayChange((open) => {
+      if (open) pause();
+      else if (!document.hidden) resume();
+    });
+
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
@@ -90,6 +98,7 @@ export function MoonClipStarfield() {
     return () => {
       isPaused = true;
       cancelAnimationFrame(animationId);
+      offOverlay();
       window.removeEventListener("resize", resizeCanvas);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("blur", onBlur);
@@ -101,7 +110,7 @@ export function MoonClipStarfield() {
     <canvas
       ref={canvasRef}
       aria-hidden
-      className="pointer-events-none fixed inset-0 z-0 opacity-70"
+      className="starfield pointer-events-none fixed inset-0 z-0 opacity-70"
     />
   );
 }

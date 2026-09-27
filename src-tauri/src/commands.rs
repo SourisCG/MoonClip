@@ -91,6 +91,20 @@ pub async fn delete_clip(app: AppHandle, db: State<'_, DbState>, id: String) -> 
     db.delete_clip(&id)
 }
 
+/// First real paint from the webview: lets the DMA-BUF self-healing know the
+/// accelerated path works on this machine (no-op elsewhere).
+#[tauri::command]
+pub fn first_paint() -> Result<(), String> {
+    crate::os::mark_first_paint();
+    Ok(())
+}
+
+/// Is the webview compositing in software? (drives the low-power UI mode)
+#[tauri::command]
+pub fn compositing_status() -> Result<bool, String> {
+    Ok(crate::os::software_compositing())
+}
+
 /// Drop the on-demand cache of a cloud clip (quick-trim panel closed).
 #[tauri::command]
 pub fn cloud_cache_cleanup(app: AppHandle, clip_id: String) -> Result<(), String> {

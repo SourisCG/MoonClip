@@ -405,7 +405,7 @@ export function TrimPanel({
 
   return (
     <Modal>
-      <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-4">
         <div className="max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto rounded-2xl border border-white/10 bg-gradient-to-b from-[#0d1220] to-[#0b0f19] p-4 shadow-2xl">
         {/* Header: title (rename inline), metadata chips, navigation */}
         <div className="mb-3 flex items-start gap-2">

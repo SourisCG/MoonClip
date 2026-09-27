@@ -1,5 +1,8 @@
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+
+import { pushOverlay } from "../lib/overlay";
 
 /**
  * Render modal overlays into `document.body`.
@@ -11,5 +14,6 @@ import type { ReactNode } from "react";
  * viewport-fixed (centered, header always visible) no matter the scroll.
  */
 export function Modal({ children }: { children: ReactNode }) {
+  useEffect(() => pushOverlay(), []);
   return createPortal(children, document.body);
 }
