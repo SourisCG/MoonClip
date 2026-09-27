@@ -1447,6 +1447,25 @@ export default function EditorApp({
         </div>
       </div>
 
+      {/* Timeline toolbar: always-visible entries for adding content */}
+      <div className="flex items-center gap-2 border-t border-white/10 bg-black/40 px-3 py-1.5">
+        <button
+          onClick={() => setShowLibrary(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+        >
+          <Plus size={13} /> {t("editor.add_clip")}
+        </button>
+        <button
+          onClick={addText}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-100 transition hover:bg-amber-400/20"
+        >
+          <Type size={13} /> {t("editor.add_text")}
+        </button>
+        <span className="ml-auto font-mono text-[10px] text-slate-600">
+          {library.filter((c) => c.exists).length} clips
+        </span>
+      </div>
+
       {/* Timeline */}
       <div ref={timelineWrapRef} className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
         <TimelineView
