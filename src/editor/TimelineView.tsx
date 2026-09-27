@@ -189,7 +189,6 @@ function Inner({
   rows,
   waveSources,
   plates,
-  master,
   visibleEnd,
   onSeek,
   onScrubStart,
@@ -208,7 +207,6 @@ function Inner({
     gainGame: number;
     gainMic: number;
   }[];
-  master: number;
   visibleEnd: number;
   onSeek: (ms: number) => void;
   onScrubStart: () => void;
@@ -321,8 +319,9 @@ function Inner({
                       // playhead, so waves can never drift at any zoom.
                       const left = valueToPixels(pl.startMs - range.start);
                       const width = Math.max(2, valueToPixels(pl.durationMs));
-                      // Scale each clip's wave by its own gain for this stem
-                      // (x the global master), so the graph follows the mixer.
+                      // Scale each clip's wave by ITS OWN gain only (never the
+                      // global master: muting the output to edit in silence
+                      // must not erase the graphs).
                       const laneGain =
                         stem?.label === "mic"
                           ? pl.gainMic
@@ -332,8 +331,7 @@ function Inner({
                       return (
                         <div
                           key={pl.id}
-                          // ring = TEMP visual check: must match the clip bar
-                          className="absolute bottom-0 top-0 overflow-hidden ring-1 ring-fuchsia-500/40"
+                          className="absolute bottom-0 top-0 overflow-hidden"
                           style={{ left, width }}
                         >
                           <WaveCanvas
@@ -341,7 +339,7 @@ function Inner({
                             color={color}
                             from={pl.from}
                             to={pl.to}
-                            gain={laneGain * master}
+                            gain={laneGain}
                           />
                         </div>
                       );
@@ -363,7 +361,6 @@ export function TimelineView({
   audioTracks,
   waveSources,
   plates,
-  master,
   visibleEnd,
   onVisibleEnd,
   onSeek,
@@ -383,7 +380,6 @@ export function TimelineView({
     gainGame: number;
     gainMic: number;
   }[];
-  master: number;
   visibleEnd: number;
   onVisibleEnd: (ms: number) => void;
   onSeek: (ms: number) => void;
@@ -447,7 +443,6 @@ export function TimelineView({
         rows={rows}
         waveSources={waveSources}
         plates={plates}
-        master={master}
         visibleEnd={visibleEnd}
         onSeek={onSeek}
         onScrubStart={onScrubStart}

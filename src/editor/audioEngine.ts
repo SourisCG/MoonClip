@@ -56,6 +56,8 @@ export class AudioTimeline {
   private mic: GainNode;
   private analyserGame: AnalyserNode;
   private analyserMic: AnalyserNode;
+  /** Post-master tap: proves what actually leaves the engine. */
+  private analyserOut: AnalyserNode;
   private levelBuf: Float32Array<ArrayBuffer>;
   private sources = new Map<string, DecodedSource>();
   private nodes: AudioBufferSourceNode[] = [];
@@ -78,6 +80,10 @@ export class AudioTimeline {
     this.master = this.ctx.createGain();
     this.master.gain.value = 1;
     this.master.connect(this.ctx.destination);
+    // Post-master tap: measures exactly what leaves the engine.
+    this.analyserOut = this.ctx.createAnalyser();
+    this.analyserOut.fftSize = 256;
+    this.master.connect(this.analyserOut);
     this.game = this.ctx.createGain();
     this.game.gain.value = 1;
     this.game.connect(this.master);
@@ -94,8 +100,9 @@ export class AudioTimeline {
     this.levelBuf = new Float32Array(new ArrayBuffer(this.analyserGame.fftSize * 4));
   }
 
-  /** Live RMS per track (0..1) for the level meters. */
-  levels(): { game: number; mic: number } {
+  /** Live RMS per track (0..1) for the level meters. `out` is measured AFTER
+   *  the master gain, i.e. what actually reaches the system output. */
+  levels(): { game: number; mic: number; out: number } {
     const rms = (a: AnalyserNode) => {
       a.getFloatTimeDomainData(this.levelBuf);
       let sum = 0;
@@ -106,6 +113,7 @@ export class AudioTimeline {
     return {
       game: rms(this.analyserGame) * master,
       mic: rms(this.analyserMic) * master,
+      out: rms(this.analyserOut),
     };
   }
 
@@ -163,6 +171,54 @@ export class AudioTimeline {
   /** True when the source has playable decoded audio. */
   hasAudio(clipId: string): boolean {
     return (this.sources.get(clipId)?.stems.length ?? 0) > 0;
+  }
+
+  /** Dev diagnostic: proves GainNode automation works in this WebKit build.
+   *  Fully silent (the tone goes through a -80 dB sink) and logs the measured
+   *  RMS at gain 0.1 / 1.0 / 0.0. */
+  async gainSelfTest(): Promise<void> {
+    const ctx = this.ctx;
+    await ctx.resume();
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 440;
+    const gain = ctx.createGain();
+    const an = ctx.createAnalyser();
+    an.fftSize = 1024;
+    const sink = ctx.createGain();
+    sink.gain.value = 0.0001;
+    osc.connect(gain);
+    gain.connect(an);
+    gain.connect(sink);
+    sink.connect(ctx.destination);
+    const buf = new Float32Array(an.fftSize);
+    const rms = () => {
+      an.getFloatTimeDomainData(buf);
+      let s = 0;
+      for (const v of buf) s += v * v;
+      return Math.sqrt(s / buf.length);
+    };
+    const wait = () => new Promise((r) => setTimeout(r, 150));
+    osc.start();
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    await wait();
+    const low = rms();
+    gain.gain.setValueAtTime(1.0, ctx.currentTime);
+    await wait();
+    const high = rms();
+    gain.gain.setValueAtTime(0.0, ctx.currentTime);
+    await wait();
+    const zero = rms();
+    try {
+      osc.stop();
+    } catch {
+      /* not started twice */
+    }
+    osc.disconnect();
+    gain.disconnect();
+    sink.disconnect();
+    diag(
+      `gainSelfTest low=${low.toFixed(3)} high=${high.toFixed(3)} zero=${zero.toFixed(3)}`,
+    );
   }
 
   /** Global output level. Shared GainNode: no reschedule is ever needed. */

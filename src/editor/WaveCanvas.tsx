@@ -50,7 +50,10 @@ export function WaveCanvas({
         Math.min(Math.max(1, Math.floor(width)), Math.round(b - a)),
       );
       const barW = width / count;
-      const volume = Math.max(0, gain);
+      // Headroom: 100% of clip gain draws at 2/3 of the lane, 150% fills it
+      // (and clips beyond). Without it, boosting past 100% looked like nothing
+      // happened (the amplitude was already at the lane's full height).
+      const volume = Math.max(0, gain) / 1.5;
       const band = height / chans;
       ctx.fillStyle = color;
       for (let c = 0; c < chans; c++) {

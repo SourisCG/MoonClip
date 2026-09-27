@@ -34,8 +34,7 @@ pub struct OutputSettings {
     pub encoder: String,
     pub container: String,
     /// "mix" = one AAC track with the Game+Mic mix (plays everywhere);
-    /// "tracks" = two AAC tracks (Game, Mic) for re-editing. The recording's
-    /// track 1 (Mix, the sum) is never included.
+    /// "tracks" = three AAC tracks (Mix, Game, Mic) for re-editing.
     #[serde(default = "default_audio")]
     pub audio: String,
 }

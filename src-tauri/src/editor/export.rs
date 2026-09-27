@@ -296,14 +296,14 @@ pub fn concat_file(paths: &[PathBuf]) -> String {
         .join("\n")
 }
 
-/// Audio filtergraph for the stem remix. Track 1 of a recording is the SUM of
-/// Game+Mic, so it is never used (playing both copies was the doubled-audio
-/// bug); single-track sources use their only track. Every contribution
-/// carries `master x that clip's own gain` at its timeline position.
+/// Audio filtergraph for the stem remix. Every contribution carries
+/// `master x that clip's own gain` at its timeline position.
 ///
-/// Returns the graph plus the output labels to `-map`. `mode` is `"mix"`
-/// (one AAC track with the Game+Mic mix, plays everywhere) or `"tracks"`
-/// (separate `[agame]`/`[amic]` outputs for re-editing).
+/// Returns the graph plus the output labels to `-map`. `mode` is:
+/// - `"mix"`: ONE AAC track with Game+Mic (plays everywhere). The recording's
+///   Mix stem (the SUM of both) is never included here: playing both copies
+///   was the doubled-audio bug.
+/// - `"tracks"`: three AAC tracks — Mix, Game, Mic — for re-editing.
 pub fn audio_filter(
     segments: &[Segment],
     input_index: &[usize],
@@ -316,7 +316,12 @@ pub fn audio_filter(
     let mut chains: Vec<String> = Vec::new();
     let mut game_labels: Vec<String> = Vec::new();
     let mut mic_labels: Vec<String> = Vec::new();
-    let mut mix_labels: Vec<String> = Vec::new();
+    // Stream 0 of a multi-track recording (the Mix stem): only exported in
+    // tracks mode, as its own third output.
+    let mut mixstem_labels: Vec<String> = Vec::new();
+    // Stream 0 of a single-track source: the only audio it has, used by both
+    // modes.
+    let mut fallback_labels: Vec<String> = Vec::new();
     for (i, seg) in segments.iter().enumerate() {
         let idx = input_index[i];
         let tracks = tracks_per_input[i].min(3);
@@ -334,15 +339,22 @@ pub fn audio_filter(
         };
         // (stream index, gain, output group) contributions for this clip.
         let sources: Vec<(usize, f64, &str)> = if tracks == 1 {
-            vec![(0, master * seg.gain_mix, "mix")]
+            vec![(0, master * seg.gain_mix, "fallback")]
         } else {
-            let mut v = vec![(1, master * seg.gain_game, "game")];
+            let mut v = vec![
+                (0, master * seg.gain_mix, "mixstem"),
+                (1, master * seg.gain_game, "game"),
+            ];
             if tracks >= 3 {
                 v.push((2, master * seg.gain_mic, "mic"));
             }
             v
         };
         for (stream, gain, group) in sources {
+            // The Mix stem is never used by the single-track mix output.
+            if group == "mixstem" && !tracks_mode {
+                continue;
+            }
             let label = format!("a{i}_{stream}");
             let delay = if start > 0 {
                 format!(",adelay={}|{}", start, start)
@@ -359,12 +371,13 @@ pub fn audio_filter(
             match group {
                 "game" => game_labels.push(lbl),
                 "mic" => mic_labels.push(lbl),
-                _ => mix_labels.push(lbl),
+                "mixstem" => mixstem_labels.push(lbl),
+                _ => fallback_labels.push(lbl),
             }
         }
     }
     if !tracks_mode {
-        let mut all = mix_labels;
+        let mut all = fallback_labels;
         all.append(&mut game_labels);
         all.append(&mut mic_labels);
         if all.is_empty() {
@@ -373,11 +386,16 @@ pub fn audio_filter(
         chains.push(amix_chain(&all, total_ms, "aout"));
         return (chains.join(";"), vec!["[aout]".into()]);
     }
-    // Separate outputs: single-track sources fall back to the Game bus.
+    // Three separate outputs: Mix (the stem, plus single-track fallback),
+    // Game and Mic. Only non-empty busses are mapped.
     let mut maps: Vec<String> = Vec::new();
-    mix_labels.append(&mut game_labels);
-    if !mix_labels.is_empty() {
-        chains.push(amix_chain(&mix_labels, total_ms, "agame"));
+    mixstem_labels.append(&mut fallback_labels);
+    if !mixstem_labels.is_empty() {
+        chains.push(amix_chain(&mixstem_labels, total_ms, "amix"));
+        maps.push("[amix]".into());
+    }
+    if !game_labels.is_empty() {
+        chains.push(amix_chain(&game_labels, total_ms, "agame"));
         maps.push("[agame]".into());
     }
     if !mic_labels.is_empty() {
@@ -912,25 +930,36 @@ mod tests {
     }
 
     #[test]
-    fn audio_filter_tracks_mode_splits_game_and_mic() {
+    fn audio_filter_tracks_mode_exports_mix_game_and_mic() {
         let mut s = seg(0, 1000);
+        s.gain_mix = 0.9;
         s.gain_game = 0.4;
         s.gain_mic = 1.6;
         let (graph, maps) = audio_filter(&[s], &[1], &[3], 1000, 1.0, "tracks");
-        assert_eq!(maps, vec!["[agame]".to_string(), "[amic]".to_string()]);
+        assert_eq!(
+            maps,
+            vec![
+                "[amix]".to_string(),
+                "[agame]".to_string(),
+                "[amic]".to_string()
+            ]
+        );
+        // Mix stem (stream 0) as its own track, plus Game and Mic.
+        assert!(graph.contains("volume=0.900[a0_0]"), "{graph}");
         assert!(graph.contains("volume=0.400[a0_1]"), "{graph}");
         assert!(graph.contains("volume=1.600[a0_2]"), "{graph}");
+        assert!(graph.contains("[a0_0]amix=inputs=1"), "{graph}");
         assert!(graph.contains("[a0_1]amix=inputs=1"), "{graph}");
         assert!(graph.contains("[a0_2]amix=inputs=1"), "{graph}");
         assert!(!graph.contains("[aout]"), "{graph}");
-        assert!(!graph.contains("[1:a:0]"), "{graph}");
     }
 
     #[test]
-    fn audio_filter_tracks_mode_single_track_lands_on_game_bus() {
+    fn audio_filter_tracks_mode_single_track_lands_on_mix_bus() {
         let (graph, maps) = audio_filter(&[seg(0, 1000)], &[1], &[1], 1000, 1.0, "tracks");
-        assert_eq!(maps, vec!["[agame]".to_string()]);
-        assert!(graph.contains("[agame]"), "{graph}");
+        assert_eq!(maps, vec!["[amix]".to_string()]);
+        assert!(graph.contains("[amix]"), "{graph}");
+        assert!(!graph.contains("[agame]"), "{graph}");
         assert!(!graph.contains("[amic]"), "{graph}");
     }
 
@@ -1157,13 +1186,17 @@ mod tests {
         assert_eq!(session::parse_audio_track_count(&text), 1, "{text}");
         assert!(crate::editor::ffmpeg::parse_video_stream_line(&text).is_some());
 
-        // Tracks mode: Game and Mic as two separate AAC tracks, never the Mix.
+        // Tracks mode: Mix, Game and Mic as three separate AAC tracks.
         let tracks_out = dir.join("tracks.mp4");
         let (tracks_filter, tracks_maps) =
             audio_filter(&[seg(1000, 2500)], &[1], &[3], 1500, 1.0, "tracks");
         assert_eq!(
             tracks_maps,
-            vec!["[agame]".to_string(), "[amic]".to_string()]
+            vec![
+                "[amix]".to_string(),
+                "[agame]".to_string(),
+                "[amic]".to_string()
+            ]
         );
         let ok = tokio::process::Command::new(&ff)
             .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
@@ -1172,7 +1205,7 @@ mod tests {
             .arg(&src)
             .args(["-filter_complex", &tracks_filter])
             .args(["-map", "0:v:0"])
-            .args(["-map", "[agame]", "-map", "[amic]"])
+            .args(["-map", "[amix]", "-map", "[agame]", "-map", "[amic]"])
             .args(["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"])
             .arg(&tracks_out)
             .status()
@@ -1186,7 +1219,7 @@ mod tests {
             .await
             .unwrap();
         let text = String::from_utf8_lossy(&stderr.stderr);
-        assert_eq!(session::parse_audio_track_count(&text), 2, "{text}");
+        assert_eq!(session::parse_audio_track_count(&text), 3, "{text}");
 
         // Speed 2x: video setpts + audio rubberband must produce a clip half
         // as long, still with one audio track.

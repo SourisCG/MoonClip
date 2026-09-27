@@ -65,7 +65,8 @@ Two separate pieces, by design:
   (corrective seek past 120 ms). Waveforms are drawn on canvas from the same
   decoded buffers (no media element). **Export audio mode**
   (`output.audio`): `mix` (default) = ONE AAC track with the Game+Mic mix
-  (plays everywhere); `tracks` = two AAC tracks (Game, Mic) for re-editing.
+  (plays everywhere); `tracks` = three AAC tracks (Mix, Game, Mic) for
+  re-editing.
   The Mix track is never included in either. Temps are purged on close
   and stale sessions on boot.
 - **Export**: Rust builds a `filter_complex` graph and runs the ffmpeg sidecar

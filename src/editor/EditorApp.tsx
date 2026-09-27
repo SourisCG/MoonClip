@@ -59,38 +59,6 @@ function TimeLabel({ total }: { total: number }) {
   );
 }
 
-/** TEMP diagnostic: numeric readout used to debug wave/playhead sync from
- *  screenshots. Remove once the alignment is confirmed. */
-function SyncDebug({
-  plates,
-  spanMs,
-}: {
-  plates: { id: string; startMs: number; durationMs: number; from: number; to: number }[];
-  spanMs: number;
-}) {
-  const ms = useEditorStore((s) => s.playheadMs);
-  const project = useEditorStore((s) => s.project);
-  const seg = project ? segmentAt(project.segments, ms) : null;
-  if (!project || !seg) return null;
-  const buf = sourceMsFor(seg, ms) / 1000;
-  return (
-    <div className="flex items-center gap-2 overflow-hidden border-t border-white/5 bg-black/60 px-3 py-0.5">
-      <span className="shrink-0 font-mono text-[9px] text-fuchsia-300/90">
-        SYNC ph {fmt(ms)} · clip@{fmt(seg.timelineStartMs)} buf {buf.toFixed(2)}s · zoom{" "}
-        {(spanMs / 1000).toFixed(1)}s
-      </span>
-      <span className="truncate font-mono text-[9px] text-slate-500">
-        {plates
-          .map(
-            (p) =>
-              `${p.id.slice(0, 4)} ${fmt(p.startMs)}-${fmt(p.startMs + p.durationMs)} f${p.from.toFixed(2)}..${p.to.toFixed(2)}`,
-          )
-          .join(" | ")}
-      </span>
-    </div>
-  );
-}
-
 /** Scrub bar under the preview: click/drag anywhere to move the playhead. */
 function ScrubBar({
   total,
@@ -271,15 +239,15 @@ function LevelMeters({
   labels,
 }: {
   engineRef: React.MutableRefObject<AudioTimeline | null>;
-  labels: [string, string];
+  labels: [string, string, string];
 }) {
   const bars = useRef<(HTMLElement | null)[]>([]);
   useEffect(() => {
     let raf = 0;
     const tick = () => {
       const engine = engineRef.current;
-      const l = engine ? engine.levels() : { game: 0, mic: 0 };
-      const vals = [l.game, l.mic];
+      const l = engine ? engine.levels() : { game: 0, mic: 0, out: 0 };
+      const vals = [l.game, l.mic, l.out];
       vals.forEach((v, i) => {
         const el = bars.current[i];
         if (el) el.style.width = `${Math.min(100, Math.round(v * 160))}%`;
@@ -485,6 +453,7 @@ export default function EditorApp({
     // until the AudioContext has created it).
     void invoke<number>("editor_audio_health").catch(() => {});
     void decodeProject(project).then((engine) => {
+      void engine.gainSelfTest();
       setWaveSources(
         Object.fromEntries(
           Object.keys(useEditorStore.getState().sources).map((id) => [id, engine.peaksFor(id)]),
@@ -698,12 +667,14 @@ export default function EditorApp({
       const nowLog = performance.now();
       if (nowLog - lastSyncLog.current > 1000) {
         lastSyncLog.current = nowLog;
+        const lv = engine?.levels();
         void invoke("editor_log", {
           message:
             `sync ph=${Math.round(ms)} engine=${
               engine && engine.isPlaying() ? Math.round(engine.currentTimeMs()) : -1
             } video=${v ? v.currentTime.toFixed(2) : "-"} ` +
-            `seg=${seg?.id.slice(0, 6) ?? "-"} start=${seg?.timelineStartMs ?? -1} in=${seg?.inMs ?? -1}`,
+            `seg=${seg?.id.slice(0, 6) ?? "-"} start=${seg?.timelineStartMs ?? -1} in=${seg?.inMs ?? -1} ` +
+            `out=${lv ? lv.out.toFixed(3) : "-"}`,
         }).catch(() => {});
       }
       if (!videoClock) {
@@ -1008,7 +979,10 @@ export default function EditorApp({
                     (sources[session.clip.id]?.stems ?? []).map((s) => s.label).join("+") || "—",
                 })}
           </p>
-          <LevelMeters engineRef={engineRef} labels={[t("editor.game"), t("editor.mic")]} />
+          <LevelMeters
+            engineRef={engineRef}
+            labels={[t("editor.game"), t("editor.mic"), t("editor.out")]}
+          />
           {project.gainMaster <= 0 && (
             <div className="flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100">
               <span className="min-w-0 flex-1">{t("editor.master_zero")}</span>
@@ -1597,16 +1571,12 @@ export default function EditorApp({
         </span>
       </div>
 
-      {/* TEMP diagnostic: numbers to verify wave/playhead sync from a capture */}
-      <SyncDebug plates={plates} spanMs={Math.max(5000, visibleMs)} />
-
       {/* Timeline */}
       <div className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
         <TimelineView
           audioTracks={session.audioTracks}
           waveSources={waveSources}
           plates={plates}
-          master={masterGain}
           visibleEnd={visibleMs}
           onVisibleEnd={(ms) =>
             setVisibleMs(
