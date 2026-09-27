@@ -154,6 +154,15 @@
     "hotkey_reset": "Reset to F9",
     "hotkey_needs_mod": "Use a modifier (Ctrl/Alt/Shift/Super) or a function key (F1–F12)."
   },
+  "accounts": {
+    "title": "Accounts",
+    "drive": "Google Drive",
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "connecting": "Waiting for the browser…",
+    "connected": "Connected",
+    "not_configured": "Not configured (social.json)"
+  },
   "game": {
     "running": "{{name}} running"
   },

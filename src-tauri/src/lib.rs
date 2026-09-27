@@ -15,6 +15,7 @@ mod editor;
 mod os;
 mod sidecar;
 mod state;
+mod social;
 mod storage;
 mod video_quality;
 
@@ -536,6 +537,9 @@ pub fn run() {
             commands::delete_clip,
             commands::purge_missing_clips,
             commands::rename_clip,
+            social::social_status,
+            social::connect_google_drive,
+            social::disconnect_google_drive,
             commands::reconcile_library,
             commands::organize_library,
             commands::resolve_clip_src,

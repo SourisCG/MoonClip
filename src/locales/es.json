@@ -153,6 +153,15 @@
     "hotkey_reset": "Restablecer F9",
     "hotkey_needs_mod": "Usa un modificador (Ctrl/Alt/Shift/Super) o una tecla de función (F1–F12)."
   },
+  "accounts": {
+    "title": "Cuentas",
+    "drive": "Google Drive",
+    "connect": "Conectar",
+    "disconnect": "Desconectar",
+    "connecting": "Esperando al navegador…",
+    "connected": "Conectado",
+    "not_configured": "No configurado (social.json)"
+  },
   "game": {
     "running": "{{name}} en ejecución"
   },

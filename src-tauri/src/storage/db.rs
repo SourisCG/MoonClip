@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use super::models::{ClipRecord, RegisteredInput};
 use super::paths;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 const MIGRATION_001: &str = include_str!("../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../migrations/002_gains.sql");
 const MIGRATION_003: &str = include_str!("../../migrations/003_devices.sql");
@@ -23,6 +23,7 @@ const MIGRATION_010: &str = include_str!("../../migrations/010_game_token.sql");
 const MIGRATION_011: &str = include_str!("../../migrations/011_registered_inputs.sql");
 const MIGRATION_012: &str = include_str!("../../migrations/012_window_identity.sql");
 const MIGRATION_013: &str = include_str!("../../migrations/013_clip_folders.sql");
+const MIGRATION_014: &str = include_str!("../../migrations/014_drive_folders.sql");
 
 pub struct DbState(pub Mutex<Connection>);
 
@@ -36,6 +37,7 @@ pub(crate) fn test_db() -> DbState {
         MIGRATION_011,
         MIGRATION_012,
         MIGRATION_013,
+        MIGRATION_014,
     ] {
         conn.execute_batch(migration).unwrap();
     }
@@ -150,6 +152,10 @@ impl DbState {
                 tx.execute_batch(MIGRATION_013)
                     .map_err(|e| format!("migration 013 failed: {e}"))?;
             }
+            if version < 14 {
+                tx.execute_batch(MIGRATION_014)
+                    .map_err(|e| format!("migration 014 failed: {e}"))?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
             tx.commit()
@@ -161,6 +167,8 @@ impl DbState {
         ensure_column(&conn, "custom_apps", "clips_folder", "TEXT NOT NULL DEFAULT ''")?;
         conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_clips_folder ON clips(folder)")
             .map_err(|e| format!("cannot index clips.folder: {e}"))?;
+        conn.execute_batch(MIGRATION_014)
+            .map_err(|e| format!("cannot ensure drive_folders: {e}"))?;
         // Secrets never live in the DB: drop rows written by older builds
         // (the websocket password is generated per start; the portal token
         // now lives in the OS vault).
@@ -546,6 +554,7 @@ impl DbState {
             "engine_ws_port",
             "engine_source_width",
             "engine_source_height",
+            "drive_root_folder_id",
         ];
         if !ALLOWED.contains(&key) {
             return Err(format!("unknown setting: {key}"));
@@ -732,6 +741,14 @@ impl DbState {
             params![display_name, window_title, window_app_id, target_exe, input_name],
         )
         .map_err(|e| format!("cannot store window identity: {e}"))?;
+        Ok(())
+    }
+
+    /// Forget the Drive mirror (disconnect): the next connect re-creates it.
+    pub fn clear_drive_folders(&self) -> Result<(), String> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM drive_folders", [])
+            .map_err(|e| format!("cannot clear drive_folders: {e}"))?;
         Ok(())
     }
 

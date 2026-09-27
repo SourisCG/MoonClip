@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen } from "lucide-react";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocale } from "../../hooks/useLocale";
+import { AccountsSection } from "./AccountsSection";
 import { AudioSection } from "./AudioSection";
 import { NumberField } from "./NumberField";
 import { ObsEngineSection } from "./ObsEngineSection";
@@ -188,6 +189,9 @@ export function SettingsModal({
       {(status || saving) && (
         <p className="font-mono text-xs text-slate-400">{saving ? `${saving}…` : status}</p>
       )}
+
+      <h3 className="pt-2 text-sm font-semibold text-slate-200">{t("accounts.title")}</h3>
+      <AccountsSection />
 
       <h3 className="pt-2 text-sm font-semibold text-slate-200">{t("audio.title")}</h3>
       <AudioSection status={engineStatus} />
