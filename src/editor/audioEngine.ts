@@ -221,12 +221,15 @@ export class AudioTimeline {
     );
   }
 
-  /** Global output level. Shared GainNode: no reschedule is ever needed. */
+  /** Global output level. Shared GainNode: no reschedule is ever needed.
+   *  ALWAYS apply, never compare with `gain.value`: in WebKit that getter
+   *  does not reflect values scheduled with setValueAtTime, so a
+   *  `value !== target` guard silently skipped restoring the master (or a
+   *  channel) after it had been lowered. */
   setMaster(value: number) {
     const v = Math.max(0, Math.min(4, value));
-    if (Math.abs(this.master.gain.value - v) > 0.0001) {
-      this.master.gain.setValueAtTime(v, this.ctx.currentTime);
-    }
+    this.master.gain.setValueAtTime(v, this.ctx.currentTime);
+    diag(`master=${v.toFixed(2)}`);
   }
 
   /** Length of the decoded stems (ms), if this source was decoded. */
@@ -249,9 +252,9 @@ export class AudioTimeline {
         0,
         Math.min(4, g.kind === "mic" ? seg.gainMic : g.kind === "game" ? seg.gainGame : seg.gainMix),
       );
-      if (Math.abs(g.node.gain.value - value) > 0.0001) {
-        g.node.gain.setValueAtTime(value, this.ctx.currentTime);
-      }
+      // Always apply: WebKit's `gain.value` getter lags scheduled changes, so
+      // a `value !== target` guard skipped restoring a lowered channel.
+      g.node.gain.setValueAtTime(value, this.ctx.currentTime);
       sig += `${g.segId.slice(0, 4)}/${g.kind}=${value.toFixed(2)} `;
     }
     if (sig && sig !== this.lastGainsSig) {
