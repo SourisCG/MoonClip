@@ -61,17 +61,34 @@ function SegmentItem({ segment }: { segment: Segment }) {
     >
       <div style={itemContentStyle}>
         <div
-          className={`h-full w-full cursor-grab overflow-hidden rounded-md border px-2 text-[11px] leading-[32px] ${
+          className={`relative h-full w-full cursor-grab overflow-hidden rounded-md border px-2 text-[11px] leading-[32px] ${
             selected
               ? "border-cyan-300/80 bg-cyan-500/25 text-cyan-50"
               : "border-white/15 bg-white/10 text-slate-200 hover:bg-white/15"
           }`}
-          title={`${name ?? ""} · ${fmt(segment.inMs)} – ${fmt(segment.outMs)}`}
+          title={`${name ?? ""} · ${fmt(segment.inMs)} – ${fmt(segment.outMs)}${
+            segment.freezeMs > 0 ? " · freeze" : ""
+          }`}
         >
-          <span className="pointer-events-none select-none truncate">
+          {segment.freezeMs > 0 && segment.freezeAtMs > segment.inMs && (
+            <span
+              className="pointer-events-none absolute inset-y-0 border-x border-sky-200/70 bg-sky-300/30"
+              style={{
+                left: `${
+                  ((Math.min(segment.freezeAtMs, segment.outMs) - segment.inMs) /
+                    Math.max(0.05, segment.speed) /
+                    Math.max(1, duration)) *
+                  100
+                }%`,
+                width: `${(Math.min(segment.freezeMs, duration) / Math.max(1, duration)) * 100}%`,
+              }}
+            />
+          )}
+          <span className="pointer-events-none relative select-none truncate">
             {name ? `${name} · ` : ""}
             {fmt(duration)}
             {Math.abs(segment.speed - 1) > 0.001 ? ` · ${segment.speed}x` : ""}
+            {segment.freezeMs > 0 ? ` · ❄` : ""}
           </span>
         </div>
       </div>

@@ -61,6 +61,18 @@ pub fn output_dims(src_w: u32, src_h: u32, out: &OutputSettings) -> (u32, u32) {
 
 /// Stage A: one trimmed (optionally re-encoded/scaled) video-only segment.
 #[allow(clippy::too_many_arguments)]
+/// Which piece of a (possibly frozen) segment stage A must render.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FreezePart {
+    /// Whole segment, no freeze.
+    Full,
+    /// From `in` up to the freeze point, holding that frame for `len_ms`.
+    Before { at_ms: i64, len_ms: i64 },
+    /// From the freeze point to the end of the segment.
+    After { at_ms: i64 },
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn stage_a_args(
     input: &Path,
     output: &Path,
@@ -68,6 +80,7 @@ pub fn stage_a_args(
     dims: (u32, u32),
     src_dims: (u32, u32),
     fps: u32,
+    freeze: FreezePart,
     force_scale: bool,
     encoder: &str,
     bitrate_kbps: u32,
@@ -100,12 +113,39 @@ pub fn stage_a_args(
         || has_eq
         || has_temperature
         || has_vignette;
+    let speed = segment.speed.max(0.05);
+    // Trim window and OUTPUT duration for this piece. `-t` is an output
+    // option: with speed it must be the sped-up duration (and add the freeze
+    // hold for the "before" piece), otherwise slow clips get truncated.
+    let (ss_ms, out_seconds, freeze_len) = match freeze {
+        FreezePart::Full => (
+            segment.in_ms,
+            (segment.out_ms - segment.in_ms).max(1) as f64 / speed / 1000.0,
+            None,
+        ),
+        FreezePart::Before { at_ms, len_ms } => {
+            let at = at_ms.clamp(segment.in_ms, segment.out_ms);
+            (
+                segment.in_ms,
+                (at - segment.in_ms).max(0) as f64 / speed / 1000.0 + len_ms.max(0) as f64 / 1000.0,
+                Some(len_ms.max(0)),
+            )
+        }
+        FreezePart::After { at_ms } => {
+            let at = at_ms.clamp(segment.in_ms, segment.out_ms);
+            (
+                at,
+                (segment.out_ms - at).max(1) as f64 / speed / 1000.0,
+                None,
+            )
+        }
+    };
     let copy = !needs_scale
         && !needs_speed
         && !needs_fps
         && !has_adjust
         && !force_scale
-        && segment.freeze_ms <= 0;
+        && freeze == FreezePart::Full;
 
     let mut a: Vec<String> = vec![
         "-y".into(),
@@ -114,11 +154,11 @@ pub fn stage_a_args(
         "-loglevel".into(),
         "error".into(),
         "-ss".into(),
-        secs(segment.in_ms),
+        secs(ss_ms),
         "-i".into(),
         input.to_string_lossy().into_owned(),
         "-t".into(),
-        secs(segment.out_ms - segment.in_ms),
+        format!("{out_seconds:.3}"),
         "-an".into(),
     ];
     if copy {
@@ -192,6 +232,15 @@ pub fn stage_a_args(
         }
         if needs_speed {
             vf.push(format!("setpts=PTS/{}", segment.speed));
+        }
+        // Freeze hold: clone the last frame (the freeze point) for `len_ms`.
+        if let Some(len) = freeze_len {
+            if len > 0 {
+                vf.push(format!(
+                    "tpad=stop_mode=clone:stop_duration={:.3}",
+                    len as f64 / 1000.0
+                ));
+            }
         }
         if !vf.is_empty() {
             a.push("-vf".into());
@@ -309,21 +358,6 @@ pub fn escape_filter_value(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
-/// Normalize "#RRGGBB"/"RRGGBB" to `0xRRGGBB` (invalid input -> white).
-pub fn color_arg(color: &str) -> String {
-    let hex: String = color
-        .trim_start_matches('#')
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .take(6)
-        .collect();
-    if hex.len() == 6 {
-        format!("0x{hex}")
-    } else {
-        "0xffffff".to_string()
-    }
-}
-
 /// ASS color: `&HAABBGGRR` (ASS is alpha-first, BGR order). `opacity` is
 /// the element opacity (1 = fully visible).
 fn ass_color(color: &str, opacity: f64) -> String {
@@ -359,12 +393,11 @@ fn ass_time(ms: i64) -> String {
 /// Escape literal text for an ASS dialogue: newlines become hard breaks and
 /// braces (override blocks) are escaped.
 fn ass_text(text: &str) -> String {
-    text.replace("\\", "\\\\")
+    text.replace('\\', "\\\\")
         .replace('{', "\\{")
         .replace('}', "\\}")
-        .replace("\r\n", "\\N")
-        .replace('\n', "\\N")
-        .replace('\r', "\\N")
+        .replace("\r\n", "\n")
+        .replace(['\n', '\r'], "\\N")
 }
 
 /// Generate the ASS subtitle file for the text overlays: position, size,
@@ -456,7 +489,6 @@ pub fn audio_filter(
         if tracks == 0 {
             continue;
         }
-        let start = seg.timeline_start_ms.max(0);
         let speed = seg.speed.clamp(0.05, 20.0);
         // Speed changes the visual length; the audio must follow (rubberband
         // keeps the pitch, unlike the preview's playbackRate).
@@ -464,6 +496,24 @@ pub fn audio_filter(
             format!(",rubberband=tempo={speed:.4}")
         } else {
             String::new()
+        };
+        // Freeze splits the clip's audio in two contributions with a silent
+        // hold in between (mirrors the preview and the video pieces).
+        let freeze_at = seg.freeze_at_ms.min(seg.out_ms);
+        let frozen = seg.freeze_ms > 0 && freeze_at > seg.in_ms;
+        let parts: Vec<(i64, i64, i64)> = if frozen {
+            vec![
+                (seg.in_ms, freeze_at, seg.timeline_start_ms.max(0)),
+                (
+                    freeze_at,
+                    seg.out_ms,
+                    seg.timeline_start_ms.max(0)
+                        + ((freeze_at - seg.in_ms) as f64 / speed) as i64
+                        + seg.freeze_ms.max(0),
+                ),
+            ]
+        } else {
+            vec![(seg.in_ms, seg.out_ms, seg.timeline_start_ms.max(0))]
         };
         // (stream index, gain, output group) contributions for this clip.
         // Three INDEPENDENT channels: Mix, Game and Mic each carry their own
@@ -480,25 +530,33 @@ pub fn audio_filter(
             }
             v
         };
-        for (stream, gain, group) in sources {
-            let label = format!("a{i}_{stream}");
+        for (p, (src_in, src_out, tl)) in parts.iter().enumerate() {
+            let start = (*tl).max(0);
             let delay = if start > 0 {
                 format!(",adelay={}|{}", start, start)
             } else {
                 String::new()
             };
-            chains.push(format!(
-                "[{idx}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,volume={:.3}{tempo}{delay}[{label}]",
-                secs(seg.in_ms),
-                secs(seg.out_ms),
-                gain.clamp(0.0, 4.0),
-            ));
-            let lbl = format!("[{label}]");
-            match group {
-                "game" => game_labels.push(lbl),
-                "mic" => mic_labels.push(lbl),
-                "mixstem" => mixstem_labels.push(lbl),
-                _ => fallback_labels.push(lbl),
+            for (stream, gain, group) in &sources {
+                // Keep the historic label for unsplit clips (tests/goldens).
+                let label = if frozen {
+                    format!("a{i}p{p}_{stream}")
+                } else {
+                    format!("a{i}_{stream}")
+                };
+                chains.push(format!(
+                    "[{idx}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,volume={:.3}{tempo}{delay}[{label}]",
+                    secs(*src_in),
+                    secs(*src_out),
+                    gain.clamp(0.0, 4.0),
+                ));
+                let lbl = format!("[{label}]");
+                match *group {
+                    "game" => game_labels.push(lbl),
+                    "mic" => mic_labels.push(lbl),
+                    "mixstem" => mixstem_labels.push(lbl),
+                    _ => fallback_labels.push(lbl),
+                }
             }
         }
     }
@@ -697,10 +755,13 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
     // Timeline pieces: segments plus black fillers for gaps.
     let pieces = timeline_pieces(&project.segments);
     let has_gap = pieces.iter().any(|p| matches!(p, TimelinePiece::Black { .. }));
-    // Uniform encoding is mandatory when several sources or gaps coexist (the
-    // concat demuxer cannot mix resolutions/timebases/codecs).
+    let has_freeze = project.segments.iter().any(|s| {
+        s.freeze_ms > 0 && s.freeze_at_ms > s.in_ms && s.freeze_at_ms < s.out_ms
+    });
+    // Uniform encoding is mandatory when several sources, gaps or freezes
+    // coexist (the concat demuxer cannot mix resolutions/timebases/codecs).
     let mixed = sources.len() > 1;
-    let force_scale = mixed || has_gap;
+    let force_scale = mixed || has_gap || has_freeze;
     let fps = if project.output.fps > 0 {
         project.output.fps
     } else if force_scale {
@@ -736,50 +797,95 @@ pub async fn run(app: &AppHandle, session_id: &str, project: &EditProject) -> Re
     let mut segment_files: Vec<PathBuf> = Vec::new();
     let piece_count = pieces.len() as f64;
     for (i, piece) in pieces.iter().enumerate() {
-        let out = dir.join(format!("seg_{i}.mp4"));
-        let (args, seconds) = match piece {
-            TimelinePiece::Black { duration_ms } => (
-                black_filler_args(
-                    &out,
-                    (out_w, out_h),
-                    if fps > 0 { fps } else { base_fps },
-                    *duration_ms,
-                    &encoder,
-                    project.output.bitrate_kbps,
-                ),
-                (*duration_ms).max(1) as f64 / 1000.0,
-            ),
+        // One piece may need more than one file: a frozen segment renders as
+        // "before (with the held frame)" + "after".
+        let mut jobs: Vec<(PathBuf, Vec<String>, f64)> = Vec::new();
+        match piece {
+            TimelinePiece::Black { duration_ms } => {
+                let out = dir.join(format!("seg_{i}.mp4"));
+                jobs.push((
+                    out.clone(),
+                    black_filler_args(
+                        &out,
+                        (out_w, out_h),
+                        if fps > 0 { fps } else { base_fps },
+                        *duration_ms,
+                        &encoder,
+                        project.output.bitrate_kbps,
+                    ),
+                    (*duration_ms).max(1) as f64 / 1000.0,
+                ));
+            }
             TimelinePiece::Seg(idx) => {
                 let seg = &project.segments[*idx];
                 let src = sources
                     .iter()
                     .find(|(id, ..)| id == &seg.source_clip_id)
                     .ok_or("source clip not resolved")?;
-                (
-                    stage_a_args(
-                        &src.1,
-                        &out,
-                        seg,
-                        (out_w, out_h),
-                        (src.3, src.4),
-                        fps,
-                        force_scale,
-                        &encoder,
-                        project.output.bitrate_kbps,
-                    ),
-                    (seg.out_ms - seg.in_ms).max(1) as f64 / 1000.0,
-                )
+                let speed = seg.speed.max(0.05);
+                let frozen = seg.freeze_ms > 0
+                    && seg.freeze_at_ms > seg.in_ms
+                    && seg.freeze_at_ms < seg.out_ms;
+                let parts: Vec<(FreezePart, f64)> = if frozen {
+                    vec![
+                        (
+                            FreezePart::Before {
+                                at_ms: seg.freeze_at_ms,
+                                len_ms: seg.freeze_ms,
+                            },
+                            ((seg.freeze_at_ms - seg.in_ms).max(0) as f64 / speed
+                                + seg.freeze_ms.max(0) as f64)
+                                / 1000.0,
+                        ),
+                        (
+                            FreezePart::After {
+                                at_ms: seg.freeze_at_ms,
+                            },
+                            (seg.out_ms - seg.freeze_at_ms).max(1) as f64 / speed / 1000.0,
+                        ),
+                    ]
+                } else {
+                    vec![(
+                        FreezePart::Full,
+                        (seg.out_ms - seg.in_ms).max(1) as f64 / speed / 1000.0,
+                    )]
+                };
+                for (j, (part, seconds)) in parts.into_iter().enumerate() {
+                    let out = if frozen {
+                        dir.join(format!("seg_{i}_{j}.mp4"))
+                    } else {
+                        dir.join(format!("seg_{i}.mp4"))
+                    };
+                    jobs.push((
+                        out.clone(),
+                        stage_a_args(
+                            &src.1,
+                            &out,
+                            seg,
+                            (out_w, out_h),
+                            (src.3, src.4),
+                            fps,
+                            part,
+                            force_scale,
+                            &encoder,
+                            project.output.bitrate_kbps,
+                        ),
+                        seconds,
+                    ));
+                }
             }
-        };
-        run_ffmpeg(&ffmpeg, &args, &handle, seconds, |p| {
-            emit((i as f64 + p / 100.0) / piece_count * 55.0, "segments", false);
-        })
-        .await
-        .map_err(|e| format!("piece {} failed: {e}", i + 1))?;
-        if !out.is_file() {
-            return Err(format!("piece {} produced no file", i + 1));
         }
-        segment_files.push(out);
+        for (out, args, seconds) in jobs {
+            run_ffmpeg(&ffmpeg, &args, &handle, seconds, |p| {
+                emit((i as f64 + p / 100.0) / piece_count * 55.0, "segments", false);
+            })
+            .await
+            .map_err(|e| format!("piece {} failed: {e}", i + 1))?;
+            if !out.is_file() {
+                return Err(format!("piece {} produced no file", i + 1));
+            }
+            segment_files.push(out);
+        }
     }
 
     // ---- Stage B: concat + audio mix ------------------------------------
@@ -1025,7 +1131,10 @@ mod tests {
             &seg(1000, 2500),
             (1920, 1080),
             (1920, 1080),
+
             0,
+
+            FreezePart::Full,
             false,
             "libx264",
             0,
@@ -1100,6 +1209,7 @@ mod tests {
             (1920, 1080),
             (1920, 1080),
             30,
+            FreezePart::Full,
             true,
             "libx264",
             0,
@@ -1123,7 +1233,10 @@ mod tests {
             &s,
             (1080, 1920),
             (1920, 1080),
+
             30,
+
+            FreezePart::Full,
             false,
             "h264_nvenc",
             8000,
@@ -1138,6 +1251,71 @@ mod tests {
         assert!(vf.contains("setpts=PTS/2"));
         assert!(a.windows(2).any(|w| w == ["-r", "30"]));
         assert!(a.windows(2).any(|w| w == ["-c:v", "h264_nvenc"]));
+    }
+
+    #[test]
+    fn stage_a_freeze_parts_split_and_hold_the_frame() {
+        let mut s = seg(0, 2000);
+        s.freeze_at_ms = 1000;
+        s.freeze_ms = 500;
+        let before = stage_a_args(
+            Path::new("/clips/in.mp4"),
+            Path::new("/tmp/before.mp4"),
+            &s,
+            (640, 360),
+            (640, 360),
+            30,
+            FreezePart::Before {
+                at_ms: 1000,
+                len_ms: 500,
+            },
+            false,
+            "libx264",
+            0,
+        );
+        assert!(before.windows(2).any(|w| w == ["-ss", "0.000"]));
+        // Play 1 s + hold 0.5 s = 1.5 s of output.
+        assert!(before.windows(2).any(|w| w == ["-t", "1.500"]), "{before:?}");
+        let vf = before
+            .windows(2)
+            .find(|w| w[0] == "-vf")
+            .map(|w| w[1].clone())
+            .unwrap();
+        assert!(
+            vf.contains("tpad=stop_mode=clone:stop_duration=0.500"),
+            "{vf}"
+        );
+
+        let after = stage_a_args(
+            Path::new("/clips/in.mp4"),
+            Path::new("/tmp/after.mp4"),
+            &s,
+            (640, 360),
+            (640, 360),
+            30,
+            FreezePart::After { at_ms: 1000 },
+            false,
+            "libx264",
+            0,
+        );
+        assert!(after.windows(2).any(|w| w == ["-ss", "1.000"]));
+        assert!(after.windows(2).any(|w| w == ["-t", "1.000"]));
+        assert!(!after.iter().any(|x| x.contains("tpad")), "{after:?}");
+    }
+
+    #[test]
+    fn audio_filter_freeze_splits_with_silent_hold() {
+        let mut s = seg(0, 2000);
+        s.freeze_at_ms = 1000;
+        s.freeze_ms = 500;
+        let (graph, _) = audio_filter(&[s], &[1], &[3], 2500, 1.0, "mix");
+        assert!(
+            graph.contains("[1:a:0]atrim=start=0.000:end=1.000"),
+            "{graph}"
+        );
+        // The second half starts 1 s + 500 ms hold later.
+        assert!(graph.contains("atrim=start=1.000:end=2.000"), "{graph}");
+        assert!(graph.contains("adelay=1500|1500[a0p1_0]"), "{graph}");
     }
 
     #[test]
@@ -1235,7 +1413,10 @@ mod tests {
             &s,
             (1920, 1080),
             (1920, 1080),
+
             0,
+
+            FreezePart::Full,
             false,
             "libx264",
             0,
@@ -1263,7 +1444,10 @@ mod tests {
             &seg(0, 1000),
             (1920, 1080),
             (1920, 1080),
+
             0,
+
+            FreezePart::Full,
             false,
             "libx264",
             0,
@@ -1352,9 +1536,7 @@ mod tests {
     }
 
     #[test]
-    fn color_and_escape_helpers_are_safe() {
-        assert_eq!(color_arg("#22d3ee"), "0x22d3ee");
-        assert_eq!(color_arg("red"), "0xffffff");
+    fn filter_value_escaping_is_safe() {
         assert_eq!(escape_filter_value("/tmp/it's/a.txt"), "/tmp/it\\'s/a.txt");
     }
 
@@ -1414,7 +1596,10 @@ mod tests {
             &seg(1000, 2500),
             (640, 360),
             (640, 360),
+
             0,
+
+            FreezePart::Full,
             false,
             "libx264",
             0,
@@ -1500,7 +1685,10 @@ mod tests {
                 &fast,
                 (640, 360),
                 (640, 360),
+
                 0,
+
+                FreezePart::Full,
                 false,
                 "libx264",
                 0,
@@ -1628,6 +1816,7 @@ mod tests {
                     (640, 360),
                     if *idx == 0 { (640, 360) } else { (480, 270) },
                     30,
+                    FreezePart::Full,
                     true,
                     "libx264",
                     0,
@@ -1688,6 +1877,103 @@ mod tests {
             .await
             .expect("probe duration");
         assert!((4300..=4700).contains(&ms), "duration {ms} ms (expected ~4500)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Acceptance (freeze): a frozen segment exports as "before + hold" and
+    /// "after", concatenated, with the exact expected duration.
+    #[tokio::test]
+    async fn live_freeze_export_keeps_the_hold() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let ff = manifest
+            .join("binaries")
+            .join(crate::sidecar::host_triple())
+            .join(crate::editor::ffmpeg::sidecar_name());
+        if !ff.exists() {
+            eprintln!("skip: bundled ffmpeg not staged");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("moonclip-freeze-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.mp4");
+        let status = tokio::process::Command::new(&ff)
+            .args([
+                "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440",
+                "-f", "lavfi", "-i", "sine=frequency=880",
+                "-f", "lavfi", "-i", "sine=frequency=1320",
+                "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a",
+                "-t", "3", "-c:v", "libx264", "-preset", "ultrafast", "-g", "30",
+                "-c:a", "aac",
+            ])
+            .arg(&src)
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success(), "fixture encode failed");
+
+        let mut s = seg(0, 2000);
+        s.freeze_at_ms = 1000;
+        s.freeze_ms = 500;
+        let mut files = Vec::new();
+        for (part, seconds) in [
+            (
+                FreezePart::Before {
+                    at_ms: 1000,
+                    len_ms: 500,
+                },
+                1.5,
+            ),
+            (FreezePart::After { at_ms: 1000 }, 1.0),
+        ] {
+            let out = dir.join(format!("part{}.mp4", files.len()));
+            let args = stage_a_args(
+                &src,
+                &out,
+                &s,
+                (640, 360),
+                (640, 360),
+                30,
+                part,
+                true,
+                "libx264",
+                0,
+            );
+            let ok = tokio::process::Command::new(&ff)
+                .args(&args)
+                .status()
+                .await
+                .unwrap();
+            assert!(ok.success(), "freeze {part:?} failed");
+            let ms = crate::editor::ffmpeg::probe_duration_ms(&ff, &out)
+                .await
+                .expect("probe piece");
+            assert!(
+                (ms as f64 - seconds * 1000.0).abs() < 500.0,
+                "piece {part:?} duration {ms} ms"
+            );
+            files.push(out);
+        }
+        let list = dir.join("concat.txt");
+        std::fs::write(&list, concat_file(&files)).unwrap();
+        let joined = dir.join("joined.mp4");
+        let ok = tokio::process::Command::new(&ff)
+            .args([
+                "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i",
+            ])
+            .arg(&list)
+            .args(["-c", "copy"])
+            .arg(&joined)
+            .status()
+            .await
+            .unwrap();
+        assert!(ok.success(), "freeze concat failed");
+        let ms = crate::editor::ffmpeg::probe_duration_ms(&ff, &joined)
+            .await
+            .expect("probe joined");
+        assert!((2300..=2800).contains(&ms), "freeze export duration {ms} ms");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

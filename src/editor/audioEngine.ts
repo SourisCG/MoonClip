@@ -319,42 +319,58 @@ export class AudioTimeline {
     for (const seg of segments) {
       const decoded = this.sources.get(seg.sourceClipId);
       if (!decoded || decoded.stems.length === 0) continue;
-      const segEnd =
-        seg.timelineStartMs + Math.max(0, seg.outMs - seg.inMs) / Math.max(0.05, seg.speed);
-      if (segEnd <= fromMs) continue;
-      diag(
-        `seg ${seg.id.slice(0, 8)} src=${seg.sourceClipId.slice(0, 8)} ` +
-          `tl=${Math.round(seg.timelineStartMs)} in=${Math.round(seg.inMs)} ` +
-          `out=${Math.round(seg.outMs)} speed=${seg.speed} ` +
-          `g=${seg.gainGame} m=${seg.gainMic} mix=${seg.gainMix}`,
-      );
-      // EVERY channel plays, each with its own independent slider.
-      for (const stem of decoded.stems) {
-        const kind: "mix" | "game" | "mic" =
-          stem.label === "game" ? "game" : stem.label === "mic" ? "mic" : "mix";
-        const value = this.channelGain(seg, kind);
-        const target = kind === "mic" ? this.mic : kind === "game" ? this.game : this.mixBus;
-        const src = this.ctx.createBufferSource();
-        src.buffer = stem.buffer;
-        src.playbackRate.value = seg.speed;
-        const gainNode = this.ctx.createGain();
-        gainNode.gain.setValueAtTime(value, this.ctx.currentTime);
-        src.connect(gainNode);
-        gainNode.connect(target);
-        this.segGains.push({ segId: seg.id, kind, node: gainNode });
+      const speed = Math.max(0.05, seg.speed);
+      const f = Math.max(0, seg.freezeMs);
+      const freezeAt = Math.min(seg.freezeAtMs, seg.outMs);
+      // Freeze splits the clip in two audio pieces (silence during the hold).
+      const parts: { srcIn: number; srcOut: number; tl: number }[] =
+        f > 0 && freezeAt > seg.inMs
+          ? [
+              { srcIn: seg.inMs, srcOut: freezeAt, tl: seg.timelineStartMs },
+              {
+                srcIn: freezeAt,
+                srcOut: seg.outMs,
+                tl: seg.timelineStartMs + (freezeAt - seg.inMs) / speed + f,
+              },
+            ]
+          : [{ srcIn: seg.inMs, srcOut: seg.outMs, tl: seg.timelineStartMs }];
+      for (const part of parts) {
+        const partEnd = part.tl + Math.max(0, part.srcOut - part.srcIn) / speed;
+        if (partEnd <= fromMs) continue;
+        diag(
+          `seg ${seg.id.slice(0, 8)} src=${seg.sourceClipId.slice(0, 8)} ` +
+            `tl=${Math.round(part.tl)} in=${Math.round(part.srcIn)} ` +
+            `out=${Math.round(part.srcOut)} speed=${seg.speed} ` +
+            `g=${seg.gainGame} m=${seg.gainMic} mix=${seg.gainMix}`,
+        );
+        // EVERY channel plays, each with its own independent slider.
+        for (const stem of decoded.stems) {
+          const kind: "mix" | "game" | "mic" =
+            stem.label === "game" ? "game" : stem.label === "mic" ? "mic" : "mix";
+          const value = this.channelGain(seg, kind);
+          const target = kind === "mic" ? this.mic : kind === "game" ? this.game : this.mixBus;
+          const src = this.ctx.createBufferSource();
+          src.buffer = stem.buffer;
+          src.playbackRate.value = seg.speed;
+          const gainNode = this.ctx.createGain();
+          gainNode.gain.setValueAtTime(value, this.ctx.currentTime);
+          src.connect(gainNode);
+          gainNode.connect(target);
+          this.segGains.push({ segId: seg.id, kind, node: gainNode });
 
-        const inside = fromMs > seg.timelineStartMs;
-        const consumedMs = inside ? fromMs - seg.timelineStartMs : 0;
-        const sourceOffset = (seg.inMs + consumedMs) / 1000;
-        const sourceRemaining = Math.max(0, seg.outMs - (seg.inMs + consumedMs)) / 1000;
-        const when = this.t0 + Math.max(0, seg.timelineStartMs - fromMs) / 1000;
-        if (sourceRemaining <= 0.01) continue;
-        try {
-          src.start(when, sourceOffset, sourceRemaining);
-        } catch {
-          continue;
+          const inside = fromMs > part.tl;
+          const consumedMs = inside ? fromMs - part.tl : 0;
+          const sourceOffset = (part.srcIn + consumedMs) / 1000;
+          const sourceRemaining = Math.max(0, part.srcOut - (part.srcIn + consumedMs)) / 1000;
+          const when = this.t0 + Math.max(0, part.tl - fromMs) / 1000;
+          if (sourceRemaining <= 0.01) continue;
+          try {
+            src.start(when, sourceOffset, sourceRemaining);
+          } catch {
+            continue;
+          }
+          this.nodes.push(src);
         }
-        this.nodes.push(src);
       }
     }
     diag(`play from ${Math.round(fromMs)}ms: scheduled ${this.nodes.length} node(s)`);

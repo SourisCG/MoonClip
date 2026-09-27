@@ -47,8 +47,29 @@ const segmentAt = (segments: Segment[], ms: number) =>
   segments.find(
     (s) => ms >= s.timelineStartMs && ms < s.timelineStartMs + segmentDurationMs(s),
   );
-const sourceMsFor = (seg: Segment, timelineMs: number) =>
-  seg.inMs + (timelineMs - seg.timelineStartMs) * Math.max(0.05, seg.speed);
+/** Source time for a timeline position, honoring the freeze: the clip plays
+ *  until `freezeAtMs`, the frame is held for `freezeMs`, then it continues. */
+const sourceMsFor = (seg: Segment, timelineMs: number) => {
+  const speed = Math.max(0.05, seg.speed);
+  const rel = timelineMs - seg.timelineStartMs;
+  const f = Math.max(0, seg.freezeMs);
+  if (f > 0 && seg.freezeAtMs > seg.inMs) {
+    const before = (Math.min(seg.freezeAtMs, seg.outMs) - seg.inMs) / speed;
+    if (rel >= before && rel < before + f) return Math.min(seg.freezeAtMs, seg.outMs);
+    if (rel >= before + f)
+      return Math.min(seg.freezeAtMs, seg.outMs) + (rel - before - f) * speed;
+  }
+  return seg.inMs + rel * speed;
+};
+
+/** True while the playhead is inside the freeze hold of `seg`. */
+const isFreezeHold = (seg: Segment, timelineMs: number) => {
+  const f = Math.max(0, seg.freezeMs);
+  if (f <= 0 || seg.freezeAtMs <= seg.inMs) return false;
+  const before = (Math.min(seg.freezeAtMs, seg.outMs) - seg.inMs) / Math.max(0.05, seg.speed);
+  const rel = timelineMs - seg.timelineStartMs;
+  return rel >= before && rel < before + f;
+};
 
 function TimeLabel({ total }: { total: number }) {
   const ms = useEditorStore((s) => s.playheadMs);
@@ -351,6 +372,17 @@ export default function EditorApp({
   const selectedSegment =
     project?.segments.find((s) => selection?.kind === "segment" && s.id === selection.id) ??
     null;
+  // Boolean selector: re-evaluates each frame but only re-renders on flip, so
+  // the "freeze here" button enables/disables with the playhead.
+  const freezeHereEnabled = useEditorStore((s) => {
+    if (!s.project || s.selection?.kind !== "segment") return false;
+    const seg = s.project.segments.find((x) => x.id === s.selection!.id);
+    if (!seg) return false;
+    return (
+      s.playheadMs >= seg.timelineStartMs &&
+      s.playheadMs < seg.timelineStartMs + segmentDurationMs(seg)
+    );
+  });
   // True when the selected clip is the one under the playhead (what you would
   // hear). Boolean selector: it re-evaluates each frame but only re-renders
   // the editor when it flips, so moving a slider of an off-playhead clip is
@@ -475,25 +507,56 @@ export default function EditorApp({
   // the clip bars, the ruler and the playhead.
   const plates = useMemo(() => {
     if (!project) return [];
+    const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
     return project.segments
       .slice()
       .sort((a, b) => a.timelineStartMs - b.timelineStartMs)
-      .map((seg) => {
+      .flatMap((seg) => {
         const source = sources[seg.sourceClipId];
         // Prefer the decoded stem length over the container metadata (a few ms).
         const decoded = engineRef.current?.durationMsFor(seg.sourceClipId) ?? null;
         const dur = Math.max(1, decoded ?? source?.durationMs ?? 1);
-        return {
-          id: seg.id,
+        const speed = Math.max(0.05, seg.speed);
+        const f = Math.max(0, seg.freezeMs);
+        const freezeAt = Math.min(seg.freezeAtMs, seg.outMs);
+        const base = {
           sourceId: seg.sourceClipId,
-          startMs: seg.timelineStartMs,
-          durationMs: segmentDurationMs(seg),
-          from: Math.min(1, Math.max(0, seg.inMs / dur)),
-          to: Math.min(1, Math.max(0, seg.outMs / dur)),
           gainMix: seg.gainMix,
           gainGame: seg.gainGame,
           gainMic: seg.gainMic,
         };
+        if (f > 0 && freezeAt > seg.inMs) {
+          // Two waveform windows with the freeze gap between them.
+          const before = (freezeAt - seg.inMs) / speed;
+          return [
+            {
+              ...base,
+              id: `${seg.id}#a`,
+              startMs: seg.timelineStartMs,
+              durationMs: Math.max(2, before),
+              from: clamp01(seg.inMs / dur),
+              to: clamp01(freezeAt / dur),
+            },
+            {
+              ...base,
+              id: `${seg.id}#b`,
+              startMs: seg.timelineStartMs + before + f,
+              durationMs: Math.max(2, (seg.outMs - freezeAt) / speed),
+              from: clamp01(freezeAt / dur),
+              to: clamp01(seg.outMs / dur),
+            },
+          ];
+        }
+        return [
+          {
+            ...base,
+            id: seg.id,
+            startMs: seg.timelineStartMs,
+            durationMs: segmentDurationMs(seg),
+            from: clamp01(seg.inMs / dur),
+            to: clamp01(seg.outMs / dur),
+          },
+        ];
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, session, sources, waveSources]);
@@ -544,6 +607,8 @@ export default function EditorApp({
       const source = useEditorStore.getState().sources[seg.sourceClipId];
       if (!source) return;
       const targetSec = sourceMsFor(seg, ms) / 1000;
+      // Freeze hold: the frame stays put while the timeline keeps running.
+      const hold = isFreezeHold(seg, ms);
       const needsSrc = videoSegRef.current?.sourceClipId !== seg.sourceClipId || !v.src;
       if (needsSrc) {
         videoSegRef.current = seg;
@@ -558,9 +623,14 @@ export default function EditorApp({
         const onMeta = () => {
           v.removeEventListener("loadedmetadata", onMeta);
           v.currentTime = targetSec;
-          if (playing) void v.play().catch(() => {});
+          if (playing && !hold) void v.play().catch(() => {});
         };
         v.addEventListener("loadedmetadata", onMeta);
+        return;
+      }
+      if (hold) {
+        if (!v.paused) v.pause();
+        if (Math.abs(v.currentTime - targetSec) > 0.03) scheduleVideoSeek(targetSec);
         return;
       }
       if (videoSegRef.current?.id !== seg.id) {
@@ -1172,6 +1242,59 @@ export default function EditorApp({
                 ))}
               </div>
               <p className="text-[10px] text-slate-500">{t("editor.speed_hint")}</p>
+            </div>
+          )}
+
+          {selectedSegment && (
+            <div className="space-y-2 rounded-lg border border-sky-400/20 bg-sky-400/5 p-2">
+              <p className="text-[11px] font-semibold text-sky-100">{t("editor.freeze")}</p>
+              <button
+                onClick={() => {
+                  const seg = selectedSegment;
+                  const { playheadMs } = useEditorStore.getState();
+                  const srcMs = Math.round(sourceMsFor(seg, playheadMs));
+                  const at = Math.min(Math.max(srcMs, seg.inMs + 50), seg.outMs - 50);
+                  useEditorStore.getState().updateSegment(seg.id, {
+                    freezeAtMs: at,
+                    freezeMs: seg.freezeMs > 0 ? seg.freezeMs : 1000,
+                  });
+                }}
+                disabled={!freezeHereEnabled}
+                className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-200 transition hover:bg-white/10 disabled:opacity-40"
+              >
+                {t("editor.freeze_here")}
+              </button>
+              {selectedSegment.freezeMs > 0 && (
+                <>
+                  <Adjust
+                    label={t("editor.freeze_len")}
+                    value={selectedSegment.freezeMs}
+                    min={0}
+                    max={5000}
+                    step={100}
+                    onChange={(v) =>
+                      useEditorStore.getState().updateSegment(selectedSegment.id, {
+                        freezeMs: v,
+                        freezeAtMs: v > 0 ? selectedSegment.freezeAtMs : 0,
+                      })
+                    }
+                    format={(v) => `${(v / 1000).toFixed(1)}s`}
+                  />
+                  <button
+                    onClick={() =>
+                      useEditorStore
+                        .getState()
+                        .updateSegment(selectedSegment.id, { freezeAtMs: 0, freezeMs: 0 })
+                    }
+                    className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/10"
+                  >
+                    {t("editor.freeze_remove")}
+                  </button>
+                </>
+              )}
+              {!freezeHereEnabled && (
+                <p className="text-[10px] text-slate-500">{t("editor.freeze_hint")}</p>
+              )}
             </div>
           )}
 
