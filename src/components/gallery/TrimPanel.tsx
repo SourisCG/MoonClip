@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import type { ClipMetadata } from "../../types";
+import { Modal } from "../Modal";
 
 /** Actions the gallery owns (single shared clip list). */
 export interface PanelActions {
@@ -97,6 +98,7 @@ export function TrimPanel({
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  const playheadRef = useRef<HTMLDivElement>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [download, setDownload] = useState<{ sent: number; total: number } | null>(null);
   const [duration, setDuration] = useState(Math.max(100, clip.duration_ms));
@@ -219,6 +221,34 @@ export function TrimPanel({
     if (v) v.currentTime = Math.max(0, ms) / 1000;
     setPos(ms);
   }, []);
+
+  // Smooth playhead: while playing, a rAF loop moves it directly (no React
+  // re-render); onTimeUpdate only updates the time label (~10 Hz via pos).
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    let lastLabel = 0;
+    const tick = (now: number) => {
+      const v = videoRef.current;
+      if (v && playheadRef.current) {
+        const ms = v.currentTime * 1000;
+        playheadRef.current.style.left = `${(ms / Math.max(1, duration)) * 100}%`;
+        if (now - lastLabel > 100) {
+          lastLabel = now;
+          setPos(ms);
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, duration]);
+
+  // Parked/seeking positions come from state (the rAF only runs while playing).
+  useEffect(() => {
+    if (!playheadRef.current || playing) return;
+    playheadRef.current.style.left = `${(pos / Math.max(1, duration)) * 100}%`;
+  }, [pos, playing, duration]);
 
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
@@ -347,8 +377,9 @@ export function TrimPanel({
       : null;
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-5xl rounded-2xl border border-white/10 bg-gradient-to-b from-[#0d1220] to-[#0b0f19] p-4 shadow-2xl">
+    <Modal>
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto rounded-2xl border border-white/10 bg-gradient-to-b from-[#0d1220] to-[#0b0f19] p-4 shadow-2xl">
         {/* Header: title (rename inline), metadata chips, navigation */}
         <div className="mb-3 flex items-start gap-2">
           <div className="min-w-0 flex-1">
@@ -415,8 +446,9 @@ export function TrimPanel({
           </div>
         </div>
 
-        {/* Player */}
-        <div className="overflow-hidden rounded-xl border border-white/5 bg-black/70">
+        {/* Player: the frame reserves its height from the first paint, so the
+            video settles instantly (no resize jump when metadata arrives). */}
+        <div className="relative h-[52vh] w-full overflow-hidden rounded-xl border border-white/5 bg-black/70">
           {url ? (
             <video
               ref={videoRef}
@@ -430,10 +462,10 @@ export function TrimPanel({
                 const code = videoRef.current?.error?.code;
                 setError(`${t("trim.play_error")} (${code ?? "?"})`);
               }}
-              className="mx-auto max-h-[52vh] w-full cursor-pointer object-contain"
+              className="absolute inset-0 h-full w-full cursor-pointer object-contain"
             />
           ) : (
-            <div className="flex h-56 flex-col items-center justify-center gap-2 text-xs text-slate-500">
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-slate-500">
               {clip.cloud ? (
                 <>
                   <Loader2 size={18} className="animate-spin text-cyan-300" />
@@ -472,7 +504,11 @@ export function TrimPanel({
               className="absolute inset-y-0 bg-cyan-400/20"
               style={{ left: pct(start), width: pct(end - start) }}
             />
-            <div className="absolute inset-y-0 w-0.5 bg-cyan-300" style={{ left: pct(pos) }} />
+            <div
+              ref={playheadRef}
+              className="absolute inset-y-0 w-0.5 bg-cyan-300 will-change-[left]"
+              style={{ left: pct(pos) }}
+            />
             <div
               role="slider"
               aria-valuenow={Math.round(start)}
@@ -613,7 +649,8 @@ export function TrimPanel({
             {saving ? t("trim.saving_short") : t("trim.save")}
           </button>
         </div>
+        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

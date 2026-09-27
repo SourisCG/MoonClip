@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ChevronLeft, Download, Folder, Loader2, Video, X } from "lucide-react";
+import { Modal } from "../Modal";
 
 interface DriveEntry {
   id: string;
@@ -103,8 +104,9 @@ export function DriveBrowser({
       : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
+    <Modal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
         <div className="mb-2 flex items-center gap-2">
           <h3 className="text-sm font-semibold text-slate-100">{t("drive.title")}</h3>
           <button
@@ -194,5 +196,6 @@ export function DriveBrowser({
         {error && <p className="mt-2 break-all font-mono text-xs text-red-400">{error}</p>}
       </div>
     </div>
+    </Modal>
   );
 }

@@ -6,6 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { CloudUpload, Copy, ExternalLink, HardDriveDownload, RefreshCw, Trash2, X } from "lucide-react";
 import type { ClipMetadata } from "../../types";
+import { Modal } from "../Modal";
 
 interface UploadResult {
   file_id: string;
@@ -127,8 +128,9 @@ export function ShareDialog({
     "inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
+    <Modal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
         <div className="mb-3 flex items-center">
           <h3 className="text-sm font-semibold text-slate-100">{t("share.title")}</h3>
           <button
@@ -260,5 +262,6 @@ export function ShareDialog({
         {error && <p className="mt-3 break-all font-mono text-xs text-red-400">{error}</p>}
       </div>
     </div>
+    </Modal>
   );
 }

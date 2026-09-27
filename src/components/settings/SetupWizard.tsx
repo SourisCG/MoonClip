@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { MoonClipLogo } from "../logo/MoonClipLogo";
 import type { HardwareTestResult, VideoOptions } from "../../types";
+import { Modal } from "../Modal";
 
 /** Moon names stay in English in every language (SPEC §17.1). */
 const MOONS = [
@@ -100,7 +101,8 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+    <Modal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-moonclip-panel/95 p-5 shadow-2xl">
         <div className="flex items-center gap-3">
           <MoonClipLogo size={34} />
@@ -235,5 +237,6 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+    </Modal>
   );
 }
