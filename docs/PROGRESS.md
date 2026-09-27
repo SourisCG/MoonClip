@@ -1141,3 +1141,17 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   descarga cloud, acciones completas, ←/→, Esc, loop opt-in, estética nueva).
   Commit `0ac9e26`.
 - Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios.
+
+### Fase 6 — Modales fijos al viewport y player estable (2026-09-27)
+
+- **Bug de scroll**: `main` (galería) tiene `backdrop-blur`, y un ancestro
+  con `backdrop-filter` crea containing block para los `fixed`: los modales
+  se posicionaban contra `main` y se iban con el scroll (cabecera fuera de
+  pantalla al editar un clip de abajo). Ahora TrimPanel/ShareDialog/
+  DriveBrowser/SetupWizard se renderizan con `createPortal` a `document.body`
+  (componente `Modal`): `fixed inset-0` vuelve a ser la ventana.
+- **Player**: marco `h-[52vh]` + video `absolute inset-0 object-contain`
+  (sin salto al llegar los metadatos). **Timeline**: loop `requestAnimationFrame`
+  para el playhead (estilo directo, `will-change`) y label a ~10 Hz.
+- Modales con `max-h-[calc(100vh-2rem)]` y scroll interno. Commit `ec18ef3`.
+- Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios.
