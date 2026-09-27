@@ -51,6 +51,12 @@ function SegmentItem({ segment }: { segment: Segment }) {
       {...listeners}
       {...attributes}
       data-tl-item
+      // dnd-kit kills click events with a capture listener once the drag
+      // activates (it starts on pointerdown), so selection must happen in the
+      // capture phase; onClick stays as a harmless fallback.
+      onPointerDownCapture={() =>
+        useEditorStore.getState().select({ kind: "segment", id: segment.id })
+      }
       onClick={() => useEditorStore.getState().select({ kind: "segment", id: segment.id })}
     >
       <div style={itemContentStyle}>
@@ -94,6 +100,9 @@ function OverlayItem({ overlay }: { overlay: Overlay }) {
       {...listeners}
       {...attributes}
       data-tl-item
+      onPointerDownCapture={() =>
+        useEditorStore.getState().select({ kind: "overlay", id: overlay.id })
+      }
       onClick={() => useEditorStore.getState().select({ kind: "overlay", id: overlay.id })}
     >
       <div style={itemContentStyle}>
