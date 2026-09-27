@@ -4,6 +4,7 @@
 pub mod db;
 pub mod models;
 pub mod paths;
+pub mod reconcile;
 pub mod secrets;
 
 pub use db::DbState;

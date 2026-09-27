@@ -462,6 +462,19 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 commands::backfill_durations(&handle).await;
             });
+            // Library reconciliation: index MoonClip-style files that appeared
+            // on disk outside the app (never deletes anything).
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match commands::reconcile_library(handle).await {
+                    Ok(r) if r.indexed > 0 || r.failed > 0 => eprintln!(
+                        "[moonclip] reconcile: {} indexed, {} failed",
+                        r.indexed, r.failed
+                    ),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[moonclip] reconcile failed: {e}"),
+                }
+            });
             // Registered-game poller: simplest Medal-style autopilot.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -509,6 +522,7 @@ pub fn run() {
             commands::toggle_favorite,
             commands::delete_clip,
             commands::purge_missing_clips,
+            commands::reconcile_library,
             commands::resolve_clip_src,
             commands::read_thumbnail,
             commands::get_settings,

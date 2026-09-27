@@ -80,6 +80,18 @@ pub fn delete_clip(db: State<'_, DbState>, id: String) -> Result<(), String> {
     db.delete_clip(&id)
 }
 
+/// Index MoonClip-style files that exist on disk but have no DB row (runs at
+/// boot and on demand). NEVER deletes files: orphan rows keep the explicit
+/// `purge_missing_clips` path.
+#[tauri::command]
+pub async fn reconcile_library(
+    app: AppHandle,
+) -> Result<crate::storage::reconcile::ReconcileReport, String> {
+    let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
+    let db = app.state::<DbState>();
+    crate::storage::reconcile::reconcile_dir(&db, &ffmpeg).await
+}
+
 /// Drop DB rows whose files are gone from disk. Returns rows removed.
 #[tauri::command]
 pub fn purge_missing_clips(db: State<'_, DbState>) -> Result<u32, String> {

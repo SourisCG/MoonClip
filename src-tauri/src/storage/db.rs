@@ -25,6 +25,16 @@ const MIGRATION_012: &str = include_str!("../../migrations/012_window_identity.s
 
 pub struct DbState(pub Mutex<Connection>);
 
+/// In-memory DB with the full schema, for tests across modules.
+#[cfg(test)]
+pub(crate) fn test_db() -> DbState {
+    let conn = Connection::open_in_memory().unwrap();
+    for migration in [MIGRATION_001, MIGRATION_010, MIGRATION_011, MIGRATION_012] {
+        conn.execute_batch(migration).unwrap();
+    }
+    DbState(Mutex::new(conn))
+}
+
 /// Older builds persisted the obs-websocket password and the portal restore
 /// token in `settings`. Remove them on open (idempotent).
 fn scrub_legacy_secret_settings(conn: &Connection) -> Result<usize, String> {
@@ -710,12 +720,7 @@ mod tests {
     }
 
     fn tiny_db() -> DbState {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(MIGRATION_001).unwrap();
-        conn.execute_batch(MIGRATION_010).unwrap();
-        conn.execute_batch(MIGRATION_011).unwrap();
-        conn.execute_batch(MIGRATION_012).unwrap();
-        DbState(Mutex::new(conn))
+        test_db()
     }
 
     #[test]
