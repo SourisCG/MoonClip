@@ -203,6 +203,7 @@
     "clip_audio_hint": "Select a clip on the timeline to adjust its Game/Mic.",
     "clip_volume": "Volume",
     "clip_audio_reset": "Reset clip audio",
+    "clip_audio_not_audible": "Another clip is playing: this change will be heard once the playhead enters this clip.",
     "no_clip": "No clip on the timeline",
     "clips": "Clips",
     "add_clip": "Add clip",

@@ -346,6 +346,19 @@ export default function EditorApp({
   const selectedSegment =
     project?.segments.find((s) => selection?.kind === "segment" && s.id === selection.id) ??
     null;
+  // True when the selected clip is the one under the playhead (what you would
+  // hear). Boolean selector: it re-evaluates each frame but only re-renders
+  // the editor when it flips, so moving a slider of an off-playhead clip is
+  // explained instead of looking broken.
+  const selectedClipAudible = useEditorStore((s) => {
+    if (!s.project || s.selection?.kind !== "segment") return true;
+    const at = s.project.segments.find(
+      (seg) =>
+        s.playheadMs >= seg.timelineStartMs &&
+        s.playheadMs < seg.timelineStartMs + segmentDurationMs(seg),
+    );
+    return !at || at.id === s.selection.id;
+  });
 
   // ---- Session lifecycle -------------------------------------------------
   useEffect(() => {
@@ -471,22 +484,27 @@ export default function EditorApp({
     if (!project || !waveSourceId) return [];
     const source = useEditorStore.getState().sources[waveSourceId];
     if (!source || laneWidth <= 0) return [];
-    const pxPerMs = laneWidth / Math.max(1000, visibleMs);
+    // Same span as dnd-timeline's range (TimelineView clamps to 5000 ms):
+    // any other value drew the waves at a different scale than the clips.
+    const pxPerMs = laneWidth / Math.max(5000, visibleMs);
+    // Prefer the decoded stem length over the container metadata (a few ms).
+    const decoded = engineRef.current?.durationMsFor(waveSourceId) ?? null;
+    const dur = Math.max(1, decoded ?? source.durationMs);
     return project.segments
       .filter((s) => s.sourceClipId === waveSourceId)
       .sort((a, b) => a.timelineStartMs - b.timelineStartMs)
-      .map((seg) => {
-        const dur = Math.max(1, source.durationMs);
-        return {
-          id: seg.id,
-          left: seg.timelineStartMs * pxPerMs,
-          width: Math.max(2, segmentDurationMs(seg) * pxPerMs),
-          from: Math.min(1, Math.max(0, seg.inMs / dur)),
-          to: Math.min(1, Math.max(0, seg.outMs / dur)),
-        };
-      });
+      .map((seg) => ({
+        id: seg.id,
+        left: seg.timelineStartMs * pxPerMs,
+        width: Math.max(2, segmentDurationMs(seg) * pxPerMs),
+        from: Math.min(1, Math.max(0, seg.inMs / dur)),
+        to: Math.min(1, Math.max(0, seg.outMs / dur)),
+        gainMix: seg.gainMix,
+        gainGame: seg.gainGame,
+        gainMic: seg.gainMic,
+      }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, waveSourceId, laneWidth, visibleMs, session]);
+  }, [project, waveSourceId, laneWidth, visibleMs, session, stems]);
 
   // Grow the visible window with the timeline (single source of truth).
   useEffect(() => {
@@ -664,7 +682,13 @@ export default function EditorApp({
         useEditorStore.getState().setActiveSource(srcId);
         setStems(engine?.peaksFor(srcId ?? "") ?? []);
       }
-      if (!videoClock) syncVideo(ms, true);
+      if (!videoClock) {
+        syncVideo(ms, true);
+      } else if (v) {
+        // Fallback: the audio comes from the video, so follow the clip's own
+        // mix gain there too (per-clip sliders must keep working).
+        v.volume = Math.min(1, Math.max(0, (seg?.gainMix ?? 1) * p.gainMaster));
+      }
       const end = projectDurationMs(p);
       if (ms >= end - 20) {
         pause();
@@ -909,11 +933,11 @@ export default function EditorApp({
           >
             <Trash2 size={15} />
           </button>
-          <button onClick={() => setVisibleMs((v) => Math.max(4000, v / 1.6))} className={iconBtn} title={t("editor.zoom_in")}>
+          <button onClick={() => setVisibleMs((v) => Math.max(5000, v / 1.6))} className={iconBtn} title={t("editor.zoom_in")}>
             <ZoomIn size={15} />
           </button>
           <button
-            onClick={() => setVisibleMs((v) => Math.min(Math.max(total * 1.2, 4000), v * 1.6))}
+            onClick={() => setVisibleMs((v) => Math.min(Math.max(total * 1.2, 5000), v * 1.6))}
             className={iconBtn}
             title={t("editor.zoom_out")}
           >
@@ -1035,6 +1059,11 @@ export default function EditorApp({
                 >
                   {t("editor.clip_audio_reset")}
                 </button>
+                {playing && !selectedClipAudible && (
+                  <p className="text-[10px] leading-snug text-amber-300/90">
+                    {t("editor.clip_audio_not_audible")}
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -1540,8 +1569,9 @@ export default function EditorApp({
           audioTracks={session.audioTracks}
           stems={stems}
           plates={plates}
+          master={masterGain}
           visibleEnd={visibleMs}
-          onVisibleEnd={(ms) => setVisibleMs(Math.max(1000, ms))}
+          onVisibleEnd={(ms) => setVisibleMs(Math.max(5000, ms))}
           onSeek={seek}
           onScrubStart={() => {
             if (useEditorStore.getState().playing) {

@@ -3,17 +3,20 @@ import { useEffect, useRef } from "react";
 /** Draws precomputed min/max peaks on a canvas (no media element, no own
  *  progress: the timeline playhead is the only position indicator).
  *  `from`/`to` are fractions of the source: a segment draws only its own
- *  [inMs, outMs] window, so each clip gets a bounded canvas. */
+ *  [inMs, outMs] window, so each clip gets a bounded canvas. `gain` scales
+ *  the drawn amplitude (clip gain x master) with a -1..1 clamp. */
 export function WaveCanvas({
   peaks,
   color = "#0891b2",
   from = 0,
   to = 1,
+  gain = 1,
 }: {
   peaks: number[][] | undefined;
   color?: string;
   from?: number;
   to?: number;
+  gain?: number;
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
@@ -36,21 +39,37 @@ export function WaveCanvas({
       if (!peaks || peaks.length === 0 || peaks[0].length === 0) return;
       const chans = peaks.length;
       const per = peaks[0].length / 2;
-      const first = Math.max(0, Math.min(per - 1, Math.floor(from * per)));
-      const last = Math.max(first + 1, Math.min(per, Math.ceil(to * per)));
-      const count = last - first;
+      // Exact window: each bar aggregates the buckets under its own fraction
+      // of [from, to] (no floor/ceil stretching; the wave ends on the edge).
+      const a = Math.max(0, Math.min(1, from)) * per;
+      const b = Math.max(a, Math.min(1, to) * per);
+      const count = Math.max(1, Math.min(per, Math.round(b - a)));
       const barW = Math.max(1, width / count);
+      const volume = Math.max(0, gain);
       const band = height / chans;
       ctx.fillStyle = color;
       for (let c = 0; c < chans; c++) {
         const center = (c + 0.5) * band;
         const half = band / 2 - 1;
         for (let p = 0; p < count; p++) {
-          const idx = first + p;
-          const max = peaks[c][idx * 2] ?? 0;
-          const min = peaks[c][idx * 2 + 1] ?? 0;
-          const top = center - max * half;
-          const bottom = center - min * half;
+          const start = a + (p * (b - a)) / count;
+          const end = a + ((p + 1) * (b - a)) / count;
+          const s = Math.max(0, Math.floor(start));
+          const e = Math.min(per, Math.max(s + 1, Math.ceil(end)));
+          let max = -1;
+          let min = 1;
+          for (let i = s; i < e; i++) {
+            const hi = peaks[c][i * 2] ?? 0;
+            const lo = peaks[c][i * 2 + 1] ?? 0;
+            if (hi > max) max = hi;
+            if (lo < min) min = lo;
+          }
+          if (max < min) {
+            max = 0;
+            min = 0;
+          }
+          const top = center - Math.min(1, max * volume) * half;
+          const bottom = center - Math.max(-1, min * volume) * half;
           ctx.fillRect(
             p * barW,
             Math.min(top, bottom),
@@ -64,7 +83,7 @@ export function WaveCanvas({
     const ro = new ResizeObserver(draw);
     if (parent) ro.observe(parent);
     return () => ro.disconnect();
-  }, [peaks, color, from, to]);
+  }, [peaks, color, from, to, gain]);
 
   return <canvas ref={ref} className="block h-full w-full" />;
 }

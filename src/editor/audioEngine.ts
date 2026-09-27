@@ -61,6 +61,8 @@ export class AudioTimeline {
   private nodes: AudioBufferSourceNode[] = [];
   /** Live per-segment gain nodes so each clip is mixed independently. */
   private segGains: { segId: string; kind: "mix" | "game" | "mic"; node: GainNode }[] = [];
+  /** Last applied gain signature (diagnostics: log only real changes). */
+  private lastGainsSig = "";
 
   /** Timeline ms at `t0`; playback position = base + (ctx.now - t0). */
   private baseMs = 0;
@@ -165,19 +167,40 @@ export class AudioTimeline {
 
   /** Global output level. Shared GainNode: no reschedule is ever needed. */
   setMaster(value: number) {
-    this.master.gain.value = Math.max(0, Math.min(4, value));
+    const v = Math.max(0, Math.min(4, value));
+    if (Math.abs(this.master.gain.value - v) > 0.0001) {
+      this.master.gain.setValueAtTime(v, this.ctx.currentTime);
+    }
   }
 
-  /** Reflect per-clip slider moves on the already-scheduled nodes. */
+  /** Length of the decoded stems (ms), if this source was decoded. */
+  durationMsFor(clipId: string): number | null {
+    const buf = this.sources.get(clipId)?.stems[0]?.buffer;
+    return buf ? Math.round(buf.duration * 1000) : null;
+  }
+
+  /** Reflect per-clip slider moves on the already-scheduled nodes.
+   *  `setValueAtTime` is used instead of the `.value` setter: WebKit applies
+   *  it deterministically while the context is running. */
   applySegmentGains(segments: Segment[]) {
     if (this.segGains.length === 0) return;
     const byId = new Map(segments.map((s) => [s.id, s]));
+    let sig = "";
     for (const g of this.segGains) {
       const seg = byId.get(g.segId);
       if (!seg) continue;
-      const value =
-        g.kind === "mic" ? seg.gainMic : g.kind === "game" ? seg.gainGame : seg.gainMix;
-      g.node.gain.value = Math.max(0, Math.min(4, value));
+      const value = Math.max(
+        0,
+        Math.min(4, g.kind === "mic" ? seg.gainMic : g.kind === "game" ? seg.gainGame : seg.gainMix),
+      );
+      if (Math.abs(g.node.gain.value - value) > 0.0001) {
+        g.node.gain.setValueAtTime(value, this.ctx.currentTime);
+      }
+      sig += `${g.segId.slice(0, 4)}/${g.kind}=${value.toFixed(2)} `;
+    }
+    if (sig && sig !== this.lastGainsSig) {
+      this.lastGainsSig = sig;
+      diag(`applyGains ${sig.trim()}`);
     }
   }
 
@@ -219,7 +242,7 @@ export class AudioTimeline {
         src.buffer = stem.buffer;
         src.playbackRate.value = seg.speed;
         const gainNode = this.ctx.createGain();
-        gainNode.gain.value = Math.max(0, Math.min(4, value));
+        gainNode.gain.setValueAtTime(Math.max(0, Math.min(4, value)), this.ctx.currentTime);
         src.connect(gainNode);
         gainNode.connect(target);
         this.segGains.push({ segId: seg.id, kind, node: gainNode });
@@ -295,6 +318,7 @@ export class AudioTimeline {
     this.nodes = [];
     for (const g of this.segGains) g.node.disconnect();
     this.segGains = [];
+    this.lastGainsSig = "";
   }
 
   dispose() {

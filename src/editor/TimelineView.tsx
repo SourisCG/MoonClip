@@ -181,6 +181,7 @@ function Inner({
   rows,
   stems,
   plates,
+  master,
   visibleEnd,
   onSeek,
   onScrubStart,
@@ -188,7 +189,17 @@ function Inner({
 }: {
   rows: (RowDefinition & { label?: string })[];
   stems: { label: string; peaks: number[][] }[];
-  plates: { id: string; left: number; width: number; from: number; to: number }[];
+  plates: {
+    id: string;
+    left: number;
+    width: number;
+    from: number;
+    to: number;
+    gainMix: number;
+    gainGame: number;
+    gainMic: number;
+  }[];
+  master: number;
   visibleEnd: number;
   onSeek: (ms: number) => void;
   onScrubStart: () => void;
@@ -267,15 +278,31 @@ function Inner({
                 const color = ["#0891b2", "#22c55e", "#f59e0b"][idx - audioStart] ?? "#0891b2";
                 return (
                   <div className="relative h-full w-full">
-                    {plates.map((pl) => (
-                      <div
-                        key={pl.id}
-                        className="absolute bottom-0 top-0 overflow-hidden"
-                        style={{ left: pl.left, width: pl.width }}
-                      >
-                        <WaveCanvas peaks={stem?.peaks} color={color} from={pl.from} to={pl.to} />
-                      </div>
-                    ))}
+                    {plates.map((pl) => {
+                      // Scale each clip's wave by its own gain for this stem
+                      // (x the global master), so the graph follows the mixer.
+                      const laneGain =
+                        stem?.label === "mic"
+                          ? pl.gainMic
+                          : stem?.label === "game"
+                            ? pl.gainGame
+                            : pl.gainMix;
+                      return (
+                        <div
+                          key={pl.id}
+                          className="absolute bottom-0 top-0 overflow-hidden"
+                          style={{ left: pl.left, width: pl.width }}
+                        >
+                          <WaveCanvas
+                            peaks={stem?.peaks}
+                            color={color}
+                            from={pl.from}
+                            to={pl.to}
+                            gain={laneGain * master}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })()}
@@ -293,6 +320,7 @@ export function TimelineView({
   audioTracks,
   stems,
   plates,
+  master,
   visibleEnd,
   onVisibleEnd,
   onSeek,
@@ -301,7 +329,17 @@ export function TimelineView({
 }: {
   audioTracks: EditorAudioTrack[];
   stems: { label: string; peaks: number[][] }[];
-  plates: { id: string; left: number; width: number; from: number; to: number }[];
+  plates: {
+    id: string;
+    left: number;
+    width: number;
+    from: number;
+    to: number;
+    gainMix: number;
+    gainGame: number;
+    gainMic: number;
+  }[];
+  master: number;
   visibleEnd: number;
   onVisibleEnd: (ms: number) => void;
   onSeek: (ms: number) => void;
@@ -365,6 +403,7 @@ export function TimelineView({
         rows={rows}
         stems={stems}
         plates={plates}
+        master={master}
         visibleEnd={visibleEnd}
         onSeek={onSeek}
         onScrubStart={onScrubStart}
