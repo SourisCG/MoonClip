@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn serves_full_and_range_requests() {
-        let dir = std::env::temp_dir().join(format!("moonclip-media-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("moonclip-media-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("sample.mp4");
         let data: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
@@ -263,7 +263,7 @@ mod tests {
         let (addr, path) = rest.split_once('/').unwrap();
 
         let full = request(addr, &format!("GET /{path} HTTP/1.1\r\nHost: x\r\n\r\n"));
-        assert_eq!(full.status, 200);
+        assert_eq!(full.status, 200, "headers: {}", full.headers);
         assert!(full.headers.contains("accept-ranges: bytes"));
         assert!(full.headers.contains("content-type: video/mp4"));
         assert_eq!(full.body, data);

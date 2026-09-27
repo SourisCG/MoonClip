@@ -22,6 +22,10 @@ pub struct GameRuntime {
     pub retry_at: Option<std::time::Instant>,
     /// Last window-title snapshot logged while nothing matched (debug aid).
     pub last_seen_windows: String,
+    /// Input the user stopped by hand: the autopilot must not restart it
+    /// until its window disappears and appears again (avoids "it insists on
+    /// recording X" loops after pressing Stop).
+    pub suppressed_input: Option<String>,
 }
 
 #[derive(Default)]

@@ -461,6 +461,7 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
             g.active_input = Some(active_input.clone());
             g.retry_at = None;
             g.retry_input = None;
+            g.suppressed_input = None;
         }
         set_engine_error(app, None).await;
         set_audio_error(app, None).await;
@@ -531,6 +532,7 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
             g.active_input = Some(active_input.clone());
             g.retry_at = None;
             g.retry_input = None;
+            g.suppressed_input = None;
         }
     }
     set_engine_error(app, None).await;
@@ -982,6 +984,17 @@ pub(crate) async fn poll_games(app: &AppHandle) {
     let st = app.state::<AppState>();
     let running = st.recorder.lock().await.is_some();
 
+    // Manual-stop suppression: kept only while the SAME window is still open;
+    // when it disappears (or another game matches) the next appearance may
+    // auto-start again.
+    {
+        let mut g = st.game.lock().await;
+        match &matched {
+            Some(row) if g.suppressed_input.as_deref() == Some(row.input_name.as_str()) => {}
+            _ => g.suppressed_input = None,
+        }
+    }
+
     // Debug aid: when games are registered but no window matches, show what
     // the desktop reports (once per change) so mismatched titles are obvious.
     let seen = if matched.is_none() && tracked {
@@ -1028,9 +1041,10 @@ pub(crate) async fn poll_games(app: &AppHandle) {
         (Some(row), false) => {
             let blocked = {
                 let g = st.game.lock().await;
-                g.retry_input.as_deref() == Some(row.input_name.as_str())
-                    && g.retry_at
-                        .is_some_and(|t| std::time::Instant::now() < t)
+                g.suppressed_input.as_deref() == Some(row.input_name.as_str())
+                    || (g.retry_input.as_deref() == Some(row.input_name.as_str())
+                        && g.retry_at
+                            .is_some_and(|t| std::time::Instant::now() < t))
             };
             if blocked {
                 return;
@@ -1120,8 +1134,35 @@ pub fn list_registered_inputs(db: State<'_, DbState>) -> Result<Vec<RegisteredIn
 }
 
 #[tauri::command]
-pub fn delete_registered_input(db: State<'_, DbState>, id: String) -> Result<(), String> {
-    db.delete_registered_input(&id)
+pub async fn delete_registered_input(app: AppHandle, id: String) -> Result<(), String> {
+    let removed = {
+        let db = app.state::<DbState>();
+        let row = db
+            .list_registered_inputs()?
+            .into_iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| "registered input not found".to_string())?;
+        db.delete_registered_input(&id)?;
+        row
+    };
+    // If that game is being recorded (or is next in line), stop and forget it
+    // so a deleted game never keeps the buffer alive.
+    {
+        let st = app.state::<AppState>();
+        let mut g = st.game.lock().await;
+        if g.suppressed_input.as_deref() == Some(removed.input_name.as_str()) {
+            g.suppressed_input = None;
+        }
+        if g.current.as_ref().map(|c| c.id.clone()) == Some(removed.id.clone()) {
+            g.current = None;
+        }
+        let active = g.active_input.clone();
+        drop(g);
+        if active.as_deref() == Some(removed.input_name.as_str()) {
+            stop_engine(&app).await?;
+        }
+    }
+    Ok(())
 }
 
 /// Did the picker write a real target into the source settings yet?
@@ -1256,6 +1297,17 @@ pub async fn edit_game(app: AppHandle, id: String) -> Result<RegisteredInput, St
 
 #[tauri::command]
 pub async fn stop_buffer(app: AppHandle) -> Result<EngineStatus, String> {
+    // A hand stop wins over the autopilot: do not restart this game until its
+    // window goes away and comes back (or the user starts it again).
+    let active = {
+        let st = app.state::<AppState>();
+        let g = st.game.lock().await;
+        g.active_input.clone()
+    };
+    if let Some(name) = active {
+        let st = app.state::<AppState>();
+        st.game.lock().await.suppressed_input = Some(name);
+    }
     stop_engine(&app).await
 }
 
