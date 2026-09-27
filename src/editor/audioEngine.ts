@@ -43,9 +43,6 @@ export function computePeaks(buffer: AudioBuffer, buckets = 900): number[][] {
   return out;
 }
 
-/** How far the (muted) video is allowed to drift before a corrective seek. */
-export const VIDEO_SYNC_TOLERANCE_MS = 60;
-
 /** Project track mix (Master scales the Game+Mic stems). */
 export interface TrackGains {
   master: number;
@@ -139,11 +136,6 @@ export class AudioTimeline {
     this.mic.gain.value = Math.max(0, Math.min(4, gains.mic));
   }
 
-  /** True when the paused schedule is exactly at `ms` (resume without rebuild). */
-  canResumeAt(ms: number): boolean {
-    return this.started && this.paused && Math.abs(this.baseMs - ms) < 1;
-  }
-
   /** Schedule every segment from `fromMs` and start the clock. Track 1 of a
    *  recording is the sum of Game+Mic, so only the stems are scheduled. */
   async play(segments: Segment[], fromMs: number, gains: TrackGains): Promise<void> {
@@ -193,20 +185,14 @@ export class AudioTimeline {
     this.paused = false;
   }
 
-  /** Freeze the clock (nodes stay scheduled; context time stops advancing). */
-  async pause(): Promise<void> {
+  /** Silence by stopping the scheduled sources. The AudioContext is NEVER
+   *  suspended: cork/uncork toggles made KDE show the stream as muted and
+   *  caused dropouts. */
+  pause(): void {
     if (!this.started || this.paused) return;
     this.baseMs = this.currentTimeMs();
+    this.stopNodes();
     this.paused = true;
-    await this.ctx.suspend();
-  }
-
-  async resume(gainsRefresh?: () => void): Promise<void> {
-    if (!this.started || !this.paused) return;
-    await this.ctx.resume();
-    this.t0 = this.ctx.currentTime;
-    this.paused = false;
-    gainsRefresh?.();
   }
 
   /** Rebuild the schedule at `ms` (used by seeking/scrubbing). */

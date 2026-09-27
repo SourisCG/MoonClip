@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { TimelineView } from "./TimelineView";
 import { ExportDialog } from "./ExportDialog";
-import { AudioTimeline, VIDEO_SYNC_TOLERANCE_MS } from "./audioEngine";
+import { AudioTimeline } from "./audioEngine";
 import { canRedo, canUndo, redo, undo, useEditorStore } from "./store";
 import {
   projectDurationMs,
@@ -183,6 +183,23 @@ function OverlayView({
   );
 }
 
+/** Renders an overlay only while the playhead is inside its range (or it is
+ *  selected). Subscribing here — instead of in the editor root — keeps the
+ *  whole editor from re-rendering on every clock tick. */
+function OverlayLayer(props: {
+  overlay: Overlay;
+  frame: { w: number; h: number };
+  selected: boolean;
+  refCb: (id: string, el: HTMLDivElement | null) => void;
+}) {
+  const { overlay, selected } = props;
+  const visible = useEditorStore(
+    (s) => s.playheadMs >= overlay.startMs && s.playheadMs < overlay.startMs + overlay.durationMs,
+  );
+  if (!visible && !selected) return null;
+  return <OverlayView {...props} />;
+}
+
 /** Heavy editor: lazy chunk, maximized view, full teardown.
  *  Playback uses a single AudioContext clock; the video is muted and slaved. */
 export default function EditorApp({
@@ -226,7 +243,7 @@ export default function EditorApp({
   const project = useEditorStore((s) => s.project);
   const selection = useEditorStore((s) => s.selection);
   const playing = useEditorStore((s) => s.playing);
-  const playhead = useEditorStore((s) => s.playheadMs);
+  const activeSourceId = useEditorStore((s) => s.activeSourceId);
   const total = project ? projectDurationMs(project) : 0;
   const selectedOverlay =
     project?.overlays.find((o) => selection?.kind === "overlay" && o.id === selection.id) ??
@@ -312,8 +329,11 @@ export default function EditorApp({
   useEffect(() => {
     if (!session || !project) return;
     void decodeProject(project).then(() => {
-      const id = project.segments[0]?.sourceClipId;
+      const id =
+        project.segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0]
+          ?.sourceClipId ?? null;
       if (id) {
+        useEditorStore.getState().setActiveSource(id);
         setStems(engineRef.current?.peaksFor(id) ?? []);
         setVideoClock(!engineRef.current?.hasAudio(id));
       }
@@ -321,28 +341,10 @@ export default function EditorApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  // Which source's waveforms are shown (the one under the playhead).
-  const waveSourceId = useMemo(() => {
-    if (!project) return null;
-    const under = segmentAt(project.segments, playhead);
-    if (under) return under.sourceClipId;
-    const sorted = project.segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs);
-    return sorted[0]?.sourceClipId ?? null;
-  }, [project, playhead]);
-
-  useEffect(() => {
-    const engine = engineRef.current;
-    if (!session || !engine || !waveSourceId) return;
-    const source = useEditorStore.getState().sources[waveSourceId];
-    if (!source) return;
-    void engine.ensureSource(source).then(() => {
-      setStems(engine.peaksFor(waveSourceId));
-      const seg = useEditorStore.getState().project?.segments.find(
-        (s) => s.sourceClipId === waveSourceId,
-      );
-      setVideoClock(!engine.hasAudio(seg?.sourceClipId ?? waveSourceId));
-    });
-  }, [session, waveSourceId, project?.segments.length]);
+  // Which source's waveforms are shown: the one under the playhead. The clock
+  // tick updates `activeSourceId` only when it changes, so this component does
+  // not re-render every frame.
+  const waveSourceId = activeSourceId;
 
   // Lane width + waveform plate (same time->px mapping as the ruler).
   useEffect(() => {
@@ -375,8 +377,35 @@ export default function EditorApp({
   }, [total, visibleMs]);
 
   // ---- Video slaving / fallback clock ------------------------------------
+  // The <video> is a MUTED picture: it plays freely and is only corrected for
+  // real desyncs (>=1 s, at most once every 3 s). Seeking per frame was a
+  // death spiral (each seek restarts the GStreamer pipeline and re-requests
+  // ranges from the media server) that ate the CPU and stuttered the audio.
+  const lastCorrectionRef = useRef(0);
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekRafRef = useRef(0);
+
+  const flushVideoSeek = useCallback(() => {
+    seekRafRef.current = 0;
+    const v = videoRef.current;
+    const target = pendingSeekRef.current;
+    pendingSeekRef.current = null;
+    if (v && target !== null) v.currentTime = target;
+  }, []);
+
+  /** Coalesce seeks to one per animation frame (scrubbing fires ~120 Hz). */
+  const scheduleVideoSeek = useCallback(
+    (sec: number) => {
+      pendingSeekRef.current = sec;
+      if (!seekRafRef.current) {
+        seekRafRef.current = requestAnimationFrame(flushVideoSeek);
+      }
+    },
+    [flushVideoSeek],
+  );
+
   const syncVideo = useCallback(
-    (ms: number, autoplay: boolean) => {
+    (ms: number, playing: boolean) => {
       const p = useEditorStore.getState().project;
       const v = videoRef.current;
       if (!p || !v) return;
@@ -389,30 +418,42 @@ export default function EditorApp({
       if (!source) return;
       const targetSec = sourceMsFor(seg, ms) / 1000;
       const needsSrc = videoSegRef.current?.sourceClipId !== seg.sourceClipId || !v.src;
-      videoSegRef.current = seg;
       if (needsSrc) {
+        videoSegRef.current = seg;
+        v.playbackRate = Math.max(0.25, Math.min(4, seg.speed));
         v.src = source.videoUrl;
         v.load();
         const onMeta = () => {
           v.removeEventListener("loadedmetadata", onMeta);
           v.currentTime = targetSec;
-          if (autoplay) void v.play().catch(() => {});
+          if (playing) void v.play().catch(() => {});
         };
         v.addEventListener("loadedmetadata", onMeta);
         return;
       }
-      if (Math.abs(v.currentTime - targetSec) * 1000 > VIDEO_SYNC_TOLERANCE_MS) {
-        v.currentTime = targetSec;
+      if (videoSegRef.current?.id !== seg.id) {
+        videoSegRef.current = seg;
+        v.playbackRate = Math.max(0.25, Math.min(4, seg.speed));
       }
-      v.playbackRate = Math.max(0.25, Math.min(4, seg.speed));
-      if (autoplay && v.paused) void v.play().catch(() => {});
+      if (!playing) {
+        // Paused scrub: follow the playhead, coalesced per frame.
+        scheduleVideoSeek(targetSec);
+        return;
+      }
+      if (v.paused) void v.play().catch(() => {});
+      const driftMs = targetSec * 1000 - v.currentTime * 1000;
+      const now = performance.now();
+      if (Math.abs(driftMs) > 1000 && now - lastCorrectionRef.current > 3000) {
+        lastCorrectionRef.current = now;
+        scheduleVideoSeek(targetSec);
+      }
     },
-    [],
+    [scheduleVideoSeek],
   );
 
   // ---- Transport ---------------------------------------------------------
   const pause = useCallback(() => {
-    void engineRef.current?.pause();
+    engineRef.current?.pause();
     videoRef.current?.pause();
     useEditorStore.getState().setPlaying(false);
   }, []);
@@ -427,12 +468,7 @@ export default function EditorApp({
     setVideoClock(!hasAudio);
     syncVideo(ms, true);
     if (hasAudio) {
-      if (engine.canResumeAt(ms)) {
-        // Same position: keep the schedule, just unpause (stable stream).
-        await engine.resume();
-      } else {
-        await engine.play(p.segments, ms, trackGains);
-      }
+      await engine.play(p.segments, ms, trackGains);
       const v = videoRef.current;
       if (v) {
         v.muted = true;
@@ -460,6 +496,8 @@ export default function EditorApp({
       const target = Math.max(0, Math.min(ms, Math.max(0, projectDurationMs(p) - 30)));
       const wasPlaying = useEditorStore.getState().playing;
       useEditorStore.getState().setPlayhead(target);
+      const segUnder = segmentAt(p.segments, target);
+      useEditorStore.getState().setActiveSource(segUnder?.sourceClipId ?? null);
       syncVideo(target, wasPlaying);
       void engineRef.current?.seek(target, p.segments, wasPlaying, trackGains);
     },
@@ -488,6 +526,11 @@ export default function EditorApp({
         return;
       }
       useEditorStore.getState().setPlayhead(ms);
+      const seg = segmentAt(p.segments, ms);
+      const srcId = seg?.sourceClipId ?? null;
+      if (srcId !== useEditorStore.getState().activeSourceId) {
+        useEditorStore.getState().setActiveSource(srcId);
+      }
       if (!videoClock) syncVideo(ms, true);
       const end = projectDurationMs(p);
       if (ms >= end - 20) {
@@ -661,11 +704,6 @@ export default function EditorApp({
     ["gainGame", t("editor.game")],
     ["gainMic", t("editor.mic")],
   ];
-  const visibleOverlays = project.overlays.filter(
-    (o) =>
-      (playhead >= o.startMs && playhead < o.startMs + o.durationMs) ||
-      (selection?.kind === "overlay" && selection.id === o.id),
-  );
   const moveableTarget =
     selection?.kind === "overlay" ? overlayEls.current[selection.id] : null;
 
@@ -907,8 +945,8 @@ export default function EditorApp({
                 onPause={() => useEditorStore.getState().setPlaying(false)}
                 className="h-full w-full cursor-pointer object-contain"
               />
-              {visibleOverlays.map((o) => (
-                <OverlayView
+              {project.overlays.map((o) => (
+                <OverlayLayer
                   key={o.id}
                   overlay={o}
                   frame={frame}
