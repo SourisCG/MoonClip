@@ -229,7 +229,7 @@ fn handle_connection(
                     ("Content-Length".into(), len.to_string()),
                     ("Accept-Ranges".into(), "bytes".into()),
                     ("Content-Range".into(), format!("bytes {start}-{end}/{total}")),
-                    ("Cache-Control".into(), "no-store".into()),
+                    ("Cache-Control".into(), "private, max-age=86400".into()),
                 ],
             )?;
             if method == "GET" {
@@ -245,7 +245,7 @@ fn handle_connection(
                     ("Content-Type".into(), mime),
                     ("Content-Length".into(), total.to_string()),
                     ("Accept-Ranges".into(), "bytes".into()),
-                    ("Cache-Control".into(), "no-store".into()),
+                    ("Cache-Control".into(), "private, max-age=86400".into()),
                 ],
             )?;
             if method == "GET" {

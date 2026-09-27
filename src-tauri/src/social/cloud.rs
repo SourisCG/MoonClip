@@ -7,7 +7,9 @@
 //! editor instead downloads into its session dir (wiped on close), so this
 //! cache only serves the light paths.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -60,7 +62,13 @@ pub async fn ensure_local(app: &AppHandle, clip: &ClipRecord) -> Result<PathBuf,
             .await
             .map_err(|e| format!("cannot create the cloud cache: {e}"))?;
     }
-    download_with_progress(&client, file_id, &dest, app, &clip.id).await?;
+    download_once(&client, file_id, &dest, |sent, total| {
+        let _ = app.emit(
+            "moonclip://download-progress",
+            serde_json::json!({"fileId": clip.id, "sent": sent, "total": total}),
+        );
+    })
+    .await?;
     Ok(dest)
 }
 
@@ -74,14 +82,48 @@ pub async fn download_with_progress(
 ) -> Result<(), String> {
     let emit_app = app.clone();
     let emit_id = clip_id.to_string();
-    client
-        .download_file(file_id, dest, move |sent, total| {
-            let _ = emit_app.emit(
-                "moonclip://download-progress",
-                serde_json::json!({"fileId": emit_id, "sent": sent, "total": total}),
-            );
-        })
+    download_once(client, file_id, dest, move |sent, total| {
+        let _ = emit_app.emit(
+            "moonclip://download-progress",
+            serde_json::json!({"fileId": emit_id, "sent": sent, "total": total}),
+        );
+    })
+    .await
+}
+
+/// Per-clip download locks: React StrictMode (dev) mounts effects twice, so
+/// two concurrent calls would otherwise write the same file while the player
+/// reads it (stutter + restarts).
+fn clip_lock(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().expect("download locks poisoned");
+    guard
+        .entry(key.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// Single-flight, atomic download: the file is written to `dest.part` and
+/// renamed when complete; a second caller waits and reuses the result.
+pub(crate) async fn download_once(
+    client: &DriveClient,
+    file_id: &str,
+    dest: &Path,
+    progress: impl FnMut(u64, u64),
+) -> Result<(), String> {
+    let lock = clip_lock(&dest.to_string_lossy());
+    let _guard = lock.lock().await;
+    if dest.is_file() {
+        return Ok(());
+    }
+    let part = dest.with_extension("part");
+    let _ = tokio::fs::remove_file(&part).await;
+    client.download_file(file_id, &part, progress).await?;
+    tokio::fs::rename(&part, dest)
         .await
+        .map_err(|e| format!("cannot finalize the download: {e}"))?;
+    Ok(())
 }
 
 /// Heavy editor download location: inside the session dir, wiped on close.
@@ -115,9 +157,11 @@ pub async fn trash_remote(app: &AppHandle, clip: &ClipRecord) -> Result<(), Stri
 mod tests {
     use super::*;
 
-    /// The download helper streams into the given path (mock Drive server).
+    /// Two concurrent downloads of the same clip hit Drive ONCE and leave a
+    /// complete file (single-flight + atomic rename).
     #[tokio::test]
-    async fn download_helper_writes_the_file() {
+    async fn concurrent_downloads_are_single_flight() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let dir = std::env::temp_dir().join(format!(
             "moonclip-cloud-{}",
             uuid::Uuid::new_v4().simple()
@@ -126,19 +170,35 @@ mod tests {
         let dest = dir.join("clip.mp4");
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_thread = hits.clone();
         let handle = std::thread::spawn(move || {
-            let request = server.recv().unwrap();
-            assert!(request.url().contains("alt=media"));
-            request
-                .respond(tiny_http::Response::from_string("cloud-bytes"))
-                .unwrap();
+            // Serve up to 2 requests but only the first should ever happen.
+            for _ in 0..2 {
+                match server.recv_timeout(std::time::Duration::from_millis(1500)) {
+                    Ok(Some(request)) => {
+                        hits_thread.fetch_add(1, Ordering::SeqCst);
+                        request
+                            .respond(tiny_http::Response::from_string("cloud-bytes"))
+                            .unwrap();
+                    }
+                    _ => break,
+                }
+            }
         });
-        let client = DriveClient::with_base(format!("http://127.0.0.1:{port}"), "tok");
-        client
-            .download_file("f1", &dest, |_, _| {})
-            .await
-            .unwrap();
+        let client = Arc::new(DriveClient::with_base(
+            format!("http://127.0.0.1:{port}"),
+            "tok",
+        ));
+        let (a, b) = tokio::join!(
+            download_once(&client, "f1", &dest, |_, _| {}),
+            download_once(&client, "f1", &dest, |_, _| {}),
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "Drive must be hit once");
         assert_eq!(std::fs::read(&dest).unwrap(), b"cloud-bytes");
+        assert!(!dest.with_extension("part").exists());
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
