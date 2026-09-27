@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import Moveable from "react-moveable";
@@ -137,7 +137,9 @@ function OverlayView({
   const elRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
-  useEffect(() => {
+  // Measured BEFORE paint: otherwise the first frames draw the element from
+  // its top-left anchor (no half-size centering) and it visibly snaps.
+  useLayoutEffect(() => {
     const el = elRef.current;
     if (!el) return;
     const measure = () => setSize({ w: el.offsetWidth, h: el.offsetHeight });
@@ -146,6 +148,8 @@ function OverlayView({
     ro.observe(el);
     return () => ro.disconnect();
   }, [overlay.text, overlay.fontSize, overlay.kind]);
+
+  const ready = size.w > 0 && size.h > 0 && frame.w > 0 && frame.h > 0;
 
   return (
     <div
@@ -163,7 +167,9 @@ function OverlayView({
       style={{
         // Anchored at 0,0 with a leading px translate: Moveable updates that
         // same translate, so its control box always hugs the element and the
-        // committed position is exactly what you see.
+        // committed position is exactly what you see. Hidden until measured
+        // (it is still laid out, so the measurement can happen).
+        visibility: ready ? "visible" : "hidden",
         left: 0,
         top: 0,
         transform: `translate(${overlay.x * frame.w - size.w / 2}px, ${
@@ -618,8 +624,8 @@ export default function EditorApp({
     }
   }, [trackGains, videoClock, session]);
 
-  // Frame size (font scaling / overlay coordinates).
-  useEffect(() => {
+  // Frame size (font scaling / overlay coordinates) before paint too.
+  useLayoutEffect(() => {
     const el = frameRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
@@ -1035,7 +1041,7 @@ export default function EditorApp({
                   }}
                 />
               ))}
-              {moveableTarget && !playing && (
+              {moveableTarget && moveableTarget.offsetWidth > 0 && !playing && (
                 <Moveable
                   key={selection!.id}
                   target={moveableTarget}
