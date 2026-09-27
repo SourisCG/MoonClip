@@ -247,7 +247,8 @@ function LevelMeters({
     const tick = () => {
       const engine = engineRef.current;
       const l = engine ? engine.levels() : { game: 0, mic: 0, out: 0 };
-      const vals = [l.game, l.mic, l.out];
+      // Labels: Mezcla (output), Juego, Mic.
+      const vals = [l.out, l.game, l.mic];
       vals.forEach((v, i) => {
         const el = bars.current[i];
         if (el) el.style.width = `${Math.min(100, Math.round(v * 160))}%`;
@@ -427,8 +428,6 @@ export default function EditorApp({
     return engineRef.current;
   }, []);
 
-  /** No global master any more: every channel has its own slider. */
-  const masterGain = 1;
   /** Selected clip's own audio mix (falls back to the active source). */
   const clipSegment = selectedSegment ?? null;
 
@@ -455,7 +454,7 @@ export default function EditorApp({
     void invoke<number>("editor_audio_health").catch(() => {});
     void decodeProject(project).then((engine) => {
       void engine.gainSelfTest();
-      void engine.gainPathProbe(useEditorStore.getState().project?.segments ?? [], 1);
+      void engine.channelSelfCheck(useEditorStore.getState().project?.segments ?? []);
       setWaveSources(
         Object.fromEntries(
           Object.keys(useEditorStore.getState().sources).map((id) => [id, engine.peaksFor(id)]),
@@ -609,21 +608,23 @@ export default function EditorApp({
     setVideoClock(!hasAudio);
     syncVideo(ms, true);
     if (hasAudio) {
-      await engine.play(p.segments, ms, masterGain);
+      await engine.play(p.segments, ms);
       const v = videoRef.current;
       if (v) {
+        // The engine is the ONE audio source: keep the video fully silent
+        // (muted AND volume 0, in case a src swap resets the flag).
         v.muted = true;
-        v.volume = 1;
+        v.volume = 0;
       }
     } else {
       const v = videoRef.current;
       if (v) {
         v.muted = false;
-        v.volume = Math.min(1, Math.max(0, (seg?.gainMix ?? 1) * masterGain));
+        v.volume = Math.min(1, Math.max(0, seg?.gainMix ?? 1));
       }
     }
     useEditorStore.getState().setPlaying(true);
-  }, [decodeProject, masterGain, syncVideo]);
+  }, [decodeProject, syncVideo]);
 
   const toggle = useCallback(() => {
     if (useEditorStore.getState().playing) pause();
@@ -638,9 +639,9 @@ export default function EditorApp({
       const wasPlaying = useEditorStore.getState().playing;
       useEditorStore.getState().setPlayhead(target);
       syncVideo(target, wasPlaying);
-      void engineRef.current?.seek(target, p.segments, wasPlaying, masterGain);
+      void engineRef.current?.seek(target, p.segments, wasPlaying);
     },
-    [masterGain, syncVideo],
+    [syncVideo],
   );
 
   // Single clock: the playhead always follows the audio (or the video when the
@@ -674,8 +675,9 @@ export default function EditorApp({
           message:
             `sync ph=${Math.round(ms)} engine=${
               engine && engine.isPlaying() ? Math.round(engine.currentTimeMs()) : -1
-            } video=${v ? v.currentTime.toFixed(2) : "-"} ` +
-            `seg=${seg?.id.slice(0, 6) ?? "-"} start=${seg?.timelineStartMs ?? -1} in=${seg?.inMs ?? -1} ` +
+            } video=${v ? v.currentTime.toFixed(2) : "-"} vmuted=${v?.muted ? 1 : 0} ` +
+            `vclock=${videoClock ? 1 : 0} seg=${seg?.id.slice(0, 6) ?? "-"} ` +
+            `g=${lv ? lv.game.toFixed(3) : "-"} m=${lv ? lv.mic.toFixed(3) : "-"} ` +
             `out=${lv ? lv.out.toFixed(3) : "-"}`,
         }).catch(() => {});
       }
@@ -698,21 +700,21 @@ export default function EditorApp({
     return () => cancelAnimationFrame(raf);
   }, [playing, videoClock, syncVideo, pause]);
 
-  // Live output level (shared GainNode, no reschedule ever).
+  // Video is ONLY a muted picture while the engine plays; in the fallback
+  // (no decodable stems) it carries the sound at the clip's Mezcla level.
   useEffect(() => {
-    const engine = engineRef.current;
-    engine?.setMaster(masterGain);
     const v = videoRef.current;
     if (!v) return;
     if (videoClock) {
-      // Fallback: single-track audio comes from the video itself.
+      // Fallback: single-track audio comes from the video itself (the tick
+      // keeps its volume at the clip's Mezcla level).
       v.muted = false;
-      v.volume = Math.min(1, Math.max(0, masterGain));
     } else {
       // Invariant: the engine is the only audio source.
       v.muted = true;
+      v.volume = 0;
     }
-  }, [masterGain, videoClock, session]);
+  }, [videoClock, session]);
 
   // Per-clip mix sliders update the already-scheduled nodes in place.
   useEffect(() => {
@@ -984,7 +986,7 @@ export default function EditorApp({
           </p>
           <LevelMeters
             engineRef={engineRef}
-            labels={[t("editor.game"), t("editor.mic"), t("editor.out")]}
+            labels={[t("editor.mix"), t("editor.game"), t("editor.mic")]}
           />
           <div className="space-y-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-200/80">

@@ -262,7 +262,7 @@ impl EditProject {
 /// Fresh single-segment project for a clip.
 pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProject {
     EditProject {
-        version: 4,
+        version: 5,
         id: uuid::Uuid::new_v4().to_string(),
         name: name.to_string(),
         source_clip_id: clip_id.to_string(),
@@ -282,9 +282,9 @@ pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProje
             // Track 1 (Mix) already contains Game+Mic: start with the mix only
             // so the preview never plays the same audio twice. Users raise the
             // stems and lower Mix to remix.
-        // All three channels are playable: default to Game+Mic (their sum is
-        // the recording's Mix) so nothing is doubled out of the box.
-        gain_mix: 0.0,
+        // Mezcla is the per-clip fader over Game+Mic (the recording's Mix
+        // channel is that sum, so it is never played as its own stem).
+        gain_mix: 1.0,
         gain_game: 1.0,
         gain_mic: 1.0,
         zoom: 1.0,
@@ -356,14 +356,15 @@ pub fn migrate_gains(project: &mut EditProject) -> bool {
         project.version = 3;
         changed = true;
     }
-    // v3 -> v4: the Mix stem was never played before (it duplicates Game+Mic);
-    // now all three channels are playable, so zero the Mix gain to keep the
-    // old sound (Game+Mic) and avoid doubled audio.
-    if project.version < 4 {
+    // v4 -> v5: Mezcla became the per-clip fader of Game+Mic, so its neutral
+    // value is 1 (v4 zeroed it because the Mix stem was never played then).
+    if project.version < 5 {
         for seg in &mut project.segments {
-            seg.gain_mix = 0.0;
+            if seg.gain_mix <= 0.0 {
+                seg.gain_mix = 1.0;
+            }
         }
-        project.version = 4;
+        project.version = 5;
         changed = true;
     }
     project.gain_master = project.gain_master.clamp(0.0, 4.0);
@@ -409,13 +410,15 @@ mod tests {
         p.segments[0].gain_game = 0.0;
         p.segments[0].gain_mic = 0.0;
         assert!(migrate_gains(&mut p));
-        assert_eq!(p.version, 4);
+        assert_eq!(p.version, 5);
         assert_eq!(p.gain_master, 1.0);
         assert_eq!(p.gain_game, 1.0);
         assert_eq!(p.gain_mic, 1.0);
-        // The mix-only default becomes real Game+Mic on the clip (v3).
+        // The mix-only default becomes real Game+Mic on the clip (v3), and
+        // v5 leaves Mezcla as the neutral fader value.
         assert_eq!(p.segments[0].gain_game, 1.0);
         assert_eq!(p.segments[0].gain_mic, 1.0);
+        assert_eq!(p.segments[0].gain_mix, 1.0);
         assert!(!migrate_gains(&mut p));
         // v3 project fields are inert: touching them changes nothing.
         p.gain_game = 0.3;
@@ -442,8 +445,9 @@ mod tests {
         assert_eq!(p.gain_mic, 1.0);
         assert_eq!(p.segments[0].gain_game, 1.2);
         assert_eq!(p.segments[0].gain_mic, 0.0);
-        assert_eq!(p.segments[0].gain_mix, 0.0);
-        assert_eq!(p.version, 4);
+        // The legacy Mix level survives as the Mezcla fader.
+        assert_eq!(p.segments[0].gain_mix, 0.5);
+        assert_eq!(p.version, 5);
         assert!(!migrate_gains(&mut p));
     }
 
@@ -457,13 +461,13 @@ mod tests {
         seg2.id = "s2".into();
         p.segments.push(seg2);
         assert!(migrate_gains(&mut p));
-        assert_eq!(p.version, 4);
+        assert_eq!(p.version, 5);
         assert_eq!(p.gain_game, 1.0);
         assert_eq!(p.gain_mic, 1.0);
         assert!(p
             .segments
             .iter()
-            .all(|s| s.gain_game == 0.3 && s.gain_mic == 1.4 && s.gain_mix == 0.0));
+            .all(|s| s.gain_game == 0.3 && s.gain_mic == 1.4 && s.gain_mix == 1.0));
         assert!(!migrate_gains(&mut p));
     }
 
@@ -480,7 +484,7 @@ mod tests {
     #[test]
     fn default_project_uses_the_stems_with_full_gains() {
         let p = default_project("c", "n", 1000);
-        assert_eq!(p.version, 4);
+        assert_eq!(p.version, 5);
         assert_eq!(p.gain_master, 1.0);
         assert_eq!(p.gain_game, 1.0);
         assert_eq!(p.gain_mic, 1.0);

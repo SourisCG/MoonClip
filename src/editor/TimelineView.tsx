@@ -1,5 +1,4 @@
-import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useRef } from "react";
 import {
   TimelineContext,
   useItem,
@@ -218,27 +217,6 @@ function Inner({
   const overlays = useEditorStore((s) => s.project?.overlays ?? []);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const scrubbing = useRef(false);
-
-  // TEMP diagnostic: log the wave geometry (px) whenever it changes so the
-  // app log proves where each plate lands at the current zoom.
-  const lastWaveLog = useRef("");
-  useEffect(() => {
-    const span = range.end - range.start;
-    const vp = Math.max(1, valueToPixels(span));
-    const sig =
-      `vp=${vp.toFixed(0)}px span=${Math.round(span)}ms ` +
-      plates
-        .map(
-          (p) =>
-            `[src=${p.sourceId.slice(0, 6)} left=${valueToPixels(p.startMs - range.start).toFixed(0)} ` +
-            `w=${valueToPixels(p.durationMs).toFixed(0)} f=${p.from.toFixed(3)} t=${p.to.toFixed(3)}]`,
-        )
-        .join(" ");
-    if (sig !== lastWaveLog.current) {
-      lastWaveLog.current = sig;
-      void invoke("editor_log", { message: `waves ${sig}` }).catch(() => {});
-    }
-  }, [plates, range, valueToPixels]);
 
   const scrubTo = (clientX: number) => {
     const el = rootRef.current;

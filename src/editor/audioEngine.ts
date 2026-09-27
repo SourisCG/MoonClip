@@ -51,7 +51,6 @@ export function computePeaks(buffer: AudioBuffer, buckets = 900): number[][] {
 
 export class AudioTimeline {
   private ctx: AudioContext;
-  private master: GainNode;
   private game: GainNode;
   private mic: GainNode;
   private analyserGame: AnalyserNode;
@@ -77,20 +76,21 @@ export class AudioTimeline {
       window.AudioContext ??
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     this.ctx = new Ctor();
-    this.master = this.ctx.createGain();
-    this.master.gain.value = 1;
-    this.master.connect(this.ctx.destination);
-    // Post-master tap: measures exactly what leaves the engine.
-    this.analyserOut = this.ctx.createAnalyser();
-    this.analyserOut.fftSize = 256;
-    this.master.connect(this.analyserOut);
+    // Game and Mic buses go straight to the output. Mix is a per-clip fader
+    // that scales both (it is the recording's Mix channel = Game+Mic), so
+    // there is no global master anywhere and no track is ever doubled.
     this.game = this.ctx.createGain();
     this.game.gain.value = 1;
-    this.game.connect(this.master);
+    this.game.connect(this.ctx.destination);
     this.mic = this.ctx.createGain();
     this.mic.gain.value = 1;
-    this.mic.connect(this.master);
-    // Level meters (diagnostics + UI): the analysers tap the track nodes.
+    this.mic.connect(this.ctx.destination);
+    // Output tap: what actually leaves the engine.
+    this.analyserOut = this.ctx.createAnalyser();
+    this.analyserOut.fftSize = 256;
+    this.game.connect(this.analyserOut);
+    this.mic.connect(this.analyserOut);
+    // Channel meters: tap each bus (after the per-clip gains).
     this.analyserGame = this.ctx.createAnalyser();
     this.analyserGame.fftSize = 256;
     this.game.connect(this.analyserGame);
@@ -223,29 +223,17 @@ export class AudioTimeline {
     );
   }
 
-  /** Global output level. Shared GainNode: no reschedule is ever needed.
-   *  ALWAYS apply, never compare with `gain.value`: in WebKit that getter
-   *  does not reflect values scheduled with setValueAtTime, so a
-   *  `value !== target` guard silently skipped restoring the master (or a
-   *  channel) after it had been lowered. */
-  setMaster(value: number) {
-    const v = Math.max(0, Math.min(4, value));
-    this.master.gain.setValueAtTime(v, this.ctx.currentTime);
-    diag(`master=${v.toFixed(2)}`);
-  }
-
   /** Silent routing probe: plays the real segments at -60 dB and measures
    *  the post-master output with the per-clip gains on, muted and restored.
    *  Proves the slider->node->bus->master path end to end without being
    *  audible. */
-  async gainPathProbe(segments: Segment[], master: number): Promise<void> {
+  async channelSelfCheck(segments: Segment[]): Promise<void> {
     const first = segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs)[0];
     if (!first) return;
-    // Start where the source actually has signal (scanning its peaks), or the
-    // probe would measure silence and prove nothing.
-    let fromMs = first.timelineStartMs;
     const src = this.sources.get(first.sourceClipId);
-    const stem = src?.stems.find((s) => s.label === "game") ?? src?.stems[0];
+    // Find where the MIC has signal: that is the hardest case to hear.
+    const stem = src?.stems.find((s) => s.label === "mic") ?? src?.stems[0];
+    let fromMs = first.timelineStartMs;
     if (stem) {
       const per = stem.peaks[0]?.length ? stem.peaks[0].length / 2 : 0;
       const srcDur = Math.max(1, src?.durationMs ?? 1);
@@ -254,27 +242,29 @@ export class AudioTimeline {
           Math.abs(stem.peaks[0][b * 2] ?? 0),
           Math.abs(stem.peaks[0][b * 2 + 1] ?? 0),
         );
-        if (amp > 0.2) {
+        if (amp > 0.15) {
           fromMs = first.timelineStartMs + first.inMs + (b / per) * srcDur;
           break;
         }
       }
     }
-    await this.play(segments, fromMs, 0.01);
-    await new Promise((r) => setTimeout(r, 450));
-    const on = this.levels().out;
-    const muted = segments.map((s) => ({ ...s, gainMix: 0, gainGame: 0, gainMic: 0 }));
-    this.applySegmentGains(muted);
-    await new Promise((r) => setTimeout(r, 300));
-    const off = this.levels().out;
-    this.applySegmentGains(segments);
-    await new Promise((r) => setTimeout(r, 300));
-    const back = this.levels().out;
-    this.stopNodes();
-    this.started = false;
-    this.paused = true;
-    this.setMaster(master);
-    diag(`gainPath on=${on.toFixed(4)} off=${off.toFixed(4)} back=${back.toFixed(4)}`);
+    const cases: [string, Segment[]][] = [
+      ["game", segments.map((s) => ({ ...s, gainMix: 1, gainGame: 1, gainMic: 0 }))],
+      ["mic", segments.map((s) => ({ ...s, gainMix: 1, gainGame: 0, gainMic: 1 }))],
+      ["both", segments.map((s) => ({ ...s, gainMix: 1, gainGame: 1, gainMic: 1 }))],
+    ];
+    const levelsReport: string[] = [];
+    for (const [name, segs] of cases) {
+      await this.play(segs, fromMs);
+      await new Promise((r) => setTimeout(r, 450));
+      const l = this.levels();
+      levelsReport.push(`${name}: g=${l.game.toFixed(3)} m=${l.mic.toFixed(3)} out=${l.out.toFixed(3)}`);
+      this.stopNodes();
+      this.started = false;
+      this.paused = true;
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    diag(`selfcheck ${levelsReport.join(" | ")}`);
   }
 
   /** Length of the decoded stems (ms), if this source was decoded. */
@@ -293,10 +283,7 @@ export class AudioTimeline {
     for (const g of this.segGains) {
       const seg = byId.get(g.segId);
       if (!seg) continue;
-      const value = Math.max(
-        0,
-        Math.min(4, g.kind === "mic" ? seg.gainMic : g.kind === "game" ? seg.gainGame : seg.gainMix),
-      );
+      const value = this.channelGain(seg, g.kind);
       // Always apply: WebKit's `gain.value` getter lags scheduled changes, so
       // a `value !== target` guard skipped restoring a lowered channel.
       g.node.gain.setValueAtTime(value, this.ctx.currentTime);
@@ -308,13 +295,12 @@ export class AudioTimeline {
     }
   }
 
-  /** Schedule every segment from `fromMs` and start the clock. Track 1 of a
-   *  recording is the sum of Game+Mic, so only the stems are scheduled. Each
-   *  clip's own gains (and the global master) are applied on its own nodes. */
-  async play(segments: Segment[], fromMs: number, master: number): Promise<void> {
+  /** Schedule every segment from `fromMs` and start the clock. Game and Mic
+   *  are scheduled (the Mix stem IS their sum, so it is never played); the
+   *  per-clip Mezcla fader multiplies both. */
+  async play(segments: Segment[], fromMs: number): Promise<void> {
     this.stopNodes();
     await this.ctx.resume();
-    this.setMaster(master);
     const lookahead = 0.06;
     this.t0 = this.ctx.currentTime + lookahead;
     this.baseMs = fromMs;
@@ -330,26 +316,21 @@ export class AudioTimeline {
           `out=${Math.round(seg.outMs)} speed=${seg.speed} ` +
           `g=${seg.gainGame} m=${seg.gainMic} mix=${seg.gainMix}`,
       );
-      // ALL channels play, each through its own per-clip gain: Mix, Game and
-      // Mic are independent sliders (the user mixes what they want to hear).
-      for (const stem of decoded.stems) {
+      // Single-track sources use their only stem as the whole clip (Mezcla).
+      const wanted =
+        decoded.stems.length > 1
+          ? decoded.stems.filter((s) => s.label === "game" || s.label === "mic")
+          : decoded.stems;
+      for (const stem of wanted) {
         const kind: "mix" | "game" | "mic" =
-          stem.label === "mic"
-            ? "mic"
-            : stem.label === "game"
-              ? "game"
-              : stem.label === "mix"
-                ? "mix"
-                : "mix";
-        const value =
-          kind === "mic" ? seg.gainMic : kind === "game" ? seg.gainGame : seg.gainMix;
-        const target =
-          kind === "mic" ? this.mic : kind === "game" ? this.game : this.master;
+          decoded.stems.length > 1 ? (stem.label === "mic" ? "mic" : "game") : "mix";
+        const value = this.channelGain(seg, kind);
+        const target = kind === "mic" ? this.mic : this.game;
         const src = this.ctx.createBufferSource();
         src.buffer = stem.buffer;
         src.playbackRate.value = seg.speed;
         const gainNode = this.ctx.createGain();
-        gainNode.gain.setValueAtTime(Math.max(0, Math.min(4, value)), this.ctx.currentTime);
+        gainNode.gain.setValueAtTime(value, this.ctx.currentTime);
         src.connect(gainNode);
         gainNode.connect(target);
         this.segGains.push({ segId: seg.id, kind, node: gainNode });
@@ -368,12 +349,20 @@ export class AudioTimeline {
         this.nodes.push(src);
       }
     }
-    diag(
-      `play from ${Math.round(fromMs)}ms: scheduled ${this.nodes.length} node(s), ` +
-        `master=${master}`,
-    );
+    diag(`play from ${Math.round(fromMs)}ms: scheduled ${this.nodes.length} node(s)`);
     this.started = true;
     this.paused = false;
+  }
+
+  /** Effective gain of a channel for a clip: Mezcla scales Game and Mic. */
+  private channelGain(seg: Segment, kind: "mix" | "game" | "mic"): number {
+    const v =
+      kind === "mic"
+        ? seg.gainMix * seg.gainMic
+        : kind === "game"
+          ? seg.gainMix * seg.gainGame
+          : seg.gainMix;
+    return Math.max(0, Math.min(4, v));
   }
 
   /** Silence by stopping the scheduled sources. The AudioContext is NEVER
@@ -387,17 +376,12 @@ export class AudioTimeline {
   }
 
   /** Rebuild the schedule at `ms` (used by seeking/scrubbing). */
-  async seek(
-    ms: number,
-    segments: Segment[],
-    keepPlaying: boolean,
-    master: number,
-  ): Promise<void> {
+  async seek(ms: number, segments: Segment[], keepPlaying: boolean): Promise<void> {
     this.stopNodes();
     this.started = false;
     this.paused = true;
     if (keepPlaying) {
-      await this.play(segments, ms, master);
+      await this.play(segments, ms);
     } else {
       this.baseMs = ms;
     }
@@ -432,7 +416,6 @@ export class AudioTimeline {
     this.stopNodes();
     this.game.disconnect();
     this.mic.disconnect();
-    this.master.disconnect();
     void this.ctx.close().catch(() => {});
     this.sources.clear();
   }

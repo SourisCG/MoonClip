@@ -27,7 +27,6 @@ interface EditorState {
   pxPerSecond: number;
 
   setProject: (project: EditProject) => void;
-  setMasterGain: (value: number) => void;
   setSegmentGain: (
     id: string,
     field: "gainMix" | "gainGame" | "gainMic",
@@ -93,11 +92,6 @@ export const useEditorStore = create<EditorState>()(
           s.playheadMs = 0;
         }),
 
-      setMasterGain: (value) =>
-        set((s) => {
-          if (s.project) s.project.gainMaster = Math.max(0, Math.min(4, value));
-        }),
-
       setSegmentGain: (id, field, value) =>
         set((s) => {
           const seg = s.project?.segments.find((x) => x.id === id);
@@ -131,9 +125,8 @@ export const useEditorStore = create<EditorState>()(
             speed: 1,
             freezeAtMs: 0,
             freezeMs: 0,
-            // Game+Mic are the sum that the recording's Mix track contains:
-            // default to those so nothing is doubled.
-            gainMix: 0,
+            // Mezcla is the fader of Game+Mic (the recording's Mix channel).
+            gainMix: 1,
             gainGame: 1,
             gainMic: 1,
             zoom: 1,
