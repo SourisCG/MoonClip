@@ -1,4 +1,8 @@
-//! Phase 5 owns this module. Phase 3 only needs ffmpeg::make_thumbnail.
+//! Phase 5 editor: quick trim, sessions, project model and staged export.
+pub mod encoders;
+pub mod export;
 pub mod ffmpeg;
 pub mod media_server;
+pub mod project;
+pub mod session;
 pub mod trim;

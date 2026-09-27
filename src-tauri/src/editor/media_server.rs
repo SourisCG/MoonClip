@@ -19,9 +19,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+#[derive(Clone)]
+struct MediaEntry {
+    session: Option<String>,
+    path: PathBuf,
+}
+
 struct MediaServer {
     port: u16,
-    files: Arc<Mutex<HashMap<String, PathBuf>>>,
+    files: Arc<Mutex<HashMap<String, MediaEntry>>>,
 }
 
 static SERVER: OnceLock<MediaServer> = OnceLock::new();
@@ -29,14 +35,35 @@ static INIT: Mutex<()> = Mutex::new(());
 
 /// URL the webview can play for `path` (starts the server on first call).
 pub fn media_url(path: &Path) -> Result<String, String> {
+    media_url_session(None, path)
+}
+
+/// Session-scoped URL: `release_session` removes every token it registered
+/// (editor sessions are fully torn down on close).
+pub fn media_url_session(session: Option<&str>, path: &Path) -> Result<String, String> {
     let server = ensure_server()?;
     let token = uuid::Uuid::new_v4().simple().to_string();
     server
         .files
         .lock()
         .map_err(|_| "media server lock poisoned".to_string())?
-        .insert(token.clone(), path.to_path_buf());
+        .insert(
+            token.clone(),
+            MediaEntry {
+                session: session.map(str::to_string),
+                path: path.to_path_buf(),
+            },
+        );
     Ok(format!("http://127.0.0.1:{}/m/{}", server.port, token))
+}
+
+/// Drop every media token belonging to a session (editor close).
+pub fn release_session(session: &str) {
+    if let Some(server) = SERVER.get() {
+        if let Ok(mut files) = server.files.lock() {
+            files.retain(|_, e| e.session.as_deref() != Some(session));
+        }
+    }
 }
 
 fn ensure_server() -> Result<&'static MediaServer, String> {
@@ -53,7 +80,7 @@ fn ensure_server() -> Result<&'static MediaServer, String> {
         .local_addr()
         .map_err(|e| format!("cannot read media server port: {e}"))?
         .port();
-    let files: Arc<Mutex<HashMap<String, PathBuf>>> = Arc::new(Mutex::new(HashMap::new()));
+    let files: Arc<Mutex<HashMap<String, MediaEntry>>> = Arc::new(Mutex::new(HashMap::new()));
     let files_thread = files.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
@@ -118,7 +145,10 @@ fn parse_range(value: &str, total: u64) -> Result<(u64, u64), ()> {
     Ok((start, end))
 }
 
-fn handle_connection(mut stream: TcpStream, files: &Arc<Mutex<HashMap<String, PathBuf>>>) -> std::io::Result<()> {
+fn handle_connection(
+    mut stream: TcpStream,
+    files: &Arc<Mutex<HashMap<String, MediaEntry>>>,
+) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -139,8 +169,14 @@ fn handle_connection(mut stream: TcpStream, files: &Arc<Mutex<HashMap<String, Pa
             range_header = Some(v.trim().to_string());
         }
     }
+    // Loopback CORS so the webview can `fetch` (wavesurfer decodes peaks with
+    // fetch; <video>/<audio> do not need it but it costs nothing).
     let respond = |stream: &mut TcpStream, status: &str, headers: &[(String, String)]| {
         let mut head = format!("HTTP/1.1 {status}\r\nConnection: close\r\n");
+        head.push_str("Access-Control-Allow-Origin: *\r\n");
+        head.push_str("Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n");
+        head.push_str("Access-Control-Allow-Headers: Range\r\n");
+        head.push_str("Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges\r\n");
         for (k, v) in headers {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
@@ -148,6 +184,10 @@ fn handle_connection(mut stream: TcpStream, files: &Arc<Mutex<HashMap<String, Pa
         stream.write_all(head.as_bytes())
     };
 
+    if method == "OPTIONS" {
+        respond(&mut stream, "204 No Content", &[])?;
+        return Ok(());
+    }
     if method != "GET" && method != "HEAD" {
         respond(&mut stream, "405 Method Not Allowed", &[])?;
         return Ok(());
@@ -156,7 +196,7 @@ fn handle_connection(mut stream: TcpStream, files: &Arc<Mutex<HashMap<String, Pa
         .strip_prefix("/m/")
         .map(|t| t.split(['?', '#']).next().unwrap_or(""))
         .unwrap_or("");
-    let path = files.lock().ok().and_then(|m| m.get(token).cloned());
+    let path = files.lock().ok().and_then(|m| m.get(token).map(|e| e.path.clone()));
     let Some(path) = path else {
         respond(&mut stream, "404 Not Found", &[])?;
         return Ok(());
@@ -295,6 +335,11 @@ mod tests {
 
         let missing = request(addr, "GET /m/nope HTTP/1.1\r\nHost: x\r\n\r\n");
         assert_eq!(missing.status, 404);
+
+        // The webview fetches these URLs (wavesurfer): CORS must be present.
+        assert!(full.headers.contains("access-control-allow-origin: *"));
+        let preflight = request(addr, "OPTIONS /m/x HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert_eq!(preflight.status, 204);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -96,10 +96,11 @@ attribution). Giphy/Tenor/Klipy are out: all require an API key and Google
 
 ### Sub-phases
 
-- **E1** Quick trim (done when lossless <1 s, precise exact, 3 tracks kept).
+- **E1** Quick trim — **done**. (Acceptance: lossless <1 s, precise exact, 3 tracks kept).
 - **E2** In-app maximized editor view + project JSON + single-clip timeline
   (trim/split/duplicate, undo/redo, Ctrl+K/S/D) + export presets with
-  progress/cancel.
+  progress/cancel — **done** (lazy chunk, encoder auto/CPU fallback, 3 audio
+  lanes, staged export).
 - **E3** Overlays: text (all properties + entrance/exit/effects), local
   stickers/images/GIFs, upload, Openverse search, Moveable interactions.
 - **E4** Effects: speed 0.25x+, freeze, zoom/crop/rotate keyframes, filters,

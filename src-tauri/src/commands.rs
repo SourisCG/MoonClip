@@ -2518,6 +2518,93 @@ pub async fn trim_clip(
 }
 
 // ---------------------------------------------------------------------------
+// Advanced editor (Phase E2): sessions, projects and staged export
+// ---------------------------------------------------------------------------
+
+/// Open (or resume) the heavy editor for a clip: stems, preview proxy when
+/// needed, saved project and available encoders. Creates the session dir.
+#[tauri::command]
+pub async fn editor_open(
+    app: AppHandle,
+    clip_id: String,
+) -> Result<crate::editor::session::EditorOpenResult, String> {
+    crate::editor::session::open(&app, &clip_id).await
+}
+
+/// Close the session: kills exports, releases media tokens, deletes temps.
+#[tauri::command]
+pub async fn editor_close(app: AppHandle, session_id: String) -> Result<(), String> {
+    let _ = &app;
+    crate::editor::session::close(&session_id).await
+}
+
+/// Autosaved project for a clip (None = never edited).
+#[tauri::command]
+pub fn editor_load_project(
+    app: AppHandle,
+    clip_id: String,
+) -> Option<crate::editor::project::EditProject> {
+    crate::editor::session::load_project(&app, &clip_id)
+}
+
+/// Persist the project (autosave with debounce on the frontend).
+#[tauri::command]
+pub fn editor_save_project(
+    app: AppHandle,
+    project: crate::editor::project::EditProject,
+) -> Result<(), String> {
+    crate::editor::session::save_project(&app, &project)
+}
+
+/// Start an export in the background; progress arrives as edit-progress
+/// events and completion as `moonclip://editor-export-done`.
+#[tauri::command]
+pub async fn editor_export(
+    app: AppHandle,
+    session_id: String,
+    project: crate::editor::project::EditProject,
+) -> Result<(), String> {
+    {
+        let handle = crate::editor::session::export_handle(&session_id)
+            .ok_or_else(|| "editor session not found".to_string())?;
+        if handle.lock().await.is_some() {
+            return Err("an export is already running".into());
+        }
+        let _ = crate::editor::session::save_project(&app, &project);
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = crate::editor::export::run(&handle, &session_id, &project).await;
+        if let Err(e) = &result {
+            eprintln!("[moonclip] editor export failed: {e}");
+        }
+        let _ = handle.emit(
+            "moonclip://editor-export-done",
+            serde_json::json!({ "ok": result.is_ok(), "error": result.err() }),
+        );
+    });
+    Ok(())
+}
+
+/// Cancel the running export (if any).
+#[tauri::command]
+pub async fn editor_cancel_export(
+    app: AppHandle,
+    session_id: String,
+) -> Result<(), String> {
+    let _ = &app;
+    let Some(handle) = crate::editor::session::export_handle(&session_id) else {
+        return Ok(());
+    };
+    if let Some(mut child) = handle.lock().await.take() {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        eprintln!("[moonclip] editor export cancelled");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Hardware test (first-run wizard, optional)
 // ---------------------------------------------------------------------------
 

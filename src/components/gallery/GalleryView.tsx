@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { thumbnailUrl } from "../../lib/media";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Clapperboard, FolderOpen, Scissors, Star, Trash2 } from "lucide-react";
+import { Clapperboard, FolderOpen, Scissors, Star, Trash2, Wand2 } from "lucide-react";
 import { TrimPanel } from "./TrimPanel";
 import { useClips } from "../../hooks/useClips";
 import type { ClipMetadata } from "../../types";
@@ -92,6 +92,7 @@ interface RowActions {
   onToggleFavorite: (id: string) => void;
   onDelete: (id: string) => void;
   onTrim: (clip: ClipMetadata) => void;
+  onAdvancedEdit: (clip: ClipMetadata) => void;
   onError: (msg: string) => void;
   onSuccess: () => void;
 }
@@ -137,6 +138,13 @@ function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions })
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <button
+              onClick={() => actions.onAdvancedEdit(clip)}
+              className={`${iconBtn} text-cyan-300/80 hover:text-cyan-200`}
+              title={t("editor.open")}
+            >
+              <Wand2 size={15} />
+            </button>
+            <button
               onClick={() => actions.onTrim(clip)}
               className={iconBtn}
               title={t("trim.title")}
@@ -167,7 +175,13 @@ function ClipRow({ clip, actions }: { clip: ClipMetadata; actions: RowActions })
   );
 }
 
-export function GalleryView({ refreshToken }: { refreshToken: number }) {
+export function GalleryView({
+  refreshToken,
+  onAdvancedEdit,
+}: {
+  refreshToken: number;
+  onAdvancedEdit?: (clip: ClipMetadata) => void;
+}) {
   const { t } = useTranslation();
   // Single shared instance: rows act on THIS list (a per-row instance would
   // refresh a phantom copy and the UI would look dead).
@@ -194,6 +208,7 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
         (e) => fail(String(e)),
       ),
     onTrim: (clip) => setTrimClip(clip),
+    onAdvancedEdit: (clip) => onAdvancedEdit?.(clip),
     onError: fail,
     onSuccess: () => setLastError(null),
   };
@@ -236,6 +251,7 @@ export function GalleryView({ refreshToken }: { refreshToken: number }) {
       {trimClip && (
         <TrimPanel
           clip={trimClip}
+          onAdvancedEdit={onAdvancedEdit}
           onClose={() => setTrimClip(null)}
           onSaved={() => {
             setLastError(null);

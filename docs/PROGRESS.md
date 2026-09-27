@@ -27,6 +27,22 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **E2 — heavy editor: lazy maximized view + timeline + staged export (2026-09-26)** —
+  "Editar avanzado" opens a **separate Vite chunk** (verified: `EditorApp-*.js`
+  not present in the main bundle) inside the app window maximized (window
+  state restored on exit). Rust `editor/` gains sessions (`session.rs`: stems,
+  H.264 preview proxy for HEVC/AV1, session-scoped media tokens, edits in
+  app data), project model (`project.rs`), encoder detection with a 1-frame
+  hardware probe and **libx264 fallback** (`encoders.rs`) and staged export
+  (`export.rs`: per-segment copy/re-encode → concat → three-stem mix to **one**
+  AAC track, progress + cancel, result indexed as a clip). UI: dnd-timeline
+  video track (drag/trim edges, split Ctrl+K, duplicate Ctrl+D, delete),
+  three wavesurfer lanes for Mix/Game/Mic with per-track gains, undo/redo
+  (zundo), hotkeys, autosave and export dialog (resolution/aspect/FPS/bitrate/
+  encoder/container). Closing the editor kills exports, destroys waveforms,
+  clears media sources and deletes the session dir. Tests: 112 Rust green
+  (golden args + live stage A/B export asserting 1 video + 1 audio), clippy
+  -D warnings, `pnpm build` green.
 - **E0+E1 — editor foundation + quick trim (2026-09-26)** — `docs/04_EDITOR_PIPELINE.md`
   rewritten for the two-component editor (in-app maximized lazy advanced
   editor + light quick trim), tooling/licenses audited

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Circle, Clapperboard, Gamepad2, Monitor, Settings, Square } from "lucide-react";
 import { MoonClipStarfield } from "./components/starfield/MoonClipStarfield";
 import { MoonClipLogo } from "./components/logo/MoonClipLogo";
@@ -13,6 +14,10 @@ import { useClips } from "./hooks/useClips";
 import { useEngine } from "./hooks/useEngine";
 import { useLocale } from "./hooks/useLocale";
 import { useCurrentGame } from "./hooks/useCurrentGame";
+import type { ClipMetadata } from "./types";
+
+// Heavy editor: separate chunk, only downloaded when the user opens it.
+const EditorApp = lazy(() => import("./editor/EditorApp"));
 
 type View = "clips" | "games" | "settings";
 
@@ -41,6 +46,28 @@ export default function App() {
   };
   const [hotkey, setHotkey] = useState("F9");
   const [showWizard, setShowWizard] = useState(false);
+  const [editorClip, setEditorClip] = useState<ClipMetadata | null>(null);
+  const editorWasMaximized = useRef(false);
+
+  const openAdvancedEditor = useCallback(async (clip: ClipMetadata) => {
+    try {
+      const w = getCurrentWindow();
+      editorWasMaximized.current = await w.isMaximized();
+      if (!editorWasMaximized.current) await w.maximize();
+    } catch {
+      // window ops are best effort; the editor still opens
+    }
+    setEditorClip(clip);
+  }, []);
+
+  const closeAdvancedEditor = useCallback(async () => {
+    if (!editorWasMaximized.current) {
+      await getCurrentWindow().unmaximize().catch(() => {});
+    }
+    setEditorClip(null);
+    setGalleryTick((n) => n + 1);
+    void refreshClips();
+  }, [refreshClips]);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +100,21 @@ export default function App() {
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-moonclip-void font-sans text-slate-100 selection:bg-cyan-500/30">
       <Topbar />
+      {editorClip ? (
+        <Suspense
+          fallback={
+            <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-slate-400">
+              {t("editor.loading")}
+            </div>
+          }
+        >
+          <EditorApp
+            clipId={editorClip.id}
+            onExit={() => void closeAdvancedEditor()}
+            onClipSaved={onClipSaved}
+          />
+        </Suspense>
+      ) : (
       <div className="relative flex min-h-0 flex-1">
         <MoonClipStarfield />
         <div className="pointer-events-none fixed left-1/2 top-10 h-[250px] w-[min(700px,100vw)] -translate-x-1/2 bg-gradient-to-b from-cyan-500/10 via-indigo-500/5 to-transparent blur-3xl" />
@@ -235,12 +277,13 @@ export default function App() {
                     </button>
                   )}
                 </div>
-                <GalleryView refreshToken={galleryTick} />
+                <GalleryView refreshToken={galleryTick} onAdvancedEdit={(c) => void openAdvancedEditor(c)} />
               </>
             )}
           </main>
         </div>
       </div>
+      )}
       {showWizard && <SetupWizard onClose={() => setShowWizard(false)} />}
     </div>
   );

@@ -24,13 +24,17 @@
     "@tauri-apps/plugin-notification": "~2.4.0",
     "@tauri-apps/plugin-opener": "^2",
     "clsx": "^2.1.1",
+    "dnd-timeline": "^3.1.1",
     "i18next": "^26.4.2",
+    "immer": "^11.1.18",
     "lucide-react": "^1.41.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-i18next": "^17.0.13",
     "tailwind-merge": "^3.6.0",
-    "wavesurfer.js": "^7.12.11"
+    "wavesurfer.js": "^7.12.11",
+    "zundo": "^2.3.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

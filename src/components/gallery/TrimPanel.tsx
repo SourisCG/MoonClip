@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Loader2, Pause, Play, Scissors, X } from "lucide-react";
+import { Loader2, Pause, Play, Scissors, Wand2, X } from "lucide-react";
 import type { ClipMetadata } from "../../types";
 
 /** Payload of `moonclip://edit-progress` (Rust `EditProgress`). */
@@ -28,10 +28,12 @@ export function TrimPanel({
   clip,
   onClose,
   onSaved,
+  onAdvancedEdit,
 }: {
   clip: ClipMetadata;
   onClose: () => void;
   onSaved: () => void;
+  onAdvancedEdit?: (clip: ClipMetadata) => void;
 }) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -338,6 +340,18 @@ export function TrimPanel({
         {error && <p className="mt-2 break-words font-mono text-xs text-red-400">{error}</p>}
 
         <div className="mt-4 flex justify-end gap-2">
+          {onAdvancedEdit && (
+            <button
+              onClick={() => {
+                onClose();
+                onAdvancedEdit(clip);
+              }}
+              disabled={saving}
+              className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-sm text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
+            >
+              <Wand2 size={14} /> {t("editor.open")}
+            </button>
+          )}
           <button
             onClick={onClose}
             disabled={saving}
