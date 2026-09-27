@@ -264,35 +264,57 @@ export default function EditorApp({
       if (!source || !v) return;
       currentSegRef.current = seg;
       const targetMs = seekMs ?? seg.inMs;
+      const targetSec = targetMs / 1000;
+
+      // Stems follow the video position: without this, playing after a scrub
+      // resumed each waveform where it was (audible desync).
+      const syncStems = (play: boolean) => {
+        wsRef.current.forEach((w) => {
+          try {
+            w.setTime(targetSec);
+          } catch {
+            /* not ready */
+          }
+          if (play) void w.play();
+        });
+      };
+      const setTimeline = () => {
+        useEditorStore
+          .getState()
+          .setPlayhead(
+            seg.timelineStartMs +
+              (targetMs - seg.inMs) / Math.max(0.05, seg.speed),
+          );
+      };
+
       if (loadedClipRef.current !== source.clipId) {
         loadedClipRef.current = source.clipId;
         v.src = source.videoUrl;
         v.load();
-        wsRef.current.forEach((w, i) => {
+        // Swap every lane to this source's stems (same instances, new media).
+        const loads = wsRef.current.map((w, i) => {
           const stem = source.stems[i];
-          if (stem) void w.load(stem.url);
+          return stem ? w.load(stem.url) : Promise.resolve();
         });
         const onMeta = () => {
           v.removeEventListener("loadedmetadata", onMeta);
-          v.currentTime = targetMs / 1000;
-          useEditorStore.getState().setPlayhead(
-            seg.timelineStartMs + (targetMs - seg.inMs) / Math.max(0.05, seg.speed),
-          );
-          if (autoplay) {
-            void v.play();
-            wsRef.current.forEach((w) => void w.play());
-            useEditorStore.getState().setPlaying(true);
-          }
+          v.currentTime = targetSec;
+          setTimeline();
+          void Promise.all(loads).then(() => {
+            syncStems(autoplay);
+            if (autoplay) {
+              void v.play();
+              useEditorStore.getState().setPlaying(true);
+            }
+          });
         };
         v.addEventListener("loadedmetadata", onMeta);
       } else {
-        v.currentTime = targetMs / 1000;
-        useEditorStore.getState().setPlayhead(
-          seg.timelineStartMs + (targetMs - seg.inMs) / Math.max(0.05, seg.speed),
-        );
+        v.currentTime = targetSec;
+        setTimeline();
+        syncStems(autoplay);
         if (autoplay) {
           void v.play();
-          wsRef.current.forEach((w) => void w.play());
           useEditorStore.getState().setPlaying(true);
         }
       }
@@ -346,6 +368,7 @@ export default function EditorApp({
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
+    let lastDriftAt = performance.now();
     const tick = () => {
       const v = videoRef.current;
       const p = useEditorStore.getState().project;
@@ -355,13 +378,18 @@ export default function EditorApp({
       const timelineMs =
         seg.timelineStartMs + (ms - seg.inMs) / Math.max(0.05, seg.speed);
       useEditorStore.getState().setPlayhead(timelineMs);
-      wsRef.current.forEach((w) => {
-        try {
-          if (Math.abs(w.getCurrentTime() * 1000 - ms) > 250) w.setTime(ms / 1000);
-        } catch {
-          /* not ready */
-        }
-      });
+      if (performance.now() - lastDriftAt > 3000) {
+        lastDriftAt = performance.now();
+        wsRef.current.forEach((w) => {
+          try {
+            // Seeking mid-playback glitches the audio: only pull back real
+            // desyncs, never micro-drift.
+            if (Math.abs(w.getCurrentTime() * 1000 - ms) > 800) w.setTime(ms / 1000);
+          } catch {
+            /* not ready */
+          }
+        });
+      }
       if (ms >= seg.outMs - 25) {
         const end = seg.timelineStartMs + segmentDurationMs(seg);
         const next = p.segments
@@ -396,10 +424,11 @@ export default function EditorApp({
         waveColor: "#334155",
         progressColor: "#0891b2",
         cursorWidth: 0,
-        barWidth: 1,
+        barWidth: 2,
         barGap: 1,
-        normalize: true,
+        normalize: false,
         interact: false,
+        autoScroll: false,
       });
       created.push(ws);
     });
@@ -805,6 +834,8 @@ export default function EditorApp({
             >
               <video
                 ref={videoRef}
+                muted
+                preload="auto"
                 onPlay={() => useEditorStore.getState().setPlaying(true)}
                 onPause={() => useEditorStore.getState().setPlaying(false)}
                 className="h-full w-full cursor-pointer object-contain"
