@@ -471,6 +471,11 @@ export default function EditorApp({
   // with timeline time (correct for the first segment of each source; later
   // splits of the same source reuse the same plate).
   const [laneWidth, setLaneWidth] = useState(0);
+
+  // Grow the visible window with the timeline (single source of truth).
+  useEffect(() => {
+    if (total + 1000 > visibleMs) setVisibleMs(total + 2000);
+  }, [total, visibleMs]);
   useEffect(() => {
     const el = laneRefs.current[0];
     const parent = el?.parentElement ?? null;
@@ -915,6 +920,23 @@ export default function EditorApp({
                   rotatable
                   keepRatio
                   origin={false}
+                  // Editors' feel: magnetize rotation to 45/90/180… and snap
+                  // position to the frame center/edges.
+                  rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
+                  rotationSnapThreshold={5}
+                  snapDirections={{
+                    top: true,
+                    left: true,
+                    bottom: true,
+                    right: true,
+                    center: true,
+                    middle: true,
+                  }}
+                  verticalGuidelines={[0, frame.w / 2, frame.w]}
+                  horizontalGuidelines={[0, frame.h / 2, frame.h]}
+                  elementGuidelines={videoRef.current ? [videoRef.current] : []}
+                  snapThreshold={6}
+                  snapGap={false}
                   onDrag={({ target, transform }) => {
                     // Moveable already decomposed our transform (translate +
                     // centering + scale + rotate): keep it verbatim.
@@ -988,6 +1010,7 @@ export default function EditorApp({
           audioTracks={session.audioTracks}
           laneRefs={laneRefs}
           visibleEnd={visibleMs}
+          onVisibleEnd={(ms) => setVisibleMs(Math.max(1000, ms))}
           onSeek={seek}
           onScrubStart={() => {
             if (useEditorStore.getState().playing) {

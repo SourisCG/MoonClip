@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import {
   TimelineContext,
   useItem,
@@ -12,7 +12,6 @@ import {
 } from "dnd-timeline";
 import { useEditorStore } from "./store";
 import {
-  projectDurationMs,
   segmentDurationMs,
   type EditorAudioTrack,
   type Overlay,
@@ -280,6 +279,7 @@ export function TimelineView({
   audioTracks,
   laneRefs,
   visibleEnd,
+  onVisibleEnd,
   onSeek,
   onScrubStart,
   onScrubEnd,
@@ -287,23 +287,16 @@ export function TimelineView({
   audioTracks: EditorAudioTrack[];
   laneRefs: React.MutableRefObject<(HTMLDivElement | null)[]>;
   visibleEnd: number;
+  onVisibleEnd: (ms: number) => void;
   onSeek: (ms: number) => void;
   onScrubStart: () => void;
   onScrubEnd: () => void;
 }) {
   const project = useEditorStore((s) => s.project);
-  const total = project ? projectDurationMs(project) : 0;
-  const [range, setRange] = useState<Range>({ start: 0, end: Math.max(5000, visibleEnd) });
-
-  useEffect(() => {
-    setRange({ start: 0, end: Math.max(5000, visibleEnd) });
-  }, [visibleEnd]);
-
-  useEffect(() => {
-    setRange((r) => (total + 1000 > r.end ? { start: 0, end: total + 2000 } : r));
-  }, [total]);
-
   const overlays = project?.overlays ?? [];
+  // One window, derived from the parent: the ruler, the playhead and the
+  // waveform plates must never use different scales (that was the drift).
+  const range: Range = { start: 0, end: Math.max(5000, visibleEnd) };
   const rows: (RowDefinition & { label?: string })[] = [
     { id: "Video", label: "Video" },
     ...overlays.map((o, i) => ({
@@ -347,7 +340,7 @@ export function TimelineView({
     <TimelineContext
       range={range}
       sidebarWidth={SIDEBAR}
-      onRangeChanged={(update) => setRange((prev) => update(prev))}
+      onRangeChanged={(update) => onVisibleEnd(update(range).end)}
       onDragEnd={onDragEnd}
       onResizeEnd={onResizeEnd}
       resizeHandleWidth={14}
