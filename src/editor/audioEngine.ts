@@ -51,8 +51,10 @@ export function computePeaks(buffer: AudioBuffer, buckets = 900): number[][] {
 
 export class AudioTimeline {
   private ctx: AudioContext;
+  private mixBus: GainNode;
   private game: GainNode;
   private mic: GainNode;
+  private analyserMix: AnalyserNode;
   private analyserGame: AnalyserNode;
   private analyserMic: AnalyserNode;
   /** Post-master tap: proves what actually leaves the engine. */
@@ -79,6 +81,11 @@ export class AudioTimeline {
     // Game and Mic buses go straight to the output. Mix is a per-clip fader
     // that scales both (it is the recording's Mix channel = Game+Mic), so
     // there is no global master anywhere and no track is ever doubled.
+    // Three INDEPENDENT channel buses: Mix, Game, Mic. No master, and no
+    // channel gates another: each slider always changes its own channel.
+    this.mixBus = this.ctx.createGain();
+    this.mixBus.gain.value = 1;
+    this.mixBus.connect(this.ctx.destination);
     this.game = this.ctx.createGain();
     this.game.gain.value = 1;
     this.game.connect(this.ctx.destination);
@@ -88,9 +95,13 @@ export class AudioTimeline {
     // Output tap: what actually leaves the engine.
     this.analyserOut = this.ctx.createAnalyser();
     this.analyserOut.fftSize = 256;
+    this.mixBus.connect(this.analyserOut);
     this.game.connect(this.analyserOut);
     this.mic.connect(this.analyserOut);
     // Channel meters: tap each bus (after the per-clip gains).
+    this.analyserMix = this.ctx.createAnalyser();
+    this.analyserMix.fftSize = 256;
+    this.mixBus.connect(this.analyserMix);
     this.analyserGame = this.ctx.createAnalyser();
     this.analyserGame.fftSize = 256;
     this.game.connect(this.analyserGame);
@@ -102,7 +113,7 @@ export class AudioTimeline {
 
   /** Live RMS per track (0..1) for the level meters. `out` is measured AFTER
    *  the master gain, i.e. what actually reaches the system output. */
-  levels(): { game: number; mic: number; out: number } {
+  levels(): { mix: number; game: number; mic: number; out: number } {
     const rms = (a: AnalyserNode) => {
       a.getFloatTimeDomainData(this.levelBuf);
       let sum = 0;
@@ -113,6 +124,7 @@ export class AudioTimeline {
     // when the master is muted (they used to be multiplied by it and went
     // dead). `out` is post-master: what leaves the engine.
     return {
+      mix: rms(this.analyserMix),
       game: rms(this.analyserGame),
       mic: rms(this.analyserMic),
       out: rms(this.analyserOut),
@@ -249,9 +261,9 @@ export class AudioTimeline {
       }
     }
     const cases: [string, Segment[]][] = [
-      ["game", segments.map((s) => ({ ...s, gainMix: 1, gainGame: 1, gainMic: 0 }))],
-      ["mic", segments.map((s) => ({ ...s, gainMix: 1, gainGame: 0, gainMic: 1 }))],
-      ["both", segments.map((s) => ({ ...s, gainMix: 1, gainGame: 1, gainMic: 1 }))],
+      ["game", segments.map((s) => ({ ...s, gainMix: 0, gainGame: 1, gainMic: 0 }))],
+      ["mic", segments.map((s) => ({ ...s, gainMix: 0, gainGame: 0, gainMic: 1 }))],
+      ["mix", segments.map((s) => ({ ...s, gainMix: 1, gainGame: 0, gainMic: 0 }))],
     ];
     const levelsReport: string[] = [];
     for (const [name, segs] of cases) {
@@ -316,16 +328,12 @@ export class AudioTimeline {
           `out=${Math.round(seg.outMs)} speed=${seg.speed} ` +
           `g=${seg.gainGame} m=${seg.gainMic} mix=${seg.gainMix}`,
       );
-      // Single-track sources use their only stem as the whole clip (Mezcla).
-      const wanted =
-        decoded.stems.length > 1
-          ? decoded.stems.filter((s) => s.label === "game" || s.label === "mic")
-          : decoded.stems;
-      for (const stem of wanted) {
+      // EVERY channel plays, each with its own independent slider.
+      for (const stem of decoded.stems) {
         const kind: "mix" | "game" | "mic" =
-          decoded.stems.length > 1 ? (stem.label === "mic" ? "mic" : "game") : "mix";
+          stem.label === "game" ? "game" : stem.label === "mic" ? "mic" : "mix";
         const value = this.channelGain(seg, kind);
-        const target = kind === "mic" ? this.mic : this.game;
+        const target = kind === "mic" ? this.mic : kind === "game" ? this.game : this.mixBus;
         const src = this.ctx.createBufferSource();
         src.buffer = stem.buffer;
         src.playbackRate.value = seg.speed;
@@ -354,14 +362,9 @@ export class AudioTimeline {
     this.paused = false;
   }
 
-  /** Effective gain of a channel for a clip: Mezcla scales Game and Mic. */
+  /** Gain of ONE independent channel of a clip (Mix, Game or Mic). */
   private channelGain(seg: Segment, kind: "mix" | "game" | "mic"): number {
-    const v =
-      kind === "mic"
-        ? seg.gainMix * seg.gainMic
-        : kind === "game"
-          ? seg.gainMix * seg.gainGame
-          : seg.gainMix;
+    const v = kind === "mic" ? seg.gainMic : kind === "game" ? seg.gainGame : seg.gainMix;
     return Math.max(0, Math.min(4, v));
   }
 
@@ -414,6 +417,7 @@ export class AudioTimeline {
 
   dispose() {
     this.stopNodes();
+    this.mixBus.disconnect();
     this.game.disconnect();
     this.mic.disconnect();
     void this.ctx.close().catch(() => {});

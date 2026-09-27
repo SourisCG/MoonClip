@@ -338,19 +338,17 @@ pub fn audio_filter(
             String::new()
         };
         // (stream index, gain, output group) contributions for this clip.
-        // In the one-track mode the Mix stem is never used (it IS Game+Mic):
-        // Mezcla acts as the fader that scales both. The 3-track mode exports
-        // the raw Mix/Game/Mic channels with their own gains.
-        let bus = if tracks_mode { 1.0 } else { seg.gain_mix };
+        // Three INDEPENDENT channels: Mix, Game and Mic each carry their own
+        // per-clip gain (the export mirrors exactly what the editor plays).
         let sources: Vec<(usize, f64, &str)> = if tracks == 1 {
             vec![(0, master * seg.gain_mix, "fallback")]
         } else {
-            let mut v = vec![(1, master * bus * seg.gain_game, "game")];
+            let mut v = vec![
+                (0, master * seg.gain_mix, "mixstem"),
+                (1, master * seg.gain_game, "game"),
+            ];
             if tracks >= 3 {
-                v.push((2, master * bus * seg.gain_mic, "mic"));
-            }
-            if tracks_mode {
-                v.push((0, master * seg.gain_mix, "mixstem"));
+                v.push((2, master * seg.gain_mic, "mic"));
             }
             v
         };
@@ -898,7 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn audio_filter_mezcla_fader_scales_game_and_mic() {
+    fn audio_filter_mixes_three_independent_channels() {
         let mut s = seg(1000, 2500);
         s.timeline_start_ms = 500;
         s.gain_mix = 1.1;
@@ -906,11 +904,11 @@ mod tests {
         s.gain_mic = 1.5;
         let (graph, maps) = audio_filter(&[s], &[1], &[3], 3000, 1.0, "mix");
         assert_eq!(maps, vec!["[aout]".to_string()]);
-        // The Mix stem is the sum of Game+Mic: never played on its own.
-        assert!(!graph.contains("[1:a:0]"), "{graph}");
-        assert!(graph.contains("volume=0.880,adelay=500|500[a0_1]"), "{graph}");
-        assert!(graph.contains("volume=1.650,adelay=500|500[a0_2]"), "{graph}");
-        assert!(graph.contains("amix=inputs=2:duration=longest:normalize=0"), "{graph}");
+        // Mix, Game and Mic are independent channels with their own gains.
+        assert!(graph.contains("volume=1.100,adelay=500|500[a0_0]"), "{graph}");
+        assert!(graph.contains("volume=0.800,adelay=500|500[a0_1]"), "{graph}");
+        assert!(graph.contains("volume=1.500,adelay=500|500[a0_2]"), "{graph}");
+        assert!(graph.contains("amix=inputs=3:duration=longest:normalize=0"), "{graph}");
         assert!(!graph.contains("rubberband"), "{graph}");
     }
 
@@ -927,11 +925,13 @@ mod tests {
         let (graph, maps) = audio_filter(&[a, b], &[1, 2], &[3, 3], 1000, 0.5, "mix");
         assert_eq!(maps, vec!["[aout]".to_string()]);
         // master x clip gain, per segment and per channel.
+        assert!(graph.contains("volume=0.500[a0_0]"), "{graph}");
         assert!(graph.contains("volume=0.125[a0_1]"), "{graph}");
         assert!(graph.contains("volume=0.000[a0_2]"), "{graph}");
+        assert!(graph.contains("volume=0.500[a1_0]"), "{graph}");
         assert!(graph.contains("volume=0.500[a1_1]"), "{graph}");
         assert!(graph.contains("volume=1.000[a1_2]"), "{graph}");
-        assert!(graph.contains("amix=inputs=4"), "{graph}");
+        assert!(graph.contains("amix=inputs=6"), "{graph}");
     }
 
     #[test]
@@ -1049,15 +1049,15 @@ mod tests {
     }
 
     #[test]
-    fn audio_filter_two_tracks_use_game_scaled_by_mezcla() {
+    fn audio_filter_two_tracks_use_mix_and_game() {
         let mut s = seg(0, 1000);
         s.gain_mix = 0.3;
         s.gain_game = 0.5;
         let (graph, maps) = audio_filter(&[s], &[1], &[2], 1000, 1.0, "mix");
         assert_eq!(maps, vec!["[aout]".to_string()]);
-        assert!(graph.contains("volume=0.150[a0_1]"), "{graph}");
+        assert!(graph.contains("volume=0.300[a0_0]"), "{graph}");
+        assert!(graph.contains("volume=0.500[a0_1]"), "{graph}");
         assert!(!graph.contains("[1:a:2]"), "{graph}");
-        assert!(!graph.contains("[1:a:0]"), "{graph}");
     }
 
     #[test]

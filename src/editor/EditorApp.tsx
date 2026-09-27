@@ -246,9 +246,9 @@ function LevelMeters({
     let raf = 0;
     const tick = () => {
       const engine = engineRef.current;
-      const l = engine ? engine.levels() : { game: 0, mic: 0, out: 0 };
-      // Labels: Mezcla (output), Juego, Mic.
-      const vals = [l.out, l.game, l.mic];
+      const l = engine ? engine.levels() : { mix: 0, game: 0, mic: 0, out: 0 };
+      // Labels: Mezcla, Juego, Mic.
+      const vals = [l.mix, l.game, l.mic];
       vals.forEach((v, i) => {
         const el = bars.current[i];
         if (el) el.style.width = `${Math.min(100, Math.round(v * 160))}%`;
@@ -677,8 +677,8 @@ export default function EditorApp({
               engine && engine.isPlaying() ? Math.round(engine.currentTimeMs()) : -1
             } video=${v ? v.currentTime.toFixed(2) : "-"} vmuted=${v?.muted ? 1 : 0} ` +
             `vclock=${videoClock ? 1 : 0} seg=${seg?.id.slice(0, 6) ?? "-"} ` +
-            `g=${lv ? lv.game.toFixed(3) : "-"} m=${lv ? lv.mic.toFixed(3) : "-"} ` +
-            `out=${lv ? lv.out.toFixed(3) : "-"}`,
+            `mix=${lv ? lv.mix.toFixed(3) : "-"} g=${lv ? lv.game.toFixed(3) : "-"} ` +
+            `m=${lv ? lv.mic.toFixed(3) : "-"} out=${lv ? lv.out.toFixed(3) : "-"}`,
         }).catch(() => {});
       }
       if (!videoClock) {

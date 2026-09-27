@@ -196,7 +196,7 @@
     "audio": "Audio",
     "mix": "Mix",
     "master_global": "Master (global)",
-    "mix_hint": "Mix, Game and Mic are set per clip: select a clip and move its sliders. By default you hear Game + Mic (their sum is the recording's Mix track); raising Mix adds it on top.",
+    "mix_hint": "Three independent channels per clip: Mix, Game and Mic. Each slider changes ONLY its channel. Mix is the recording's original track (it already contains Game+Mic): raising it with them up doubles the audio; to remix, lower Mix and raise Game/Mic.",
     "game": "Game",
     "mic": "Mic",
     "out": "Output",

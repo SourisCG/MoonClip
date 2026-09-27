@@ -195,7 +195,7 @@
     "audio": "Audio",
     "mix": "Mezcla",
     "master_global": "Master (global)",
-    "mix_hint": "Mezcla, Juego y Mic se ajustan por clip: selecciona un clip y mueve sus sliders. Por defecto suenan Juego + Mic (su suma es la pista Mezcla del grabado); si subes Mezcla además, se suma a ellas.",
+    "mix_hint": "Tres canales independientes por clip: Mezcla, Juego y Mic. Cada slider cambia SOLO su canal. Mezcla es la pista original del grabado (ya contiene Juego+Mic): si la subes con ellos arriba, el audio se duplica; para remezclar, baja Mezcla y sube Juego/Mic.",
     "game": "Juego",
     "mic": "Mic",
     "out": "Salida",

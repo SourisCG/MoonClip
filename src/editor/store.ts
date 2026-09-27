@@ -125,8 +125,10 @@ export const useEditorStore = create<EditorState>()(
             speed: 1,
             freezeAtMs: 0,
             freezeMs: 0,
-            // Mezcla is the fader of Game+Mic (the recording's Mix channel).
-            gainMix: 1,
+            // Three INDEPENDENT channels. Game+Mic are up by default (their
+            // sum is the recording's Mix track, so Mezcla starts at 0 and
+            // nothing is doubled).
+            gainMix: 0,
             gainGame: 1,
             gainMic: 1,
             zoom: 1,
