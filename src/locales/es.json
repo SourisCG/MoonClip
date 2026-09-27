@@ -194,6 +194,7 @@
     "export": "Exportar",
     "audio": "Audio",
     "mix": "Mix",
+    "mix_hint": "El Mix ya incluye Juego+Mic. Sube los stems y baja el Mix solo si quieres remezclar (evita oírlo doble).",
     "game": "Juego",
     "mic": "Mic",
     "no_clip": "Sin clip en el timeline",

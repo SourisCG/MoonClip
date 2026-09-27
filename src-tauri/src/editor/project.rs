@@ -222,9 +222,12 @@ pub fn default_project(clip_id: &str, name: &str, duration_ms: i64) -> EditProje
             speed: 1.0,
             freeze_at_ms: 0,
             freeze_ms: 0,
+            // Track 1 (Mix) already contains Game+Mic: start with the mix only
+            // so the preview never plays the same audio twice. Users raise the
+            // stems and lower Mix to remix.
             gain_mix: 1.0,
-            gain_game: 1.0,
-            gain_mic: 1.0,
+            gain_game: 0.0,
+            gain_mic: 0.0,
         }],
         audio_tracks: Vec::new(),
         overlays: Vec::new(),
@@ -258,6 +261,14 @@ mod tests {
         // A gap (segment moved right) extends the timeline too.
         p.segments[0].timeline_start_ms = 1000;
         assert_eq!(p.duration_ms(), 1800);
+    }
+
+    #[test]
+    fn default_project_plays_the_mix_not_the_stems() {
+        let p = default_project("c", "n", 1000);
+        assert_eq!(p.segments[0].gain_mix, 1.0);
+        assert_eq!(p.segments[0].gain_game, 0.0);
+        assert_eq!(p.segments[0].gain_mic, 0.0);
     }
 
     #[test]

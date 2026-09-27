@@ -195,6 +195,7 @@
     "export": "Export",
     "audio": "Audio",
     "mix": "Mix",
+    "mix_hint": "Mix already contains Game+Mic. Raise the stems and lower Mix only to remix (avoids hearing it twice).",
     "game": "Game",
     "mic": "Mic",
     "no_clip": "No clip on the timeline",

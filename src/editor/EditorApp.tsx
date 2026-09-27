@@ -789,6 +789,7 @@ export default function EditorApp({
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
             <Volume2 size={12} /> {t("editor.audio")}
           </p>
+          <p className="text-[10px] leading-snug text-slate-600">{t("editor.mix_hint")}</p>
           {!selectedSegment && <p className="text-[11px] text-slate-600">{t("editor.no_clip")}</p>}
           {selectedSegment &&
             gains.map(([key, field, label]) => (
