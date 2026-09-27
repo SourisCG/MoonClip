@@ -80,6 +80,12 @@ pub fn delete_clip(db: State<'_, DbState>, id: String) -> Result<(), String> {
     db.delete_clip(&id)
 }
 
+/// Rename a clip (file + thumbnail + DB row) inside its game folder.
+#[tauri::command]
+pub fn rename_clip(db: State<'_, DbState>, id: String, name: String) -> Result<ClipRecord, String> {
+    crate::storage::rename::rename_clip(&db, &id, &name)
+}
+
 /// Index MoonClip-style files that exist on disk but have no DB row (runs at
 /// boot and on demand). NEVER deletes files: orphan rows keep the explicit
 /// `purge_missing_clips` path.

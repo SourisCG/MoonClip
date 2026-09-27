@@ -7,6 +7,7 @@ import {
   Clapperboard,
   FolderOpen,
   Gamepad2,
+  Pencil,
   Scissors,
   Star,
   Trash2,
@@ -28,6 +29,13 @@ async function absOf(fileName: string): Promise<string> {
 function bareName(fileName: string): string {
   const i = fileName.lastIndexOf("/");
   return i >= 0 ? fileName.slice(i + 1) : fileName;
+}
+
+/** File stem (name without extension) — what the rename input edits. */
+function stemOf(fileName: string): string {
+  const bare = bareName(fileName);
+  const dot = bare.lastIndexOf(".");
+  return dot > 0 ? bare.slice(0, dot) : bare;
 }
 
 const GROUP_KEY = "moonclip.gallery.group";
@@ -112,6 +120,7 @@ interface RowActions {
   onDelete: (id: string) => void;
   onTrim: (clip: ClipMetadata) => void;
   onAdvancedEdit: (clip: ClipMetadata) => void;
+  onRename: (clip: ClipMetadata, name: string) => void;
   onError: (msg: string) => void;
   onSuccess: () => void;
 }
@@ -126,6 +135,17 @@ function ClipRow({
   actions: RowActions;
 }) {
   const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const startRename = () => {
+    setDraft(stemOf(clip.file_name));
+    setEditing(true);
+  };
+  const commitRename = () => {
+    setEditing(false);
+    const name = draft.trim();
+    if (name && name !== stemOf(clip.file_name)) actions.onRename(clip, name);
+  };
   const reveal = async () => {
     try {
       const abs = await absOf(clip.file_name);
@@ -153,9 +173,25 @@ function ClipRow({
         <Thumb clip={clip} onOpen={() => actions.onTrim(clip)} onError={actions.onError} />
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <div className="min-w-0 flex-1 text-sm">
-            <p className="truncate font-medium text-slate-200" title={clip.file_name}>
-              {bareName(clip.file_name)}
-            </p>
+            {editing ? (
+              <input
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename();
+                  if (e.key === "Escape") setEditing(false);
+                }}
+                onBlur={() => setEditing(false)}
+                className="w-full rounded-md border border-cyan-400/30 bg-black/40 px-2 py-0.5 font-medium text-slate-100 outline-none focus:border-cyan-400/60"
+                title={t("gallery.rename")}
+              />
+            ) : (
+              <p className="truncate font-medium text-slate-200" title={clip.file_name}>
+                {bareName(clip.file_name)}
+              </p>
+            )}
             <p className="truncate font-mono text-xs text-slate-500">
               {gameLabel} ·{" "}
               <span className="text-cyan-300/80">{fmtDuration(clip.duration_ms)}</span> ·{" "}
@@ -170,6 +206,9 @@ function ClipRow({
               title={t("editor.open")}
             >
               <Wand2 size={15} />
+            </button>
+            <button onClick={startRename} className={iconBtn} title={t("gallery.rename")}>
+              <Pencil size={15} />
             </button>
             <button
               onClick={() => actions.onTrim(clip)}
@@ -212,7 +251,8 @@ export function GalleryView({
   const { t } = useTranslation();
   // Single shared instance: rows act on THIS list (a per-row instance would
   // refresh a phantom copy and the UI would look dead).
-  const { clips, loading, refresh, toggleFavorite, deleteClip, purgeMissing } = useClips();
+  const { clips, loading, refresh, toggleFavorite, deleteClip, purgeMissing, renameClip } =
+    useClips();
   // Registered games only provide nicer labels; the groups themselves come
   // from the clips, so a deleted registration keeps its group forever.
   const { inputs } = useRegisteredInputs();
@@ -279,6 +319,11 @@ export function GalleryView({
       ),
     onTrim: (clip) => setTrimClip(clip),
     onAdvancedEdit: (clip) => onAdvancedEdit?.(clip),
+    onRename: (clip, name) =>
+      renameClip(clip.id, name).then(
+        () => setLastError(null),
+        (e) => fail(String(e)),
+      ),
     onError: fail,
     onSuccess: () => setLastError(null),
   };

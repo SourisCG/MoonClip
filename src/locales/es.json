@@ -21,6 +21,7 @@
     "games": "Juegos",
     "no_game": "Sin juego",
     "unfiled": "Sin clasificar",
+    "rename": "Renombrar clip",
     "empty_group": "No hay clips en este grupo."
   },
   "audio": {

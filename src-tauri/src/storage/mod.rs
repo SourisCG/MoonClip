@@ -6,6 +6,7 @@ pub mod folders;
 pub mod models;
 pub mod paths;
 pub mod reconcile;
+pub mod rename;
 pub mod secrets;
 
 pub use db::DbState;

@@ -17,10 +17,10 @@ const RESERVED: &[&str] = &[
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-/// Turn a game name into a safe folder name (Windows-invalid characters and
-/// control chars replaced, whitespace collapsed, reserved device names
-/// prefixed, length capped). Never empty: falls back to `Unknown`.
-pub fn sanitize_game_folder(name: &str) -> String {
+/// Turn a user-provided name into a safe file stem (Windows-invalid
+/// characters and control chars replaced, whitespace collapsed, reserved
+/// device names prefixed, length capped). `None` when nothing usable remains.
+pub fn sanitize_file_stem(name: &str) -> Option<String> {
     let mut cleaned: String = name
         .chars()
         .map(|ch| {
@@ -46,14 +46,19 @@ pub fn sanitize_game_folder(name: &str) -> String {
             .to_string();
     }
     if cleaned.is_empty() {
-        return UNKNOWN_FOLDER.to_string();
+        return None;
     }
     let upper = cleaned.to_ascii_uppercase();
     let base = upper.split('.').next().unwrap_or("");
     if RESERVED.contains(&base) {
         cleaned = format!("_{cleaned}");
     }
-    cleaned
+    Some(cleaned)
+}
+
+/// Turn a game name into a safe folder name. Never empty: `Unknown`.
+pub fn sanitize_game_folder(name: &str) -> String {
+    sanitize_file_stem(name).unwrap_or_else(|| UNKNOWN_FOLDER.to_string())
 }
 
 /// Existing folder matching `desired` (case-insensitive), without creating
@@ -108,6 +113,22 @@ mod tests {
         assert_eq!(sanitize_game_folder("com1.txt"), "_com1.txt");
         let long = "x".repeat(200);
         assert_eq!(sanitize_game_folder(&long).chars().count(), MAX_LEN);
+    }
+
+    #[test]
+    fn sanitize_file_stem_rejects_empty_and_cleans_the_rest() {
+        assert_eq!(sanitize_file_stem(""), None);
+        assert_eq!(sanitize_file_stem("   ...   "), None);
+        assert_eq!(sanitize_file_stem("My Clip"), Some("My Clip".into()));
+        assert_eq!(
+            sanitize_file_stem("a/b:c*d?"),
+            Some("a-b-c-d-".into())
+        );
+        assert_eq!(sanitize_file_stem("CON"), Some("_CON".into()));
+        assert_eq!(
+            sanitize_file_stem(&"x".repeat(200)).unwrap().chars().count(),
+            MAX_LEN
+        );
     }
 
     #[test]

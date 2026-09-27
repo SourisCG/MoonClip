@@ -535,6 +535,7 @@ pub fn run() {
             commands::toggle_favorite,
             commands::delete_clip,
             commands::purge_missing_clips,
+            commands::rename_clip,
             commands::reconcile_library,
             commands::organize_library,
             commands::resolve_clip_src,

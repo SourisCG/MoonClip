@@ -45,5 +45,22 @@ export function useClips() {
     return n;
   }, [refresh]);
 
-  return { clips, loading, error, refresh, toggleFavorite, deleteClip, purgeMissing };
+  const renameClip = useCallback(
+    async (id: string, name: string) => {
+      await invoke<ClipMetadata>("rename_clip", { id, name });
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return {
+    clips,
+    loading,
+    error,
+    refresh,
+    toggleFavorite,
+    deleteClip,
+    purgeMissing,
+    renameClip,
+  };
 }
