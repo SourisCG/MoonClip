@@ -48,61 +48,78 @@ fn scrub_legacy_secret_settings(conn: &Connection) -> Result<usize, String> {
 impl DbState {
     pub fn open(app: &AppHandle) -> Result<Self, String> {
         let db_path = paths::db_file_path(app)?;
-        let conn = Connection::open(&db_path).map_err(|e| format!("cannot open database: {e}"))?;
+        let mut conn =
+            Connection::open(&db_path).map_err(|e| format!("cannot open database: {e}"))?;
+        // Durability + integrity for an embedded single-process DB.
+        let _: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+            .map_err(|e| format!("cannot enable WAL: {e}"))?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")
+            .map_err(|e| format!("cannot enable foreign keys: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("cannot set busy timeout: {e}"))?;
+        let _ = paths::harden_file(&db_path);
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| format!("cannot read schema version: {e}"))?;
         if version < SCHEMA_VERSION {
+            // All pending migrations commit together: a failure half-way must
+            // not leave a partially upgraded schema.
+            let tx = conn
+                .transaction()
+                .map_err(|e| format!("cannot start migration transaction: {e}"))?;
             if version < 1 {
-                conn.execute_batch(MIGRATION_001)
+                tx.execute_batch(MIGRATION_001)
                     .map_err(|e| format!("migration 001 failed: {e}"))?;
             }
             if version < 2 {
-                conn.execute_batch(MIGRATION_002)
+                tx.execute_batch(MIGRATION_002)
                     .map_err(|e| format!("migration 002 failed: {e}"))?;
             }
             if version < 3 {
-                conn.execute_batch(MIGRATION_003)
+                tx.execute_batch(MIGRATION_003)
                     .map_err(|e| format!("migration 003 failed: {e}"))?;
             }
             if version < 4 {
-                conn.execute_batch(MIGRATION_004)
+                tx.execute_batch(MIGRATION_004)
                     .map_err(|e| format!("migration 004 failed: {e}"))?;
             }
             if version < 5 {
-                conn.execute_batch(MIGRATION_005)
+                tx.execute_batch(MIGRATION_005)
                     .map_err(|e| format!("migration 005 failed: {e}"))?;
             }
             if version < 6 {
-                conn.execute_batch(MIGRATION_006)
+                tx.execute_batch(MIGRATION_006)
                     .map_err(|e| format!("migration 006 failed: {e}"))?;
             }
             if version < 7 {
-                conn.execute_batch(MIGRATION_007)
+                tx.execute_batch(MIGRATION_007)
                     .map_err(|e| format!("migration 007 failed: {e}"))?;
             }
             if version < 8 {
-                conn.execute_batch(MIGRATION_008)
+                tx.execute_batch(MIGRATION_008)
                     .map_err(|e| format!("migration 008 failed: {e}"))?;
             }
             if version < 9 {
-                conn.execute_batch(MIGRATION_009)
+                tx.execute_batch(MIGRATION_009)
                     .map_err(|e| format!("migration 009 failed: {e}"))?;
             }
             if version < 10 {
-                conn.execute_batch(MIGRATION_010)
+                tx.execute_batch(MIGRATION_010)
                     .map_err(|e| format!("migration 010 failed: {e}"))?;
             }
             if version < 11 {
-                conn.execute_batch(MIGRATION_011)
+                tx.execute_batch(MIGRATION_011)
                     .map_err(|e| format!("migration 011 failed: {e}"))?;
             }
             if version < 12 {
-                conn.execute_batch(MIGRATION_012)
+                tx.execute_batch(MIGRATION_012)
                     .map_err(|e| format!("migration 012 failed: {e}"))?;
             }
-            conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| format!("cannot stamp schema version: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("cannot commit migrations: {e}"))?;
         }
         // Secrets never live in the DB: drop rows written by older builds
         // (the websocket password is generated per start; the portal token

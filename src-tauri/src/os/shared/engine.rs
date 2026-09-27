@@ -783,9 +783,12 @@ pub fn write_obs_config(
     let profile_dir = conf.join("basic").join("profiles").join(OBS_PROFILE);
     let scenes_dir = conf.join("basic").join("scenes");
     let ws_dir = conf.join("plugin_config").join("obs-websocket");
-    for dir in [&profile_dir, &scenes_dir, &ws_dir] {
+    for dir in [&conf, &profile_dir, &scenes_dir, &ws_dir] {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create OBS config dir {}: {e}", dir.display()))?;
+        // The generated collection carries the portal token at runtime: keep
+        // the whole engine config owner-only.
+        let _ = crate::storage::paths::harden_dir(dir);
     }
     std::fs::create_dir_all(&p.output_dir).map_err(|e| format!("cannot create clips dir: {e}"))?;
     let write = |path: PathBuf, text: String| -> Result<(), String> {

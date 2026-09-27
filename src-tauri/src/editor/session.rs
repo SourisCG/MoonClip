@@ -136,6 +136,7 @@ pub fn edits_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("no app data dir: {e}"))?
         .join("edits");
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create edits dir: {e}"))?;
+    let _ = crate::storage::paths::harden_dir(&dir);
     Ok(dir)
 }
 
@@ -405,6 +406,7 @@ pub async fn open(app: &AppHandle, clip_id: &str) -> Result<EditorOpenResult, St
         .join("editor")
         .join(&session_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create editor dir: {e}"))?;
+    let _ = crate::storage::paths::harden_dir(&dir);
     sessions()
         .lock()
         .map_err(|_| "editor sessions lock poisoned".to_string())?
