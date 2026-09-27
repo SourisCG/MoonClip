@@ -21,6 +21,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
+import { thumbnailUrl } from "../../lib/media";
 import type { ClipMetadata } from "../../types";
 import { Modal } from "../Modal";
 
@@ -100,6 +101,7 @@ export function TrimPanel({
   const barRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   const [url, setUrl] = useState<string | null>(null);
+  const [poster, setPoster] = useState<string | null>(null);
   const [download, setDownload] = useState<{ sent: number; total: number } | null>(null);
   const [duration, setDuration] = useState(Math.max(100, clip.duration_ms));
   const [start, setStart] = useState(0);
@@ -136,6 +138,28 @@ export function TrimPanel({
       cancelled = true;
     };
   }, [clip.id]);
+
+  // Thumbnail as poster: something is visible while the media pipeline warms
+  // up (no black frame while the file is being indexed).
+  useEffect(() => {
+    let cancelled = false;
+    let blob: string | null = null;
+    thumbnailUrl(clip.thumbnail_name).then(
+      (u) => {
+        if (cancelled) {
+          URL.revokeObjectURL(u);
+        } else {
+          blob = u;
+          setPoster(u);
+        }
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+      if (blob) URL.revokeObjectURL(blob);
+    };
+  }, [clip.thumbnail_name]);
 
   // Cloud downloads show their progress while the URL is being prepared.
   useEffect(() => {
@@ -283,6 +307,9 @@ export function TrimPanel({
       }
       return;
     }
+    // While playing the rAF loop drives the playhead and the label; this
+    // event only matters when paused/seeking (fewer re-renders).
+    if (!v.paused) return;
     setPos(ms);
   };
 
@@ -453,6 +480,8 @@ export function TrimPanel({
             <video
               ref={videoRef}
               src={url}
+              poster={poster ?? undefined}
+              preload="auto"
               onLoadedMetadata={onLoaded}
               onTimeUpdate={onTimeUpdate}
               onPlay={() => setPlaying(true)}
@@ -504,10 +533,11 @@ export function TrimPanel({
               className="absolute inset-y-0 bg-cyan-400/20"
               style={{ left: pct(start), width: pct(end - start) }}
             />
+            {/* The rAF loop owns this position while playing (no React
+                re-render can snap it back); the effect parks it otherwise. */}
             <div
               ref={playheadRef}
               className="absolute inset-y-0 w-0.5 bg-cyan-300 will-change-[left]"
-              style={{ left: pct(pos) }}
             />
             <div
               role="slider"

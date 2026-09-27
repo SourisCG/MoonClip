@@ -2546,7 +2546,18 @@ pub async fn media_url(
         .find(|c| c.id == clip_id)
         .ok_or_else(|| "clip not found".to_string())?;
     let path = crate::social::cloud::ensure_local(&app, &clip).await?;
-    crate::editor::media_server::media_url(&path)
+    // OBS writes moov at the end: remux a faststart copy (cached) so playback
+    // starts immediately instead of seconds of black.
+    let ffmpeg = crate::editor::ffmpeg::resolve_ffmpeg(&app)?;
+    let cache = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("no cache dir: {e}"))?;
+    let playable = crate::editor::faststart::ensure_faststart_copy(
+        &ffmpeg, &cache, &clip.id, &path,
+    )
+    .await;
+    crate::editor::media_server::media_url(&playable)
 }
 
 /// Gallery quick trim: lossless stream copy (fast, keyframe-aligned) or a

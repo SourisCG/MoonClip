@@ -458,6 +458,11 @@ pub fn run() {
             // Editor sessions never survive a restart: wipe leftovers.
             crate::editor::session::cleanup_stale_sessions(app.handle());
 
+            // Playback faststart copies are per-session too.
+            if let Ok(cache) = app.path().app_cache_dir() {
+                crate::editor::faststart::cleanup_cache(&cache);
+            }
+
             // One-time duration backfill for pre-probing rows (background).
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
