@@ -14,7 +14,9 @@ interface Gains {
 
 interface Peaks {
   game: number;
+  game_peak: number;
   mic: number;
+  mic_peak: number;
 }
 
 type Track = "game" | "mic";
@@ -113,6 +115,7 @@ export function TrackMixer({ running }: { running: boolean }) {
 
   const row = (track: Track, value: number, muted: boolean) => {
     const level = levels ? (track === "game" ? levels.game : levels.mic) : 0;
+    const peak = levels ? (track === "game" ? levels.game_peak : levels.mic_peak) : 0;
     return (
       <div className="rounded-control border border-line bg-black/40 px-3 py-2.5">
         <div className="mb-1.5 flex items-center gap-2">
@@ -134,7 +137,7 @@ export function TrackMixer({ running }: { running: boolean }) {
             {applying === track ? "…" : percentToDb(value)} dB
           </span>
         </div>
-        <Meter level={muted ? 0 : level} className="mb-2" />
+        <Meter level={muted ? 0 : level} peak={muted ? 0 : peak} showScale className="mb-2" />
         <div className="flex items-center gap-2">
           <input
             type="range"

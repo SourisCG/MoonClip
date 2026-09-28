@@ -19,11 +19,15 @@ use super::engine::{GAME_SOURCE_NAME, MIC_SOURCE_NAME};
 /// How long a level is trusted after its last event.
 pub const DECAY: Duration = Duration::from_millis(320);
 
+/// Peak markers hold for a moment before sliding down (OBS behavior).
+pub const PEAK_HOLD: Duration = Duration::from_millis(700);
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Level {
     value: f32,
     peak: f32,
     at: Option<Instant>,
+    peak_at: Option<Instant>,
 }
 
 #[derive(Debug, Default)]
@@ -39,18 +43,23 @@ static METERS: Mutex<Meters> = Mutex::new(Meters {
         value: 0.0,
         peak: 0.0,
         at: None,
+        peak_at: None,
     },
     mic: Level {
         value: 0.0,
         peak: 0.0,
         at: None,
+        peak_at: None,
     },
 });
 
-/// Map one obs-websocket event to (game, mic) linear levels. Each channel of
-/// `inputLevelsMul` carries `[current, peak, inputPeak]`; we take the loudest
-/// channel of each.
-pub fn levels_from_event(event: &Event) -> (Option<f32>, Option<f32>) {
+/// Map one obs-websocket event to (game, mic) `(level, peak)` pairs. Each
+/// channel of `inputLevelsMul` carries `[current, peak, inputPeak]`; we take
+/// the loudest channel of each. Level and peak stay SEPARATE: painting the
+/// peak as the level made silent mics read 0 dB.
+pub type MeterPair = Option<(f32, f32)>;
+
+pub fn levels_from_event(event: &Event) -> (MeterPair, MeterPair) {
     let Event::InputVolumeMeters { inputs } = event else {
         return (None, None);
     };
@@ -68,8 +77,8 @@ pub fn levels_from_event(event: &Event) -> (Option<f32>, Option<f32>) {
             .map(|channel| channel.get(1).copied().unwrap_or(level))
             .fold(0.0f32, f32::max);
         match input.name.as_str() {
-            name if name == GAME_SOURCE_NAME => game = Some(level.max(peak)),
-            name if name == MIC_SOURCE_NAME => mic = Some(level.max(peak)),
+            name if name == GAME_SOURCE_NAME => game = Some((level, peak)),
+            name if name == MIC_SOURCE_NAME => mic = Some((level, peak)),
             _ => {}
         }
     }
@@ -85,11 +94,32 @@ pub fn decay(value: f32, peak: f32, elapsed: Duration) -> (f32, f32) {
     (value * factor, peak * factor)
 }
 
-fn store(slot: &mut Level, level: f32, peak: f32, now: Instant) {
-    slot.value = level;
-    if peak > slot.peak || slot.at.is_none() {
-        slot.peak = peak;
+/// Peak marker: holds at its value, then slides down over `DECAY`.
+pub fn decay_peak(peak: f32, elapsed: Duration) -> f32 {
+    if elapsed <= PEAK_HOLD {
+        return peak;
     }
+    let over = elapsed - PEAK_HOLD;
+    if over >= DECAY {
+        return 0.0;
+    }
+    peak * (1.0 - (over.as_secs_f32() / DECAY.as_secs_f32()))
+}
+
+fn store(slot: &mut Level, level: f32, peak: f32, now: Instant) {
+    let elapsed = slot
+        .peak_at
+        .map(|at| now.saturating_duration_since(at))
+        .unwrap_or(DECAY);
+    let decayed = decay_peak(slot.peak, elapsed);
+    let next = decayed.max(peak);
+    // A fresh peak restarts the hold; otherwise keep the old timestamp so the
+    // marker keeps sliding down.
+    if next > decayed || slot.peak_at.is_none() {
+        slot.peak_at = Some(now);
+    }
+    slot.peak = next;
+    slot.value = level;
     slot.at = Some(now);
 }
 
@@ -109,11 +139,11 @@ pub fn spawn(stream: EventStream) {
             }
             let now = Instant::now();
             if let Ok(mut meters) = METERS.lock() {
-                if let Some(level) = game {
-                    store(&mut meters.game, level, level, now);
+                if let Some((level, peak)) = game {
+                    store(&mut meters.game, level, peak, now);
                 }
-                if let Some(level) = mic {
-                    store(&mut meters.mic, level, level, now);
+                if let Some((level, peak)) = mic {
+                    store(&mut meters.mic, level, peak, now);
                 }
             }
         }
@@ -138,17 +168,27 @@ pub fn snapshot() -> Option<(f32, f32, f32, f32)> {
         return None;
     }
     let now = Instant::now();
-    let game = decay(
+    let game_level = decay(
         meters.game.value,
         meters.game.peak,
         meters.game.at.map(|at| now - at).unwrap_or(DECAY),
+    )
+    .0;
+    let game_peak = decay_peak(
+        meters.game.peak,
+        meters.game.peak_at.map(|at| now - at).unwrap_or(DECAY),
     );
-    let mic = decay(
+    let mic_level = decay(
         meters.mic.value,
         meters.mic.peak,
         meters.mic.at.map(|at| now - at).unwrap_or(DECAY),
+    )
+    .0;
+    let mic_peak = decay_peak(
+        meters.mic.peak,
+        meters.mic.peak_at.map(|at| now - at).unwrap_or(DECAY),
     );
-    Some((game.0, game.1, mic.0, mic.1))
+    Some((game_level, game_peak, mic_level, mic_peak))
 }
 
 #[cfg(test)]
@@ -166,20 +206,21 @@ mod tests {
     }
 
     #[test]
-    fn levels_map_the_moonclip_sources() {
+    fn levels_map_the_moonclip_sources_with_separate_peaks() {
         let (game, mic) = levels_from_event(&meter_event(
             GAME_SOURCE_NAME,
             vec![[0.4, 0.6, 0.2], [0.5, 0.7, 0.3]],
         ));
-        assert_eq!(game, Some(0.7)); // loudest channel, peak included
+        // Level = loudest CURRENT value, peak = loudest peak: never merged.
+        assert_eq!(game, Some((0.5, 0.7)));
         assert_eq!(mic, None);
 
         let (game, mic) = levels_from_event(&meter_event(
             MIC_SOURCE_NAME,
-            vec![[0.25, 0.25, 0.0]],
+            vec![[0.25, 0.9, 0.0]],
         ));
         assert_eq!(game, None);
-        assert_eq!(mic, Some(0.25));
+        assert_eq!(mic, Some((0.25, 0.9)));
     }
 
     #[test]
@@ -197,6 +238,15 @@ mod tests {
         assert!((value - 0.5).abs() < 0.01, "{value}");
         assert!((peak - 0.4).abs() < 0.01, "{peak}");
         assert_eq!(decay(1.0, 0.8, DECAY), (0.0, 0.0));
+    }
+
+    #[test]
+    fn peak_markers_hold_then_slide() {
+        assert_eq!(decay_peak(0.8, Duration::ZERO), 0.8);
+        assert_eq!(decay_peak(0.8, PEAK_HOLD), 0.8);
+        let slid = decay_peak(0.8, PEAK_HOLD + DECAY / 2);
+        assert!((slid - 0.4).abs() < 0.01, "{slid}");
+        assert_eq!(decay_peak(0.8, PEAK_HOLD + DECAY), 0.0);
     }
 
     #[test]

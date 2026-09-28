@@ -364,6 +364,10 @@ fn conceal_with_kwin(pid: u32) -> Option<String> {
     use std::process::Command;
 
     let plugin = format!("moonclip-conceal-{pid}");
+    // Exact script verified live in V3.5: connect `windowAdded` directly to
+    // hideOurs (per-window signal connects can throw and make KWin drop the
+    // handler). The guard only makes re-runs idempotent (the watchdog re-runs
+    // the script to re-hide windows OBS shows later).
     let script = format!(
         "var targetPid = {pid};\n\
          function hideOurs(w) {{\n\
@@ -376,15 +380,9 @@ fn conceal_with_kwin(pid: u32) -> Option<String> {
              w.minimized = true;\n\
            }}\n\
          }}\n\
-         function arm(w) {{\n\
-           hideOurs(w);\n\
-           if (w && w.minimizedChanged) {{ w.minimizedChanged.connect(function () {{ hideOurs(w); }}); }}\n\
-           if (w && w.activeChanged) {{ w.activeChanged.connect(function () {{ hideOurs(w); }}); }}\n\
-         }}\n\
          if (typeof moonclipArmed === \"undefined\") {{\n\
            var moonclipArmed = true;\n\
-           if (workspace.windowAdded) {{ workspace.windowAdded.connect(arm); }}\n\
-           if (workspace.windowActivated) {{ workspace.windowActivated.connect(hideOurs); }}\n\
+           if (workspace.windowAdded) {{ workspace.windowAdded.connect(hideOurs); }}\n\
          }}\n\
          var wins = workspace.windowList ? workspace.windowList() : [];\n\
          for (var i = 0; i < wins.length; ++i) {{ hideOurs(wins[i]); }}\n"

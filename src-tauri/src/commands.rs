@@ -1875,13 +1875,21 @@ pub async fn audio_levels(app: AppHandle) -> Result<TrackGains, String> {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioPeaks {
     pub game: f32,
+    pub game_peak: f32,
     pub mic: f32,
+    pub mic_peak: f32,
 }
 
 #[tauri::command]
 pub async fn audio_peaks() -> Result<Option<AudioPeaks>, String> {
-    Ok(crate::os::shared::audio_meters::snapshot()
-        .map(|(game, _game_peak, mic, _mic_peak)| AudioPeaks { game, mic }))
+    Ok(crate::os::shared::audio_meters::snapshot().map(
+        |(game, game_peak, mic, mic_peak)| AudioPeaks {
+            game,
+            game_peak,
+            mic,
+            mic_peak,
+        },
+    ))
 }
 
 fn check_track(track: &str) -> Result<(), String> {

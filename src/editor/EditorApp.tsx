@@ -115,7 +115,7 @@ function ScrubBar({
   return (
     <div
       ref={ref}
-      className="group h-2 cursor-pointer rounded-full bg-white/10"
+      className="group relative h-2.5 cursor-pointer rounded-full border border-line bg-raised"
       onPointerDown={(e) => {
         dragging.current = true;
         onScrubStart();
@@ -137,8 +137,15 @@ function ScrubBar({
       }}
     >
       <div
-        className="h-full rounded-full bg-cyan-400/80 transition-[width] duration-75"
+        className="h-full rounded-full bg-link/80 transition-[width] duration-75"
         style={{ width: `${total > 0 ? Math.min(100, (ms / total) * 100) : 0}%` }}
+      />
+      {/* Always-visible position line: the fill alone disappears at 0 and is
+          easy to miss on very short clips. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-link-bright shadow-[0_0_6px_rgba(96,165,250,0.75)]"
+        style={{ left: `${total > 0 ? Math.min(100, (ms / total) * 100) : 0}%` }}
       />
     </div>
   );

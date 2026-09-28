@@ -5,6 +5,7 @@ import {
   levelToPercent,
   meterTone,
   percentToDb,
+  percentToLevelDb,
 } from "./audio";
 
 describe("clampPercent", () => {
@@ -19,13 +20,20 @@ describe("clampPercent", () => {
   });
 });
 
-describe("levelToPercent", () => {
-  it("maps linear levels to the sqrt curve", () => {
+describe("levelToPercent (OBS -60..0 dB scale)", () => {
+  it("maps the dB scale to the bar", () => {
     expect(levelToPercent(0)).toBe(0);
-    expect(levelToPercent(0.25)).toBe(50);
-    expect(levelToPercent(1)).toBe(100);
-    expect(levelToPercent(2)).toBe(100);
-    expect(levelToPercent(-1)).toBe(0);
+    expect(levelToPercent(0.001)).toBe(0); // -60 dB floor
+    expect(levelToPercent(0.1)).toBe(67); // -20 dB
+    expect(levelToPercent(0.5)).toBe(90); // ~-6 dB
+    expect(levelToPercent(1)).toBe(100); // 0 dB
+    expect(levelToPercent(2)).toBe(100); // clamped
+  });
+
+  it("percentToLevelDb walks the same scale back", () => {
+    expect(percentToLevelDb(0)).toBe(-60);
+    expect(percentToLevelDb(50)).toBe(-30);
+    expect(percentToLevelDb(100)).toBe(0);
   });
 });
 
@@ -46,12 +54,12 @@ describe("dB helpers", () => {
 });
 
 describe("meterTone", () => {
-  it("marks the OBS-like zones", () => {
+  it("matches the zone separators (-18 dB / -6 dB)", () => {
     expect(meterTone(0)).toBe("ok");
-    expect(meterTone(74)).toBe("ok");
-    expect(meterTone(75)).toBe("warn");
-    expect(meterTone(91)).toBe("warn");
-    expect(meterTone(92)).toBe("hot");
+    expect(meterTone(69)).toBe("ok");
+    expect(meterTone(70)).toBe("warn");
+    expect(meterTone(89)).toBe("warn");
+    expect(meterTone(90)).toBe("hot");
     expect(meterTone(100)).toBe("hot");
   });
 });

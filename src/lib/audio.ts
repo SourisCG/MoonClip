@@ -10,10 +10,20 @@ export function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-/** Linear amplitude -> 0–100 meter percent (sqrt curve, gentler than linear). */
+/** Meter floor: the scale spans -60 dB (0 %) to 0 dB (100 %), like OBS. */
+export const METER_FLOOR_DB = -60;
+
+/** Linear amplitude -> 0–100 meter percent on the OBS dB scale. */
 export function levelToPercent(level: number): number {
   if (!Number.isFinite(level) || level <= 0) return 0;
-  return Math.min(100, Math.round(Math.sqrt(Math.min(level, 1)) * 100));
+  const db = 20 * Math.log10(Math.min(level, 1));
+  if (db <= METER_FLOOR_DB) return 0;
+  return Math.min(100, Math.round(((db - METER_FLOOR_DB) / -METER_FLOOR_DB) * 100));
+}
+
+/** dB value for a meter position (0–100 %), for the scale labels. */
+export function percentToLevelDb(percent: number): number {
+  return METER_FLOOR_DB + (Math.max(0, Math.min(100, percent)) / 100) * -METER_FLOOR_DB;
 }
 
 /** Linear amplitude -> dB string ("-inf" below the noise floor). */
@@ -31,9 +41,9 @@ export function percentToDb(percent: number): string {
 
 export type MeterTone = "ok" | "warn" | "hot";
 
-/** Meter color zones: green until -6 dB-ish, gold near the top, red clipping. */
+/** Meter color zones: green to -18 dB, amber to -6 dB, red at the top. */
 export function meterTone(percent: number): MeterTone {
-  if (percent >= 92) return "hot";
-  if (percent >= 75) return "warn";
+  if (percent >= 90) return "hot";
+  if (percent >= 70) return "warn";
   return "ok";
 }
