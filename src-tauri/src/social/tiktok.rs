@@ -35,7 +35,6 @@ const CALLBACK_PATH: &str = "/callback/";
 const MAX_TITLE: usize = 2200;
 /// `FILE_UPLOAD` chunks: 5–64 MB allowed; 10 MiB keeps requests small.
 const CHUNK: u64 = 10 * 1024 * 1024;
-const MIN_CHUNK: u64 = 5 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -80,19 +79,21 @@ pub fn sanitize_title(raw: &str) -> Result<String, String> {
     Ok(clean)
 }
 
-/// `FILE_UPLOAD` chunking: chunk size + chunk count. Files under 5 MB must
-/// use a single chunk equal to the file size. For larger files TikTok wants
-/// `total_chunk_count = floor(size / chunk_size)` and the LAST chunk absorbs
-/// the remainder (it is oversized, never smaller): `ceil` is rejected with
-/// `invalid_params` "total chunk count is invalid" (their own example:
-/// 50,000,123 bytes / 10,000,000 chunks => 5 chunks).
+/// `FILE_UPLOAD` chunking: chunk size + chunk count, verified against the
+/// real sandbox API:
+/// - a single chunk must declare `chunk_size == video_size` (count 1 with a
+///   smaller declared size answers `invalid_params` "The chunk size is
+///   invalid");
+/// - for multiple chunks `total_chunk_count = floor(size / chunk_size)` and
+///   the LAST chunk absorbs the remainder (oversized, never smaller): `ceil`
+///   answers "total chunk count is invalid" (their own example: 50,000,123
+///   bytes / 10,000,000 chunks => 5 chunks).
 pub fn chunk_plan(size: u64) -> (u64, u32) {
     let size = size.max(1);
-    if size <= MIN_CHUNK {
+    if size < 2 * CHUNK {
         (size, 1)
     } else {
-        let chunk = CHUNK.min(size);
-        (chunk, (size / chunk).max(1) as u32)
+        (CHUNK, (size / CHUNK) as u32)
     }
 }
 
@@ -779,14 +780,17 @@ mod tests {
     }
 
     #[test]
-    fn chunk_plan_matches_tiktoks_floor_rule() {
+    fn chunk_plan_matches_tiktoks_validated_rules() {
         assert_eq!(chunk_plan(1), (1, 1));
         assert_eq!(chunk_plan(4 * 1024 * 1024), (4 * 1024 * 1024, 1));
         assert_eq!(chunk_plan(5 * 1024 * 1024), (5 * 1024 * 1024, 1));
-        // The real rejected case: 19,654,086 bytes / 10 MiB => one oversized
-        // last chunk (ceil used to declare 2 and TikTok answered
-        // invalid_params "total chunk count is invalid").
-        assert_eq!(chunk_plan(19_654_086), (10 * 1024 * 1024, 1));
+        // Real case: 19,654,086 bytes => single chunk declared as the file
+        // size (a smaller chunk_size with count 1 answers "The chunk size is
+        // invalid"; ceil with count 2 answered "total chunk count is
+        // invalid").
+        assert_eq!(chunk_plan(19_654_086), (19_654_086, 1));
+        // Multi-chunk: floor, last chunk oversized.
+        assert_eq!(chunk_plan(20 * 1024 * 1024), (10 * 1024 * 1024, 2));
         assert_eq!(chunk_plan(25 * 1024 * 1024), (10 * 1024 * 1024, 2));
         assert_eq!(chunk_plan(70 * 1024 * 1024), (10 * 1024 * 1024, 7));
     }
