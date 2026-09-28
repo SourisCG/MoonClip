@@ -756,13 +756,13 @@ mod tests {
     #[test]
     fn auth_url_carries_scopes_pkce_and_state() {
         let url = auth_url(
-            "sbawp19relec857ogl",
+            "sbawfixture123456789",
             "http://127.0.0.1:4444/callback/",
             "state123",
             "abc123",
         );
         assert!(url.starts_with(AUTH_URL));
-        assert!(url.contains("client_key=sbawp19relec857ogl"));
+        assert!(url.contains("client_key=sbawfixture123456789"));
         assert!(url.contains("response_type=code"));
         assert!(url.contains("scope=user.info.basic%2Cvideo.publish"));
         assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A4444%2Fcallback%2F"));

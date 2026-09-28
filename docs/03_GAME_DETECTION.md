@@ -1,103 +1,106 @@
-# 03 — Game Detection (Steam, Wine/Proton, Launchers, Custom Apps)
+# 03 — Game Detection (registered windows)
 
-## 1. Priority pipeline (on F9)
+> Replaces the old process-rule detector (SteamAppId/Wine/launchers/custom
+> apps). Since V3.6.5 detection is **window identity**: the user registers a
+> game once with the OS picker, MoonClip stores the window title + app id, and
+> the autopilot starts/stops the buffer while a matching window exists.
+
+## 1. How it works
 
 ```text
-1. custom_apps table match? → use custom display_name + custom duration
-2. SteamAppId in env? → appmanifest_<id>.acf → official name
-3. Wine/Proton? → .exe from cmdline (blacklist filtered)
-4. Fallback → active window title / top GPU process
+1. User registers a game once ("Games → Register game"): the OS picker returns
+   the window identity (title + app id/class + exe when available).
+2. Every 3 s the autopilot lists desktop windows and matches them against the
+   registered inputs (exact title, state suffix, tolerant app id).
+3. A match starts the replay buffer if it is not running (or switches inputs);
+   the buffer stops when the window is gone.
 ```
 
-Poll worker every 3–5s with `sysinfo` (<0.1% CPU). Cache result in memory.
+- `poll_games` (Rust) runs from `lib.rs` on a 3 s loop. Any window match with a
+  registered input starts that input; if the buffer is already running with it
+  nothing happens; if another registered input is going to be used the buffer is
+  restarted once for the new source.
+- Manually stopping the buffer wins: `suppressed_input` blocks the autopilot
+  until that window goes away and comes back (leaving and re-entering the game
+  re-arms it).
+- `last_game_input` is remembered so the Start button (and the autopilot when
+  several windows match) prefers the most recently played game.
+- `current_game` exposes the active label to the UI.
 
-## 2. Linux GPU filter (kill 400-process noise)
+## 2. Registration data
 
-A real 3D game holds an FD to `/dev/dri/renderD*` (AMD/Intel) or `/dev/nvidia*` (proprietary).
+Registered inputs are rows of the (legacy-named) `custom_apps` table, extended
+by migrations 011/012/013:
 
-```rust
-pub fn is_using_gpu(pid: u32) -> bool {
-    let Ok(entries) = std::fs::read_dir(format!("/proc/{}/fd", pid)) else { return false };
-    for e in entries.flatten() {
-        if let Ok(t) = std::fs::read_link(e.path()) {
-            let s = t.to_string_lossy();
-            if s.contains("/dev/dri/renderD") || s.contains("/dev/nvidia") { return true; }
-        }
-    }
-    false
-}
-```
-
-Then blacklist compositors/browsers: `gnome-shell, kwin, firefox, chrome, discord`.
-
-X11/XWayland helper: query `_NET_CLIENT_LIST` → `_NET_WM_PID` via `x11rb` to list only PIDs with visible windows. 98% of Wine/Proton games go through XWayland.
-
-## 3. Wine / Proton / Lutris
-
-Process name is `wine-preloader`, `wine64-preloader`, `pressure-vessel`. Real exe is in `/proc/<pid>/cmdline` (NUL-separated, flags never glue to exe).
-
-Example: `gamemoderun %command% -novid +fps_max 0` → elements `[gamemoderun, wine64-preloader, .../eldenring.exe, -novid, ...]`. Just find element ending in `.exe` (case-insensitive).
-
-Blacklist: `winedevice.exe, explorer.exe, services.exe, conhost.exe, plugplay.exe, wineboot.exe, steam.exe, steamservice.exe`.
-
-```rust
-pub fn get_steam_app_id(pid: u32) -> Option<u32> {
-    let bytes = std::fs::read(format!("/proc/{}/environ", pid)).ok()?;
-    for var in bytes.split(|&b| b == 0) {
-        if var.starts_with(b"SteamAppId=") {
-            if let Ok(s) = std::str::from_utf8(&var[11..]) {
-                if let Ok(id) = s.parse::<u32>() { return Some(id); }
-            }
-        }
-    }
-    None
-}
-```
-
-Wrappers (`mangohud`, `gamemoderun`, `gamescope -- %command%`) inherit `SteamAppId` via fork/exec, so env survives. Only `env -i` breaks it (nobody does that — breaks Steam overlay).
-
-Resolve name offline: `~/.steam/steam/steamapps/appmanifest_<id>.acf` (+ `libraryfolders.vdf` for secondary libs) → `"name" "ELDEN RING"`. No network needed. Optional: Steam Store API fallback.
-
-Flatpak: read `/proc/<pid>/cgroup` → `app-com.valvesoftware.Steam-...`, `app-net.lutris.Lutris-...`.
-
-## 4. Launchers
-
-| Launcher | Detection |
+| Column | Meaning |
 |---|---|
-| Steam (Win+Linux) | Linux: `SteamAppId` + `.acf`. Windows: `HKCU\Software\Valve\Steam\SteamPath` + `libraryfolders.vdf`, match exe. |
-| Battle.net (Win native) | `C:\ProgramData\Battle.net\Agent\product.db`, exes `Overwatch.exe, Wow.exe, Diablo IV.exe`. Linux (Lutris/Bottles/Proton): ignore `Battle.net.exe`, detect GPU-holding child `.exe`. |
-| Epic (Win) | `C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests\*.item` JSON → `DisplayName` + `LaunchExecutable`. |
-| Heroic (Win+Linux) | `~/.config/heroic/GamesConfig/*.json`, `installed.json` → formal name + exe. |
-| Minecraft Java (official) | `java` / `javaw.exe` + cmd contains `net.minecraft.client.main.Main`. Covers Forge/Fabric. |
-| Prism Launcher | Extra arg `--gameDir .../instances/<Name>` → read `instance.cfg` for exact instance name. |
-| Bedrock (Win only) | `Minecraft.Windows.exe` exact match (UWP). |
-| Xbox / Game Pass (Win) | `gamelaunchhelper.exe` or path `XboxGames/` → Win32 `GetWindowTextW` on foreground window (e.g. "Forza Horizon 5"). |
-| Proton generic | Same as Wine + SteamAppId. |
+| `id` | Row id (vault alias for the portal token is `portal_<id>`) |
+| `display_name` | User-facing game name (the picker's window title) |
+| `input_name` | OBS source name (`Game 1`, `Game 2`, …) |
+| `input_kind` | `window` (game) or `screen` (internal full-screen input) |
+| `input_settings` | OBS source settings JSON (window target, monitor, sanitized) |
+| `source_uuid` | Stable OBS source uuid |
+| `window_title` / `window_app_id` | Identity learned at pick time (used by the matcher) |
+| `clips_folder` | Library folder for this game ("" until the first pick) |
+| `icon_path` | Optional icon |
 
-## 5. Custom apps (`custom_apps` table)
+Portal `RestoreToken`s inside `input_settings` are stripped before persisting
+and live in the OS vault (`portal_<input_id>`), see `05_STORAGE_SECURITY.md`.
 
-```sql
-CREATE TABLE IF NOT EXISTS custom_apps (
-  id TEXT PRIMARY KEY,
-  display_name TEXT NOT NULL,
-  target_exe TEXT NOT NULL,
-  match_strategy TEXT NOT NULL, -- 'exact_exe' | 'cmdline_contains' | 'window_title' | 'wine_target'
-  clip_duration_seconds INTEGER,
-  icon_path TEXT,
-  is_wine_proton INTEGER DEFAULT 0
-);
-```
+Commands: `register_game`, `edit_game` (clears the stored target and re-opens
+the picker), `delete_registered_input` (keeps the clips folder and its clips
+forever), `list_registered_inputs`.
 
-UX (frontend `AppManager.tsx` + `ProcessPicker.tsx`):
-- A. **From running processes:** `invoke('get_running_applications')` returns GPU/window-filtered list (`pid, name, display_name, cmdline`). Click `[+]` to bind. Special-case Java→"Minecraft (Java Edition)".
-- B. **Click-to-register window:** minimize, crosshair cursor, `WindowFromPoint→GetWindowThreadProcessId` (Win) / `x11rb _NET_WM_PID` (X11/XWayland).
-- C. **Browse file:** `plugin-dialog` filter `*.exe` (Win) or ELF/`.sh`/`*.exe` in `~/.local/share/wineprefixes/`, `~/.var/app/net.lutris.Lutris/` (Linux).
+## 3. Window lists per platform
 
-Matcher:
+`os::list_windows()` returns `DesktopWindow { title, app_id }`:
 
-```rust
-pub enum MatchStrategy { ExactExe(String), CmdlineContains(String), WineProtonTarget(String) }
-pub fn matches_process(process: &sysinfo::Process, rule: &MatchStrategy) -> bool { /* ... */ }
-```
+- **Linux + KDE (Wayland or X11):** KRunner's window list (title + icon/app id).
+  Note it reports an **empty app id** for many apps (Brave, Discord, VS Code),
+  which is why title guards exist.
+- **Linux, other compositors:** X11/XWayland `_NET_CLIENT_LIST` → `_NET_WM_PID`.
+- **Windows:** `EnumWindows` (title + window class + exe).
 
-Custom duration per app (fighters 15s, shooters 30s, RPG 60s, work/bug 15s). Fallback to global default.
+The picker returns richer identity (`WindowIdentity { title, app_id, exe }`):
+on Linux it reads KDE's restore data (`steam_app_<id>`), on Windows the OBS
+window-capture target (`"<title>:<class>:<exe>"`, parsed by
+`parse_windows_target` — titles may contain colons, so it splits from the
+right).
+
+## 4. Matching rules (`os/shared/winlist.rs`, OS-free)
+
+Shared by both platforms and unit-tested on every OS.
+
+- **Normalization:** collapse whitespace, lowercase, drop trailing title
+  separators (`-`, `|`, `:`, `–`, `—`) — game titles append state
+  ("Terraria - 1.4.4.9", "Game | 1.2").
+- **Title match:** normalized equality or word-boundary prefix (so state
+  suffixes do not break it).
+- **Guard 1 — file managers:** `is_non_game_window` rejects Dolphin, Nautilus,
+  Thunar, Nemo, PCManFM, Krusader, Explorer classes (`cabinetwclass`,
+  `explorewclass`) so browsing the clips folder never fakes a game.
+- **Guard 2 — known non-game suffixes:** a title ending in
+  `" - <app>"` / `" — <app>"` / `" – <app>"` for a known app (browsers, Dolphin,
+  Discord, VS Code, Kate/KWrite, Spotify, Thunderbird, Steam) is rejected before
+  any matching. Games append state, not app names.
+- **App id compatibility (`app_id_matches`):** the picker (`steam_app_2357570`)
+  and KRunner (`steam_icon_2357570` / `steam`) disagree in format, so ids match
+  when equal, either contains the other, or the normalized Steam ids agree. If
+  either side is unknown, the title decides.
+
+## 5. Manual controls
+
+- **Start buffer** (`start_buffer` → `manual_start`): picks a running registered
+  game (preferring `last_game_input`) and starts it; it never records the screen
+  (register a game for that). With no registered games it errors with a pointer
+  to Games.
+- **Record screen** (`start_screen_buffer`): records the internal `MoonClip
+  Screen` input (screen-only capture, no game matching).
+- The hotkey (`handle_hotkey`/F9) saves a clip when the buffer is running.
+
+## 6. Per-game folders
+
+Every registration owns a library folder (`<clips_dir>/<sanitized name>/`,
+`storage/folders.rs`); the association is stable across renames and deletions
+and is documented in `05_STORAGE_SECURITY.md` §7. `Unknown` holds clips saved
+with no matching game.

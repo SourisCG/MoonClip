@@ -1,93 +1,141 @@
 # 01 — Architecture
 
-> MoonClip — Open-source, lightweight, zero-cloud alternative to Medal.tv for Linux and Windows.
+> MoonClip — Open-source, lightweight, zero-account alternative to Medal.tv for Linux and Windows.
 
 ## 1. Goals
 
 - Clip the last N seconds (replay buffer) with a global hotkey (default `F9`) while gaming.
 - Idle footprint: **< 80 MB RAM, ~0% CPU** while playing.
-- No proprietary cloud. Local-first + user-owned storage (Google Drive).
-- MIT/Apache-2.0 core where possible. **GPL-3.0-only** for the project as a
-  whole; the bundled OBS Studio (GPL-2.0-or-later) ships as a separate child
-  process. See `05_STORAGE_SECURITY.md` and `08_CI_CD_DISTRIBUTION.md`.
+- No vendor cloud account required. Local-first + user-owned storage (the user's
+  Google Drive, their Discord server, their social accounts).
+- **GPL-3.0-only** for the project as a whole; the bundled OBS Studio
+  (GPL-2.0-or-later) ships as a separate child process. See
+  `05_STORAGE_SECURITY.md` and `08_CI_CD_DISTRIBUTION.md`.
 
 ## 2. Non-negotiable rules
 
-1. **Zero-Copy / Hardware Encoding First.** No CPU frame processing, no software rendering in the capture path.
-2. **Lossless Cut by Default.** Time-only trims use FFmpeg `-c copy`. Re-encode only for vertical 9:16 / filters / volume remix.
-3. **Zero-Cloud Backend.** No central server. SQLite locally, secrets in OS keyring, uploads client-to-service (Drive API, Discord webhooks).
+1. **Hardware Encoding First.** No CPU frame processing or software rendering in the capture path.
+2. **Lossless Cut by Default.** Time-only trims use FFmpeg `-c copy`. Re-encode only for precise trims, vertical 9:16, filters or remixes.
+3. **Zero-Cloud Backend.** No MoonClip server holds user data. SQLite locally,
+   secrets in the OS keyring, uploads client-to-service (Drive API, YouTube API,
+   Discord webhooks, TikTok Direct Post through a stateless Cloudflare Worker
+   that only holds the TikTok client secret — see `06_SOCIAL_INTEGRATIONS.md`).
 4. **Relative Paths Only in DB.** Never store absolute paths. Resolve at runtime as `base_dir.join(file_name)`.
-5. **Lazy Editor.** The editor (Wavesurfer + `<video>`) is `React.lazy`-loaded and fully destroyed on close (`ws.destroy()` + temp purge + optional window destroy).
+5. **Lazy Editor.** The advanced editor (`dnd-timeline` + canvas waveforms + the
+   tokenized loopback media server) is `React.lazy`-loaded in its own chunk and
+   fully torn down on close (exports cancelled, waveforms destroyed, session dir
+   removed, sources cleared).
 6. **Platform Abstraction.** Rust `CaptureEngine` trait decouples shared code
-   from the OS. V3: one shared engine (`os/shared/engine.rs`) drives the embedded,
+   from the OS. One shared engine (`os/shared/engine.rs`) drives the embedded,
    isolated OBS Studio through obs-websocket (`obws`); OS-specifics (paths,
-   binaries, launch flags, devices, displays, orphan sweep) live in
+   binaries, launch flags, devices, displays, concealment, window lists) live in
    `os/linux/` and `os/windows/`.
    RULE: no `cfg(target_os)` and no OS APIs outside `os/`. Enforced by:
-   `grep -rn 'cfg(target_os' src-tauri/src/commands.rs src-tauri/src/editor src-tauri/src/storage src-tauri/src/cue.rs src-tauri/src/sidecar.rs src-tauri/src/state.rs src-tauri/src/lib.rs` (must print nothing; runs in CI).
+   `grep -rn 'cfg(target_os' src-tauri/src/commands.rs src-tauri/src/editor src-tauri/src/storage src-tauri/src/social src-tauri/src/cue.rs src-tauri/src/sidecar.rs src-tauri/src/state.rs src-tauri/src/lib.rs` (must print nothing).
+7. **Never commit secrets.** The repository is public. `social.json`, OAuth
+   tokens, client secrets, webhook URLs and API keys must never be committed;
+   see `05_STORAGE_SECURITY.md` §Secrets policy. This rule is repeated in
+   `SPEC.md`, `README.md`, `09_WINDOWS_HANDOFF.md` and enforced by
+   `scripts/check-secrets.sh`.
 
 ## 3. Stack
 
 - **Runtime:** Tauri v2 (`@tauri-apps/api`, `@tauri-apps/cli`)
-- **Frontend:** React 19 + TypeScript + Vite + Tailwind CSS v3 + `wavesurfer.js v7` + `lucide-react` + `clsx`/`tailwind-merge`
-- **i18n:** `react-i18next` + `i18next` — UI must be bilingual ES/EN from day one (`src/locales/es.json`, `en.json`).
-- **Backend:** Rust + `tokio`, `serde`/`serde_json`, `rusqlite` (backend-only; `tauri-plugin-sql` was removed in Phase 2), `keyring`, `rodio`, `uuid`, `dirs`, `nix` (Linux), `image` (tray icon decode). Phase 4+: `sysinfo`; Phase 6: `oauth2`, `tiny_http`, `reqwest`; Windows: `wasapi` (audio endpoint enumeration). Capture/encode/mux is owned by the embedded OBS child process (obs-websocket v5 control through the `obws` crate).
+- **Frontend:** React 19 + TypeScript + Vite + Tailwind CSS v3 + `react-i18next`,
+  `lucide-react`, `clsx`/`tailwind-merge`, `zustand` + `immer` + `zundo`
+  (editor state), `dnd-timeline` (timeline), `react-moveable` (text overlays).
+  The advanced editor draws its waveforms on a canvas (`WaveCanvas.tsx`); there
+  is no wavesurfer dependency.
+- **i18n:** `react-i18next` + `i18next` — UI bilingual ES/EN from day one
+  (`src/locales/es.json`, `en.json`). Docs are written in English.
+- **Backend:** Rust + `tokio`, `serde`/`serde_json`, `rusqlite` (backend-only),
+  `keyring`, `rodio`, `uuid`, `dirs`, `image`, `obws` (obs-websocket v5, with the
+  `events` feature for live audio meters), `reqwest`/`tiny_http`/`sha2`/`base64`/
+  `urlencoding` (OAuth + uploads). The embedded OBS child owns capture/encode/mux.
 - **Platform crates:**
-  - Linux: `nix` (signals)
-  - Windows: `wasapi` (WASAPI endpoint enumeration for the Settings UI), `windows` (DXGI/GDI monitor + vendor discovery, orphan sweep)
-- **Sidecars (Tauri `binaries/`):** `obs` (embedded OBS Studio, both OSes), `ffmpeg` (editor/probes, both OSes)
-- **Tauri plugins:** `global-shortcut`, `clipboard-manager`, `notification`, `dialog`, `opener`
-- **Icons:** window/taskbar set in `src-tauri/icons/` (generated by `pnpm tauri icon`
-  from `build-aux/common/moonclip-icon.svg`, transparent artwork); `icons/tray-icon.png`
-  is loaded explicitly for the tray — never the window icon — so both can
-  evolve independently. Dev Wayland association via
+  - Linux: `nix` (signals), `futures-util` (event streams), KWin DBus scripting
+    for window concealment (Wayland).
+  - Windows: `wasapi` (endpoint enumeration for the Settings UI), `windows`
+    (DXGI/GDI monitor + vendor discovery, Win32 concealment, orphan sweep).
+- **Sidecars (Tauri `binaries/`):** `moonclip-engine` (embedded OBS Studio, both
+  OSes) and `ffmpeg` (editor/probes/faststart, both OSes). No `obs-cmd`.
+- **Tauri plugins:** `global-shortcut`, `clipboard-manager`, `notification`, `dialog`, `opener`.
+- **Icons/branding:** window/taskbar set in `src-tauri/icons/` (generated by
+  `pnpm tauri icon` from `build-aux/common/moonclip-icon.svg`); the in-app logo is
+  the CSS mark (`src/components/logo/MoonClipLogo.css`). `icons/tray-icon.png` is
+  loaded explicitly for the tray. Dev Wayland association via
   `build-aux/common/dev.souriscg.moonclip.desktop.template` (`pnpm desktop:install`).
 
-## 4. Project tree (target)
+## 4. Project tree (real)
 
 ```text
 moonclip/
-├── docs/                        # This spec (EN)
+├── docs/                        # This spec (EN). 11_AUDIO.md is the audio subsystem.
 ├── SPEC.md                      # Index + acceptance map
 ├── src-tauri/
-│   ├── binaries/                # obs (embedded OBS), ffmpeg per triple
-│   ├── migrations/              # SQL migrations (Phase 2)
+│   ├── binaries/<triple>/       # moonclip-engine (OBS) + ffmpeg sidecars
+│   ├── migrations/              # SQL migrations 001..015
 │   ├── capabilities/
 │   ├── src/
-│   │   ├── os/                  # ALL platform code (OBS-style). api.rs traits;
-│   │   │                        # obs.rs shared engine; linux/ + windows/{obs,binary,video,devices,paths,open}
-│   │   ├── sidecar.rs           # OS-free bundled-path walk + host_triple()
-│   │   ├── detector/            # (Phase 4) gpu scan, wine parser, steam, minecraft, launchers, matcher
-│   │   ├── storage/             # sqlite.rs, keyring.rs, paths.rs
-│   │   ├── uploader/            # drive_auth.rs, drive_upload.rs, discord.rs, youtube.rs
-│   │   ├── editor/              # ffmpeg.rs (thumb, extract, trim, vertical, mix)
-│   │   ├── commands.rs          # Tauri IPC handlers
-│   │   ├── state.rs             # AppState (engine, config, db pool)
+│   │   ├── os/                  # ALL platform code
+│   │   │   ├── api.rs           # CaptureConfig + CaptureEngine trait
+│   │   │   ├── shared/          # engine.rs (ObsEngine), obsws.rs, audio_meters.rs,
+│   │   │   │                    # encoder_options.rs, winlist.rs (window matching)
+│   │   │   ├── linux/           # portal, devices, video, winlist, engine, concealment
+│   │   │   └── windows/         # WGC/DXGI, WASAPI devices, winlist, engine, concealment
+│   │   ├── social/              # google.rs, oauth.rs, token_store.rs, drive.rs, cloud.rs,
+│   │   │                        # commands.rs, youtube.rs, discord.rs, tiktok.rs, sync.rs
+│   │   ├── editor/              # ffmpeg.rs, encoders.rs, session.rs, project.rs,
+│   │   │                        # trim.rs, export.rs, faststart.rs, media_server.rs
+│   │   ├── storage/             # db.rs, models.rs, paths.rs, secrets.rs, folders.rs, reconcile.rs
+│   │   ├── sidecar.rs, state.rs, commands.rs, video_quality.rs, cue.rs
 │   │   ├── lib.rs / main.rs
 │   ├── tauri.conf.json
 │   └── Cargo.toml
+├── workers/moonclip-oauth/      # Cloudflare Worker: TikTok token exchange/refresh
 ├── src/
-│   ├── components/starfield/    # MoonClipStarfield.tsx
-│   ├── components/gallery/      # ClipGallery.tsx, ClipCard.tsx
-│   ├── components/editor/       # ClipEditor.tsx (lazy)
-│   ├── components/settings/     # SettingsModal.tsx, AppManager.tsx, ProcessPicker.tsx
-│   ├── components/common/       # GlassModal, buttons, sliders
-│   ├── hooks/                   # useClips.ts, useDriveUpload.ts, etc.
-│   ├── types/index.ts           # Mirrors Rust structs
+│   ├── components/ui/           # Button, Field, Select (custom popover), Card, Tag, Tabs,
+│   │                            # Dialog, Meter, ProgressBar, Kbd, EmptyState
+│   ├── components/shell/        # AppShell: IconRail + ContextRail + header + main
+│   ├── components/gallery/      # GalleryView, TrimPanel, ShareDialog, DriveBrowser
+│   ├── components/settings/     # SettingsModal, Accounts/Audio/Video/ObsEngine, AppManager,
+│   │                            # SetupWizard, TrackMixer, DecodeNotice
+│   ├── components/starfield/    # MoonClipStarfield.tsx (pausable canvas)
+│   ├── editor/                  # EditorApp.tsx (lazy chunk), TimelineView, WaveCanvas, ExportDialog
+│   ├── hooks/, lib/ (audio math, media), types/ (mirrors Rust structs)
 │   ├── locales/es.json, en.json
-│   ├── App.tsx / main.tsx / index.css
+│   ├── fonts.css / public/fonts/  # Inter + JetBrains Mono (OFL, latin + latin-ext)
+│   └── App.tsx / main.tsx / index.css
 ```
 
 ## 5. IPC contract (see `src/types/index.ts` + `commands.rs`; kept in sync)
 
-Core commands: `list_clips`, `toggle_favorite`, `delete_clip`,
-`purge_missing_clips`, `resolve_clip_src`, `get_settings`, `set_setting`, `list_custom_apps`,
-`register_app`, `delete_app`, `secret_store/get/delete`, `start_buffer`,
-`stop_buffer`, `engine_status`, `save_clip_now`, `audio_levels`,
-`set_track_gain`, `set_track_mute`, `obs_info`, `repair_obs_config`,
-`list_audio_devices`, `preview_track`, `open_clip_external`, `video_options`,
-`test_hardware`, `get_hotkey`, `set_hotkey`. Events: `moonclip://clip-hotkey`, `moonclip://clip-saved`,
-`moonclip://engine-stopped`.
+Core library: `list_clips`, `toggle_favorite`, `delete_clip`, `purge_missing_clips`,
+`rename_clip`, `cloud_cache_cleanup`, `reconcile_library`, `organize_library`,
+`resolve_clip_src`, `read_thumbnail`, `open_clip_external`, `get_settings`/`set_setting`/
+`set_settings`, `get_hotkey`/`set_hotkey`, `first_paint`, `compositing_status`,
+`decode_status`, `system_memory`.
+
+Capture: `start_buffer`, `stop_buffer`, `start_audio_monitor`, `stop_audio_monitor`,
+`engine_status`, `current_game`, `start_screen_buffer`, `save_clip_now`,
+`clear_portal_token`, `list_registered_inputs`, `register_game`, `edit_game`,
+`delete_registered_input`, `list_audio_devices`, `preview_track`, `audio_levels`,
+`audio_peaks`, `set_track_gain`, `set_track_mute`, `obs_info`, `repair_obs_config`,
+`video_options`, `test_hardware`, `media_url`, `trim_clip`.
+
+Editor: `editor_open`, `editor_close`, `editor_load_project`, `editor_save_project`,
+`editor_add_source`, `editor_log`, `editor_audio_health`, `editor_export`,
+`editor_cancel_export`.
+
+Social: `social_status`, `connect_google_drive`/`disconnect_google_drive`,
+`connect_google_youtube`/`disconnect_google_youtube`, `youtube_share_clip`,
+`connect_discord`/`disconnect_discord`/`discord_share_clip`,
+`connect_tiktok`/`disconnect_tiktok`/`tiktok_creator_info`/`tiktok_share_clip`,
+`drive_upload_clip`, `drive_browse`, `drive_download`, `drive_sync_library`.
+
+Events: `moonclip://clip-hotkey`, `moonclip://clip-saved`, `moonclip://engine-stopped`,
+`moonclip://upload-progress`, `moonclip://download-progress`, `moonclip://publish-progress`,
+`moonclip://edit-progress`, `moonclip://drive-sync-done`.
 
 > **IPC naming rule (Tauri v2, learned the hard way):** `#[tauri::command]`
 > auto-converts Rust `snake_case` params to **camelCase wire keys**
@@ -97,6 +145,12 @@ Core commands: `list_clips`, `toggle_favorite`, `delete_clip`,
 
 ## 6. Resource strategy
 
-- While gaming: main window hidden to tray, WebView paused, capture+encode in the embedded OBS child (RAM replay buffer inside OBS; ~150 MB for 60 s 1080p 20 Mbps) and the save is a file write OBS performs directly. Display capture is compositor-level (DXGI/WGC or PipeWire portal).
-- React never touches pixels. It sends `{start, end}` numbers to Rust; Rust runs FFmpeg CLI.
-- Starfield canvas pauses on `document.hidden` / `window blur` via `cancelAnimationFrame`.
+- While gaming: main window hidden to tray, WebView paused, capture+encode in the
+  embedded OBS child (RAM replay buffer inside OBS; ~150 MB for 60 s 1080p
+  20 Mbps) and the save is a file write OBS performs directly. Display capture is
+  compositor-level (WGC/DXGI or PipeWire portal).
+- React never touches pixels. It sends `{start, end}` numbers to Rust; Rust runs
+  FFmpeg CLI for trims/exports.
+- Starfield canvas pauses on `document.hidden` / `window blur` and whenever a
+  modal is open (`src/lib/overlay.ts`); `.low-power` (software compositing)
+  disables backdrop blur and hides the canvas entirely.

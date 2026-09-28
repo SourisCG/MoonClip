@@ -158,18 +158,22 @@ vendor/codec/platform in `os/{windows,linux}/obs.rs::encoder_id`.
 
 `sources`: the scene + one display source. `AuxAudioDevice1` = game/desktop
 (mixers `1|2`), `AuxAudioDevice2` = mic (mixers `1|4`); in compatibility mode
-both are `1` (Mix only). `volume` carries the persisted gain (0-200 % →
-0.0-2.0 multiplier) and `muted` the persisted mute, so the saved file layout
-stays: Track 1 `Master Mix [Game+Voice]`, Track 2 `Game/Desktop`,
-Track 3 `Microphone`.
+both are `1` (Mix only). `volume` carries the persisted gain (0-100 % →
+0.0-1.0 multiplier, 100 = unity/maximum) and `muted` the persisted mute, so
+the saved file layout stays: Track 1 `Master Mix [Game+Voice]`,
+Track 2 `Game/Desktop`, Track 3 `Microphone`.
 
-Live behaviour:
+Live behaviour (full subsystem: `11_AUDIO.md`):
 - **Mute** applies live through `SetInputMute` (obs-websocket).
-- **Gain** applies live through `SetInputVolume` (0-200 % → multiplier); a
-  failed live apply falls back to a single buffer restart.
-- **Peaks/meters:** obs-websocket exposes `InputVolumeMeters` events, not
-  subscribed yet (obws `events` feature) → `audio_peaks` returns `null` (the
-  UI hides the meters; no fake data).
+- **Gain** applies live through `SetInputVolume` (0-100 % → multiplier). A
+  failed live apply is logged and reported to the UI — the buffer is NEVER
+  restarted; the value lands in the scene on the next start.
+- **Peaks/meters:** the engine subscribes to obs-websocket's high-volume
+  `InputVolumeMeters` event (`os/shared/audio_meters.rs`, obws `events`
+  feature) and `audio_peaks` serves level + peak per track for the OBS-style
+  dB meters. `start_audio_monitor`/`stop_audio_monitor` run the engine with an
+  audio-only collection (no capture input, no replay buffer) so the meters
+  work without recording.
 
 ## 6. obs-websocket contract
 
@@ -245,12 +249,13 @@ or the test fails. This is the proof that OBS really applied the settings.
 
 ## 10. Live mixer (volume without restart)
 
-`set_track_gain` persists the 0-200 % gain and applies it live through
+`set_track_gain` persists the 0-100 % gain and applies it live through
 `SetInputVolume` (obs-websocket) while the buffer runs (trait
-`CaptureEngine::set_volume`); only a failed live apply falls back to the
-single-restart path. The generated scene still carries the persisted gain,
-so the next start renders it even without a running buffer. Mixer errors
-are shown in the UI, never swallowed.
+`CaptureEngine::set_volume`); a failed live apply is logged and surfaced in
+the UI (the value still applies on the next start) — the buffer is never
+restarted by a gain change. The generated scene still carries the persisted
+gain, so the next start renders it even without a running buffer. Mixer
+errors are shown in the UI, never swallowed. Details: `11_AUDIO.md`.
 
 ## 11. Rust trait (frozen interface)
 
