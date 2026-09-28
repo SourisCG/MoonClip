@@ -102,13 +102,13 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-moonclip-panel/95 p-5 shadow-2xl">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/80 p-4 backdrop-blur-sm">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-card border border-line bg-panel/95 p-5 shadow-panel">
         <div className="flex items-center gap-3">
           <MoonClipLogo size={34} />
           <div>
-            <h3 className="text-lg font-bold text-slate-100">{t("wizard.title")}</h3>
-            <p className="text-xs text-slate-400">{t("wizard.subtitle")}</p>
+            <h3 className="text-lg font-bold text-ink">{t("wizard.title")}</h3>
+            <p className="text-xs text-ink-muted">{t("wizard.subtitle")}</p>
           </div>
         </div>
 
@@ -120,47 +120,47 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
               disabled={busy || testing || !opts}
               className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-50 ${
                 m.height === suggested
-                  ? "border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/15"
-                  : "border-white/10 bg-black/20 hover:border-white/20"
+                  ? "border-gold/50 bg-sky/10 hover:bg-link/15"
+                  : "border-line bg-void/40 hover:border-white/20"
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-slate-100">
+                <span className="text-sm font-semibold text-ink">
                   {m.name} — {m.height}p
                 </span>
                 {m.height === suggested && (
-                  <span className="rounded-md bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-cyan-200">
+                  <span className="rounded-control bg-sky/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-ink">
                     {t("wizard.suggested")}
                   </span>
                 )}
               </div>
-              {m.tag && <div className="mt-0.5 text-[11px] text-slate-500">{t(m.tag)}</div>}
-              <div className="mt-1 font-mono text-[11px] text-slate-400">
+              {m.tag && <div className="mt-0.5 text-[11px] text-ink-faint">{t(m.tag)}</div>}
+              <div className="mt-1 font-mono text-[11px] text-ink-muted">
                 {t("wizard.ram_note", { ram: ramFor(m.height) })}
               </div>
               {opts && m.height > opts.max_source_height && opts.max_source_height > 0 && (
-                <div className="mt-1 text-[11px] text-amber-400">{t("video.upscale_warn")}</div>
+                <div className="mt-1 text-[11px] text-gold-bright">{t("video.upscale_warn")}</div>
               )}
             </button>
           ))}
         </div>
 
         {/* Optional hardware test */}
-        <div className="mt-3 space-y-2 rounded-xl border border-white/5 bg-black/20 px-3 py-3">
+        <div className="mt-3 space-y-2 rounded-xl border border-line bg-void/40 px-3 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="text-sm text-slate-300">{t("wizard.test_title")}</p>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-sm text-ink-soft">{t("wizard.test_title")}</p>
+              <p className="text-[11px] text-ink-faint">
                 {t("wizard.test_hint", { seconds: TEST_SECONDS })}
               </p>
               {opts && opts.monitors.length === 0 && !opts.portal_ready && (
-                <p className="text-[11px] text-cyan-300/80">{t("wizard.portal_pick")}</p>
+                <p className="text-[11px] text-sky-bright/80">{t("wizard.portal_pick")}</p>
               )}
             </div>
             <button
               onClick={() => void runTest(suggested, 60)}
               disabled={testing || busy || !opts}
-              className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
+              className="rounded-control border border-gold/40 bg-sky/10 px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-sky/20 disabled:opacity-50"
             >
               {testing ? t("wizard.testing", { s: elapsed }) : t("wizard.test")}
             </button>
@@ -170,7 +170,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             <div className="space-y-1">
               <p
                 className={`font-mono text-[11px] ${
-                  result.ok ? "text-emerald-300" : "text-amber-300"
+                  result.ok ? "text-jade-bright" : "text-gold-bright"
                 }`}
               >
                 {result.ok
@@ -189,7 +189,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
                   <button
                     onClick={() => void applyResult()}
                     disabled={busy}
-                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                    className="rounded-control border border-emerald-500/30 bg-jade/10 px-2.5 py-1 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
                   >
                     {t("wizard.test_use", { height: result.height })}
                   </button>
@@ -201,7 +201,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
                     void runTest(result.fallback_height as number, result.fallback_fps as number)
                   }
                   disabled={testing}
-                  className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+                  className="rounded-control border border-amber-500/30 bg-gold/10 px-2.5 py-1 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
                 >
                   {t("wizard.test_retry", {
                     height: result.fallback_height,
@@ -213,24 +213,24 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <p className="mt-3 text-[11px] text-slate-500">
+        <p className="mt-3 text-[11px] text-ink-faint">
           {t("wizard.custom_note")}
         </p>
 
-        {error && <p className="mt-2 break-all font-mono text-xs text-red-400">{error}</p>}
+        {error && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{error}</p>}
 
         <div className="mt-4 flex items-center justify-end gap-2">
           <button
             onClick={() => void skip()}
             disabled={testing}
-            className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:border-white/20 disabled:opacity-50"
+            className="rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink-soft transition hover:border-white/20 disabled:opacity-50"
           >
             {t("wizard.skip")}
           </button>
           <button
             onClick={() => void apply(suggested)}
             disabled={busy || testing || !opts}
-            className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
+            className="rounded-control border border-gold/50 bg-sky/10 px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-sky/20 disabled:opacity-50"
           >
             {t("wizard.start")}
           </button>

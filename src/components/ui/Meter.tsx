@@ -2,9 +2,9 @@ import clsx from "clsx";
 import { levelToDb, levelToPercent, meterTone } from "../../lib/audio";
 
 const tones = {
-  ok: "bg-jade",
-  warn: "bg-gold",
-  hot: "bg-blood-bright",
+  ok: "bg-ok",
+  warn: "bg-warn",
+  hot: "bg-brand",
 } as const;
 
 /**

@@ -109,25 +109,25 @@ export function SettingsModal({
     }
   };
 
-  if (loading) return <p className="text-sm text-slate-400">{t("common.loading")}</p>;
-  if (error) return <p className="text-sm text-red-400">{error}</p>;
+  if (loading) return <p className="text-sm text-ink-muted">{t("common.loading")}</p>;
+  if (error) return <p className="text-sm text-blood-bright">{error}</p>;
 
-  const row = "flex flex-col items-start gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
-  const label = "text-sm text-slate-300";
+  const row = "flex flex-col items-start gap-2 rounded-xl border border-line bg-void/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
+  const label = "text-sm text-ink-soft";
   const input =
-    "w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-cyan-500/50 sm:w-48";
+    "w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-ink outline-none focus:border-gold/60 sm:w-48";
 
   return (
     <div className="max-w-2xl space-y-3">
       <div className={row}>
         <span className={label}>{t("settings.clips_dir")}</span>
         <span className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
-          <code className="min-w-0 flex-1 truncate font-mono text-xs text-cyan-300 sm:max-w-64 sm:flex-none">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs text-sky-bright sm:max-w-64 sm:flex-none">
             {settings.clips_directory || "—"}
           </code>
           <button
             onClick={() => void browseDir()}
-            className="rounded-lg border border-white/10 bg-white/5 p-1.5 text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200"
+            className="rounded-control border border-line bg-raised/60 p-1.5 text-ink transition hover:border-gold/50 hover:text-ink"
             title={t("settings.browse")}
           >
             <FolderOpen size={15} />
@@ -168,7 +168,7 @@ export function SettingsModal({
             }}
             onKeyDown={onHotkeyKeyDown}
             onBlur={() => setCapturing(false)}
-            className={`${input} text-left font-mono ${capturing ? "border-cyan-500/50 text-cyan-200" : ""}`}
+            className={`${input} text-left font-mono ${capturing ? "border-gold/60 text-ink" : ""}`}
             title={t("settings.hotkey_edit")}
           >
             {capturing ? t("settings.hotkey_press") : hotkey}
@@ -176,7 +176,7 @@ export function SettingsModal({
           {!capturing && hotkey !== "F9" && (
             <button
               onClick={() => void applyHotkey("F9")}
-              className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-cyan-500/40 hover:text-cyan-200"
+              className="shrink-0 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink-soft transition hover:border-gold/50 hover:text-ink"
             >
               {t("settings.hotkey_reset")}
             </button>
@@ -184,25 +184,25 @@ export function SettingsModal({
         </div>
       </div>
       {hotkeyError && (
-        <p className="break-all font-mono text-xs text-red-400">{hotkeyError}</p>
+        <p className="break-all font-mono text-xs text-blood-bright">{hotkeyError}</p>
       )}
 
       {(status || saving) && (
-        <p className="font-mono text-xs text-slate-400">{saving ? `${saving}…` : status}</p>
+        <p className="font-mono text-xs text-ink-muted">{saving ? `${saving}…` : status}</p>
       )}
 
-      <h3 className="pt-2 text-sm font-semibold text-slate-200">{t("accounts.title")}</h3>
+      <h3 className="pt-2 text-sm font-semibold text-ink">{t("accounts.title")}</h3>
       <AccountsSection />
 
-      <h3 className="pt-2 text-sm font-semibold text-slate-200">{t("audio.title")}</h3>
+      <h3 className="pt-2 text-sm font-semibold text-ink">{t("audio.title")}</h3>
       <AudioSection status={engineStatus} />
 
       <div className="flex items-center justify-between gap-2 pt-2">
-        <h3 className="text-sm font-semibold text-slate-200">{t("video.title")}</h3>
+        <h3 className="text-sm font-semibold text-ink">{t("video.title")}</h3>
         {onOpenWizard && (
           <button
             onClick={onOpenWizard}
-            className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/40 hover:text-cyan-200"
+            className="rounded-control border border-line bg-raised/60 px-2.5 py-1 text-xs text-ink-soft transition hover:border-gold/50 hover:text-ink"
           >
             {t("wizard.reopen")}
           </button>
@@ -213,7 +213,7 @@ export function SettingsModal({
 
       <ObsEngineSection />
 
-      <p className="pt-2 font-mono text-[11px] text-slate-600">
+      <p className="pt-2 font-mono text-[11px] text-ink-faint">
         build {buildId()}
       </p>
     </div>

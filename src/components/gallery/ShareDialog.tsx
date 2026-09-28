@@ -395,29 +395,29 @@ export function ShareDialog({
   const discordOverLimit =
     clip.file_size_bytes > (Number(discordMaxMb) || 10) * 1024 * 1024;
   const btn =
-    "inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50";
+    "inline-flex items-center justify-center gap-1.5 rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50";
 
   return (
     <Modal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-        <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/80 p-4">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-card border border-line bg-panel p-4 shadow-panel">
         <div className="mb-3 flex items-center">
-          <h3 className="text-sm font-semibold text-slate-100">{t("share.title")}</h3>
+          <h3 className="text-sm font-semibold text-ink">{t("share.title")}</h3>
           <button
             onClick={onClose}
-            className="ml-auto rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+            className="ml-auto rounded-control p-1.5 text-ink-faint transition hover:bg-raised hover:text-ink"
           >
             <X size={15} />
           </button>
         </div>
 
-        <p className="mb-3 truncate font-mono text-xs text-slate-500" title={clip.file_name}>
+        <p className="mb-3 truncate font-mono text-xs text-ink-faint" title={clip.file_name}>
           {clip.file_name}
         </p>
 
         {uploaded ? (
           <div className="space-y-2">
-            <p className="flex items-center gap-1.5 text-xs text-emerald-300/90">
+            <p className="flex items-center gap-1.5 text-xs text-jade-bright">
               <CloudUpload size={13} />
               {cloud ? t("share.in_drive_only") : t("share.uploaded")}
             </p>
@@ -455,7 +455,7 @@ export function ShareDialog({
                   <button
                     onClick={() => void run("replace", { makePublic: !!result?.web_link, deleteLocal: false, replace: true })}
                     disabled={busy !== null}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-200 transition hover:bg-red-500/30 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-control bg-blood/20 px-3 py-1.5 text-xs font-medium text-blood-bright transition hover:bg-blood/30 disabled:opacity-50"
                   >
                     <Trash2 size={13} /> {t("share.replace_confirm")}
                   </button>
@@ -473,12 +473,12 @@ export function ShareDialog({
                 ))}
             </div>
             {!result?.web_link && (
-              <p className="text-[11px] text-slate-500">{t("share.private_note")}</p>
+              <p className="text-[11px] text-ink-faint">{t("share.private_note")}</p>
             )}
           </div>
         ) : (
           <>
-            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-2 text-xs text-slate-300">
+            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-control border border-line bg-void/50 px-3 py-2 text-xs text-ink-soft">
               <input
                 type="checkbox"
                 checked={makePublic}
@@ -487,12 +487,12 @@ export function ShareDialog({
               />
               <span>
                 {t("share.public")}
-                <span className="mt-0.5 block text-slate-500">
+                <span className="mt-0.5 block text-ink-faint">
                   {makePublic ? t("share.public_note") : t("share.private_note")}
                 </span>
               </span>
             </label>
-            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-2 text-xs text-slate-300">
+            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-control border border-line bg-void/50 px-3 py-2 text-xs text-ink-soft">
               <input
                 type="checkbox"
                 checked={deleteLocal}
@@ -501,13 +501,13 @@ export function ShareDialog({
               />
               <span>
                 {t("share.delete_local")}
-                <span className="mt-0.5 block text-slate-500">{t("share.delete_local_note")}</span>
+                <span className="mt-0.5 block text-ink-faint">{t("share.delete_local_note")}</span>
               </span>
             </label>
             <button
               onClick={() => void run("upload", { makePublic, deleteLocal, replace: false })}
               disabled={busy !== null}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100 transition hover:bg-cyan-500/20 disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-2 rounded-control border border-gold/40 bg-sky/10 px-3 py-2 text-sm text-ink transition hover:bg-sky/20 disabled:opacity-50"
             >
               <CloudUpload size={15} />
               {busy === "upload" ? t("share.uploading") : t("share.drive_upload")}
@@ -517,25 +517,25 @@ export function ShareDialog({
 
         {busy === "upload" && (
           <div className="mt-3">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
               <div
-                className="h-full rounded-full bg-cyan-400 transition-all"
+                className="h-full rounded-full bg-gold transition-all"
                 style={{ width: `${pct ?? 5}%` }}
               />
             </div>
-            <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+            <p className="mt-1 text-right font-mono text-[10px] text-ink-faint">
               {pct !== null ? `${pct}%` : "…"}
             </p>
           </div>
         )}
 
         {/* YouTube: upload-only, title + fixed #MoonClip #moonclip tags. */}
-        <div className="mt-4 border-t border-white/10 pt-3">
-          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+        <div className="mt-4 border-t border-line pt-3">
+          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink">
             <SquarePlay size={14} /> {t("youtube.section")}
           </h4>
           {social && !social.google_youtube.configured ? (
-            <p className="text-[11px] text-slate-500">{t("accounts.not_configured")}</p>
+            <p className="text-[11px] text-ink-faint">{t("accounts.not_configured")}</p>
           ) : social && !social.google_youtube.connected ? (
             <button
               onClick={() => void connectYouTube()}
@@ -547,7 +547,7 @@ export function ShareDialog({
             </button>
           ) : ytResult ? (
             <div className="space-y-2">
-              <p className="flex items-center gap-1.5 text-xs text-emerald-300/90">
+              <p className="flex items-center gap-1.5 text-xs text-jade-bright">
                 <CloudUpload size={13} /> {t("youtube.uploaded")}
               </p>
               <div className="flex flex-wrap gap-2">
@@ -562,7 +562,7 @@ export function ShareDialog({
                   <ExternalLink size={13} /> {t("youtube.open")}
                 </button>
               </div>
-              <p className="text-[11px] text-slate-500">{t("youtube.audit_note")}</p>
+              <p className="text-[11px] text-ink-faint">{t("youtube.audit_note")}</p>
             </div>
           ) : social ? (
             <div className="space-y-2">
@@ -571,23 +571,23 @@ export function ShareDialog({
                 onChange={(e) => setYtTitle(e.target.value)}
                 maxLength={100}
                 placeholder={t("youtube.title_ph")}
-                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-cyan-500/50"
+                className="w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-gold/60"
               />
               <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={ytPrivacy}
                   onChange={(e) => setYtPrivacy(e.target.value)}
-                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-cyan-500/50"
+                  className="rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-gold/60"
                 >
                   <option value="private">{t("youtube.private")}</option>
                   <option value="unlisted">{t("youtube.unlisted")}</option>
                   <option value="public">{t("youtube.public")}</option>
                 </select>
-                <span className="font-mono text-[10px] text-slate-500">
+                <span className="font-mono text-[10px] text-ink-faint">
                   #MoonClip #moonclip
                 </span>
               </div>
-              <label className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-400">
+              <label className="flex cursor-pointer items-start gap-2 text-[11px] text-ink-muted">
                 <input
                   type="checkbox"
                   checked={ytConfirmed}
@@ -599,34 +599,34 @@ export function ShareDialog({
               <button
                 onClick={() => void uploadYouTube()}
                 disabled={ytBusy !== null || !ytConfirmed || !ytTitle.trim()}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-100 transition hover:bg-red-500/20 disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-control border border-blood/40 bg-blood/10 px-3 py-2 text-sm text-red-100 transition hover:bg-blood/20 disabled:opacity-50"
               >
                 <SquarePlay size={15} />
                 {ytBusy === "upload" ? t("share.uploading") : t("youtube.upload")}
               </button>
               {ytBusy === "upload" && (
                 <div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
                     <div
-                      className="h-full rounded-full bg-red-400 transition-all"
+                      className="h-full rounded-full bg-blood-bright transition-all"
                       style={{ width: `${ytPct ?? 5}%` }}
                     />
                   </div>
-                  <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+                  <p className="mt-1 text-right font-mono text-[10px] text-ink-faint">
                     {ytPct !== null ? `${ytPct}%` : "…"}
                   </p>
                 </div>
               )}
-              <p className="text-[11px] text-slate-500">{t("youtube.audit_note")}</p>
+              <p className="text-[11px] text-ink-faint">{t("youtube.audit_note")}</p>
             </div>
           ) : null}
-          {ytError && <p className="mt-2 break-all font-mono text-xs text-red-400">{ytError}</p>}
+          {ytError && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{ytError}</p>}
         </div>
 
         {/* Discord: connect your account (pick a channel); over-limit clips
             compress to a 720p copy on the fly. */}
-        <div className="mt-4 border-t border-white/10 pt-3">
-          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+        <div className="mt-4 border-t border-line pt-3">
+          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink">
             <MessageSquare size={14} /> {t("discord.section")}
           </h4>
           {social && !social.discord.connected ? (
@@ -640,10 +640,10 @@ export function ShareDialog({
             </button>
           ) : dcResult ? (
             <div className="space-y-2">
-              <p className="flex min-w-0 items-center gap-1.5 text-xs text-emerald-300/90">
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-jade-bright">
                 <CloudUpload size={13} /> {t("discord.sent")}
                 {dcResult.channel && (
-                  <span className="truncate text-slate-500" title={dcResult.channel}>
+                  <span className="truncate text-ink-faint" title={dcResult.channel}>
                     · {dcResult.channel}
                   </span>
                 )}
@@ -670,10 +670,10 @@ export function ShareDialog({
                 onChange={(e) => setDcTitle(e.target.value)}
                 maxLength={100}
                 placeholder={t("discord.title_ph")}
-                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-indigo-500/50"
+                className="w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-indigo-500/50"
               />
               {discordOverLimit && (
-                <label className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-400">
+                <label className="flex cursor-pointer items-start gap-2 text-[11px] text-ink-muted">
                   <input
                     type="checkbox"
                     checked={dcCompress}
@@ -684,42 +684,42 @@ export function ShareDialog({
                 </label>
               )}
               {discordOverLimit && !dcCompress && (
-                <p className="text-[11px] text-amber-300/80">{t("discord.too_big")}</p>
+                <p className="text-[11px] text-gold-bright/80">{t("discord.too_big")}</p>
               )}
               <button
                 onClick={() => void shareDiscord()}
                 disabled={dcBusy !== null || !dcTitle.trim() || (discordOverLimit && !dcCompress)}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-100 transition hover:bg-indigo-500/20 disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-control border border-aether/40 bg-aether/10 px-3 py-2 text-sm text-ink transition hover:bg-aether/20 disabled:opacity-50"
               >
                 <MessageSquare size={15} />
                 {dcBusy === "upload" ? t("share.uploading") : t("discord.send")}
               </button>
               {dcBusy === "upload" && (
                 <div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
                     <div
                       className="h-full rounded-full bg-indigo-400 transition-all"
                       style={{ width: `${dcPct ?? 5}%` }}
                     />
                   </div>
-                  <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+                  <p className="mt-1 text-right font-mono text-[10px] text-ink-faint">
                     {dcProgress?.phase === "compress" ? `${t("discord.compressing")} · ` : ""}
                     {dcPct !== null ? `${dcPct}%` : "…"}
                   </p>
                 </div>
               )}
               {discordOverLimit && dcCompress && (
-                <p className="text-[11px] text-slate-500">{t("discord.compress_note")}</p>
+                <p className="text-[11px] text-ink-faint">{t("discord.compress_note")}</p>
               )}
             </div>
           ) : null}
-          {dcError && <p className="mt-2 break-all font-mono text-xs text-red-400">{dcError}</p>}
+          {dcError && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{dcError}</p>}
         </div>
 
         {/* TikTok: Direct Post; privacy options come from creator_info and
             there is deliberately no default value (TikTok UX rule). */}
-        <div className="mt-4 border-t border-white/10 pt-3">
-          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+        <div className="mt-4 border-t border-line pt-3">
+          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink">
             <Music2 size={14} /> {t("tiktok.section")}
           </h4>
           {social && !social.tiktok.connected ? (
@@ -733,17 +733,17 @@ export function ShareDialog({
             </button>
           ) : ttResult ? (
             <div className="space-y-1">
-              <p className="flex items-center gap-1.5 text-xs text-emerald-300/90">
+              <p className="flex items-center gap-1.5 text-xs text-jade-bright">
                 <CloudUpload size={13} /> {t("tiktok.published")}
               </p>
-              <p className="text-[11px] text-slate-500">{t("tiktok.note")}</p>
+              <p className="text-[11px] text-ink-faint">{t("tiktok.note")}</p>
             </div>
           ) : social ? (
             <div className="space-y-2">
               {ttCreator && (
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-ink-muted">
                   {t("tiktok.creator")}{" "}
-                  <span className="text-slate-200">
+                  <span className="text-ink">
                     {ttCreator.nickname || `@${ttCreator.username}`}
                   </span>
                 </p>
@@ -753,12 +753,12 @@ export function ShareDialog({
                 onChange={(e) => setTtTitle(e.target.value)}
                 maxLength={2200}
                 placeholder={t("tiktok.title_ph")}
-                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-slate-400/50"
+                className="w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-slate-400/50"
               />
               <select
                 value={ttPrivacy}
                 onChange={(e) => setTtPrivacy(e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-slate-400/50"
+                className="w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-slate-400/50"
               >
                 <option value="">{t("tiktok.privacy_ph")}</option>
                 {(ttCreator?.privacy_level_options ?? []).map((option) => (
@@ -770,31 +770,31 @@ export function ShareDialog({
               <button
                 onClick={() => void publishTikTok()}
                 disabled={ttBusy !== null || !ttTitle.trim() || !ttPrivacy || !ttCreator}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300/20 bg-slate-100/10 px-3 py-2 text-sm text-slate-100 transition hover:bg-slate-100/20 disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-control border border-slate-300/20 bg-slate-100/10 px-3 py-2 text-sm text-ink transition hover:bg-slate-100/20 disabled:opacity-50"
               >
                 <Music2 size={15} />
                 {ttBusy === "publish" ? t("share.uploading") : t("tiktok.publish")}
               </button>
               {ttBusy === "publish" && (
                 <div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
                     <div
                       className="h-full rounded-full bg-slate-200 transition-all"
                       style={{ width: `${ttPct ?? 5}%` }}
                     />
                   </div>
-                  <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+                  <p className="mt-1 text-right font-mono text-[10px] text-ink-faint">
                     {ttPct !== null ? `${ttPct}%` : "…"}
                   </p>
                 </div>
               )}
-              <p className="text-[11px] text-slate-500">{t("tiktok.note")}</p>
+              <p className="text-[11px] text-ink-faint">{t("tiktok.note")}</p>
             </div>
           ) : null}
-          {ttError && <p className="mt-2 break-all font-mono text-xs text-red-400">{ttError}</p>}
+          {ttError && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{ttError}</p>}
         </div>
 
-        {error && <p className="mt-3 break-all font-mono text-xs text-red-400">{error}</p>}
+        {error && <p className="mt-3 break-all font-mono text-xs text-blood-bright">{error}</p>}
       </div>
     </div>
     </Modal>

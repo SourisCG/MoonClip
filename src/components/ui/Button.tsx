@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import clsx from "clsx";
 
-type Variant = "primary" | "paper" | "ghost" | "subtle" | "danger";
+type Variant = "primary" | "secondary" | "ghost" | "danger" | "paper";
 type Size = "sm" | "md" | "icon" | "icon-sm";
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -11,28 +11,29 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants: Record<Variant, string> = {
-  // Blood stamp: the primary action (matches the logo red).
+  // Red = the logo action color.
   primary:
-    "border-blood bg-blood text-paper hover:bg-blood-bright hover:border-ink hover:-translate-x-px hover:-translate-y-px hover:shadow-stamp",
-  paper:
-    "border-ink bg-paper text-ink hover:bg-paper-soft hover:-translate-x-px hover:-translate-y-px hover:shadow-stamp",
+    "border-transparent bg-brand text-white hover:bg-brand-bright active:bg-brand",
+  secondary:
+    "border-line bg-raised text-ink-soft hover:border-line-strong hover:bg-[#26262a] hover:text-ink",
   ghost:
-    "border-dashed border-ink-faint/70 bg-transparent text-ink-muted hover:bg-paper/5 hover:text-ink",
-  subtle:
-    "border-line bg-raised/70 text-ink-soft hover:border-gold/40 hover:text-ink",
+    "border-transparent bg-transparent text-ink-muted hover:bg-raised hover:text-ink",
   danger:
-    "border-blood/50 bg-blood/10 text-blood-bright hover:bg-blood/20 hover:border-blood",
+    "border-brand/50 bg-transparent text-brand-bright hover:bg-brand/15 hover:border-brand",
+  // Compatibility alias (old panels): same as secondary.
+  paper:
+    "border-line bg-raised text-ink-soft hover:border-line-strong hover:bg-[#26262a] hover:text-ink",
 };
 
 const sizes: Record<Size, string> = {
-  sm: "px-2.5 py-1 text-xs gap-1.5",
-  md: "px-3.5 py-1.5 text-sm gap-2",
-  icon: "p-2",
-  "icon-sm": "p-1.5",
+  sm: "h-8 px-3 text-xs gap-1.5",
+  md: "h-9 px-3.5 text-sm gap-2",
+  icon: "h-9 w-9",
+  "icon-sm": "h-7 w-7",
 };
 
 export function Button({
-  variant = "subtle",
+  variant = "secondary",
   size = "sm",
   className,
   children,
@@ -43,8 +44,8 @@ export function Button({
     <button
       type={type}
       className={clsx(
-        "inline-flex items-center justify-center rounded-stamp border font-medium tracking-wide transition-all duration-150",
-        "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none",
+        "inline-flex items-center justify-center rounded-control font-medium transition-colors duration-150",
+        "disabled:cursor-not-allowed disabled:opacity-40",
         variants[variant],
         sizes[size],
         className,

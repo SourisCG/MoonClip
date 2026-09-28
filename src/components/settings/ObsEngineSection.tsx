@@ -44,25 +44,25 @@ export function ObsEngineSection() {
   };
 
   const row = "flex flex-wrap items-center justify-between gap-2";
-  const label = "text-sm text-slate-300";
-  const value = "min-w-0 break-all font-mono text-xs text-slate-400";
+  const label = "text-sm text-ink-soft";
+  const value = "min-w-0 break-all font-mono text-xs text-ink-muted";
 
-  if (error && !info) return <p className="font-mono text-xs text-red-400">{error}</p>;
-  if (!info) return <p className="text-sm text-slate-400">{t("common.loading")}</p>;
+  if (error && !info) return <p className="font-mono text-xs text-blood-bright">{error}</p>;
+  if (!info) return <p className="text-sm text-ink-muted">{t("common.loading")}</p>;
 
   const missing = !info.present;
 
   return (
-    <div className="space-y-3 rounded-xl border border-white/5 bg-black/30 px-3 py-3">
+    <div className="space-y-3 rounded-xl border border-line bg-void/50 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h4 className="text-sm font-semibold text-slate-200">{t("obs.title")}</h4>
-          <p className="text-[11px] text-slate-500">{t("obs.subtitle")}</p>
+          <h4 className="text-sm font-semibold text-ink">{t("obs.title")}</h4>
+          <p className="text-[11px] text-ink-faint">{t("obs.subtitle")}</p>
         </div>
         <button
           onClick={() => void repair()}
           disabled={busy}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50"
         >
           <Wrench size={13} />
           {busy ? t("obs.repairing") : t("obs.repair")}
@@ -71,8 +71,8 @@ export function ObsEngineSection() {
 
       {missing ? (
         <div className="space-y-1">
-          <p className="text-xs text-amber-400">{t("obs.missing")}</p>
-          <p className="text-[11px] text-slate-500">{t("obs.missing_hint", { source: info.source })}</p>
+          <p className="text-xs text-gold-bright">{t("obs.missing")}</p>
+          <p className="text-[11px] text-ink-faint">{t("obs.missing_hint", { source: info.source })}</p>
         </div>
       ) : (
         <div className="space-y-1.5">
@@ -97,26 +97,26 @@ export function ObsEngineSection() {
         </div>
       )}
 
-      {repaired && <p className="text-xs text-cyan-300">{t("obs.repaired")}</p>}
+      {repaired && <p className="text-xs text-sky-bright">{t("obs.repaired")}</p>}
 
-      <p className="flex items-center gap-1.5 text-[11px] text-emerald-300/90">
+      <p className="flex items-center gap-1.5 text-[11px] text-jade-bright">
         <ShieldCheck size={13} /> {t("obs.anti_cheat")}
       </p>
 
       <button
         onClick={() => setShowLogs((v) => !v)}
-        className="inline-flex items-center gap-1 text-[11px] text-slate-500 transition hover:text-slate-300"
+        className="inline-flex items-center gap-1 text-[11px] text-ink-faint transition hover:text-ink-soft"
       >
         {showLogs ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         {t("obs.logs")}
       </button>
       {showLogs && (
-        <pre className="max-h-40 overflow-auto rounded-lg bg-black/50 p-2 font-mono text-[10px] leading-relaxed text-slate-500">
+        <pre className="max-h-40 overflow-auto rounded-control bg-black/50 p-2 font-mono text-[10px] leading-relaxed text-ink-faint">
           {info.events_tail.length > 0 ? info.events_tail.slice(-12).join("\n") : t("obs.no_logs")}
         </pre>
       )}
 
-      {error && <p className="break-all font-mono text-xs text-red-400">{error}</p>}
+      {error && <p className="break-all font-mono text-xs text-blood-bright">{error}</p>}
     </div>
   );
 }

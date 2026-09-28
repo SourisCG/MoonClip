@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
-import { Tag } from "./Tag";
 
-/** Panel surface for the app: warm dark, hairline border, soft shadow. */
+/** Flat GitHub-like surface (no nested "cards inside cards"). */
 export function Card({
   className,
   children,
@@ -11,34 +10,28 @@ export function Card({
   children: ReactNode;
 }) {
   return (
-    <div
-      className={clsx(
-        "rounded-card border border-line bg-panel/70 shadow-panel backdrop-blur-xl",
-        className,
-      )}
-    >
+    <div className={clsx("rounded-card border border-line bg-surface/80", className)}>
       {children}
     </div>
   );
 }
 
-/** Section header with an optional stamped page tag. */
 export function CardHeader({
-  tag,
   title,
+  hint,
   actions,
   className,
 }: {
-  tag?: ReactNode;
   title: ReactNode;
+  hint?: ReactNode;
   actions?: ReactNode;
   className?: string;
 }) {
   return (
     <div className={clsx("flex items-center justify-between gap-3", className)}>
       <div className="min-w-0">
-        {tag && <Tag tone="gold">{tag}</Tag>}
-        <h3 className="truncate font-display text-base font-semibold text-ink">{title}</h3>
+        <h3 className="truncate text-sm font-semibold text-ink">{title}</h3>
+        {hint && <p className="mt-0.5 text-xs text-ink-muted">{hint}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </div>

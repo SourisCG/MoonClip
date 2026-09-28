@@ -4,57 +4,58 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Fanzine-dark surfaces (warm, paper-adjacent blacks).
-        void: "#15110d",
-        panel: "#1c1814",
-        raised: "#221d18",
-        line: "#2a221b",
-        // Text scale (aged paper ink).
+        // Medal-like layered blacks (the shell lives here).
+        base: "#000000",
+        surface: "#161617",
+        raised: "#1f1f20",
+        line: "rgba(255, 255, 255, 0.08)",
+        "line-strong": "rgba(255, 255, 255, 0.16)",
+        // Text scale (measured: 21:1 / 9.9:1 / 5.3:1 on surface; faint is decorative only).
         ink: {
-          DEFAULT: "#efe6d2",
-          soft: "#c9bda6",
-          muted: "#a8967c",
-          faint: "#6a5d4b",
-          dark: "#1a1410",
+          DEFAULT: "#ffffff",
+          soft: "#b3b1b6",
+          muted: "#8b8b90",
+          faint: "#6e6e73",
         },
-        // Literal paper for stamps/badges/empty states.
-        paper: {
-          DEFAULT: "#efe6d2",
-          dark: "#d8cdb5",
-          soft: "#f7f1e1",
-        },
-        // Accents (logo red -> logo blue, plus jade/gold/lava/aether).
-        blood: { DEFAULT: "#c92a2a", bright: "#e04040" },
-        gold: { DEFAULT: "#d8a44a", bright: "#e8bc63" },
-        jade: { DEFAULT: "#2f7a5e", bright: "#3c9a76" },
-        aether: { DEFAULT: "#6e58a6", bright: "#8a72c4" },
-        lava: { DEFAULT: "#e87329", bright: "#ff8a3d" },
+        // Logo identity: red = actions, blue = links/focus (Aero sky).
+        brand: { DEFAULT: "#ef4444", bright: "#f87171" },
+        link: { DEFAULT: "#3b82f6", bright: "#60a5fa" },
+        ok: { DEFAULT: "#3fb950", bright: "#56d364" },
+        warn: { DEFAULT: "#d29922", bright: "#e8b64a" },
+        aqua: { DEFAULT: "#39c5cf", bright: "#5ad4dd" },
+        edit: { DEFAULT: "#a371f7", bright: "#c297ff" },
+        // v1 aliases: kept so untouched panels stay readable until step 2.
+        void: "#000000",
+        panel: "#161617",
+        blood: { DEFAULT: "#ef4444", bright: "#f87171" },
+        gold: { DEFAULT: "#d29922", bright: "#e8b64a" },
+        jade: { DEFAULT: "#3fb950", bright: "#56d364" },
+        aether: { DEFAULT: "#a371f7", bright: "#c297ff" },
+        lava: { DEFAULT: "#f0883e", bright: "#ffa657" },
         sky: { DEFAULT: "#3b82f6", bright: "#60a5fa" },
-        // Transition aliases: removed once every screen is migrated.
+        paper: { DEFAULT: "#1f1f20", dark: "#26262a", soft: "#2c2c30" },
         moonclip: {
-          void: "#15110d",
-          panel: "#1c1814",
-          card: "#221d18",
+          void: "#000000",
+          panel: "#161617",
+          card: "#1f1f20",
           lunar: "#3b82f6",
-          astral: "#6e58a6",
-          starlight: "#efe6d2",
+          astral: "#a371f7",
+          starlight: "#ffffff",
         },
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
-        display: ["Fraunces", "Georgia", "Times New Roman", "serif"],
         mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "Consolas", "monospace"],
       },
       boxShadow: {
-        stamp: "2px 2px 0 rgba(26, 20, 16, 0.9)",
-        "stamp-blood": "2px 2px 0 rgba(201, 42, 42, 0.85)",
-        panel: "0 10px 30px rgba(0, 0, 0, 0.45)",
-        "glow-blood": "0 0 18px rgba(201, 42, 42, 0.25)",
-        "glow-sky": "0 0 18px rgba(59, 130, 246, 0.28)",
+        panel: "0 12px 32px rgba(0, 0, 0, 0.5)",
+        pop: "0 8px 24px rgba(0, 0, 0, 0.55)",
+        "ring-brand": "0 0 0 1px rgba(239, 68, 68, 0.6)",
+        "ring-link": "0 0 0 1px rgba(59, 130, 246, 0.7)",
       },
       borderRadius: {
         card: "10px",
-        stamp: "4px",
+        control: "8px",
       },
     },
   },

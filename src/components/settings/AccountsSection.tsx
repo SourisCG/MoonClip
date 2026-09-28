@@ -36,19 +36,19 @@ function ProviderRow({
 }) {
   const { t } = useTranslation();
   const row =
-    "flex flex-col items-start gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
+    "flex flex-col items-start gap-2 rounded-xl border border-line bg-void/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
   const btn =
-    "rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50";
+    "rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50";
   return (
     <div className={row}>
-      <span className="inline-flex items-center gap-2 text-sm text-slate-300">
+      <span className="inline-flex items-center gap-2 text-sm text-ink-soft">
         {icon} {label}
       </span>
       <div className="flex min-w-0 items-center gap-2">
         {status?.connected ? (
           <>
             <span
-              className="max-w-[16rem] truncate text-xs text-emerald-300/90"
+              className="max-w-[16rem] truncate text-xs text-jade-bright"
               title={status.account}
             >
               {status.account || t("accounts.connected")}
@@ -62,7 +62,7 @@ function ProviderRow({
             {connecting ? t("accounts.connecting") : t("accounts.connect")}
           </button>
         ) : (
-          <span className="text-xs text-slate-500">{t("accounts.not_configured")}</span>
+          <span className="text-xs text-ink-faint">{t("accounts.not_configured")}</span>
         )}
       </div>
     </div>
@@ -145,18 +145,18 @@ export function AccountsSection() {
         onDisconnect={() => void run("google_drive", "disconnect_google_drive")}
       />
       {status?.google_drive.connected && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/20 px-3 py-2 sm:px-4">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-void/40 px-3 py-2 sm:px-4">
           <button
             onClick={() => void restoreDrive()}
             disabled={busy !== null}
-            className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50"
+            className="rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50"
           >
             <span className="inline-flex items-center gap-1.5">
               <RefreshCw size={12} className={busy === "drive-restore" ? "animate-spin" : ""} />
               {busy === "drive-restore" ? t("accounts.restoring") : t("accounts.restore")}
             </span>
           </button>
-          <span className="text-[11px] text-slate-500">
+          <span className="text-[11px] text-ink-faint">
             {restoreMsg ?? t("accounts.restore_hint")}
           </span>
         </div>
@@ -189,12 +189,12 @@ export function AccountsSection() {
         onDisconnect={() => void run("tiktok", "disconnect_tiktok")}
       />
       {status?.discord.connected && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/20 px-3 py-2 sm:px-4">
-          <span className="text-xs text-slate-400">{t("accounts.discord_limit")}</span>
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-void/40 px-3 py-2 sm:px-4">
+          <span className="text-xs text-ink-muted">{t("accounts.discord_limit")}</span>
           <select
             value={discordMaxMb}
             onChange={(e) => changeDiscordLimit(e.target.value)}
-            className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 outline-none focus:border-cyan-500/50"
+            className="rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-gold/60"
           >
             {["10", "25", "50", "100"].map((mb) => (
               <option key={mb} value={mb}>
@@ -202,10 +202,10 @@ export function AccountsSection() {
               </option>
             ))}
           </select>
-          <span className="text-[11px] text-slate-500">{t("accounts.discord_limit_hint")}</span>
+          <span className="text-[11px] text-ink-faint">{t("accounts.discord_limit_hint")}</span>
         </div>
       )}
-      {error && <p className="break-all font-mono text-xs text-red-400">{error}</p>}
+      {error && <p className="break-all font-mono text-xs text-blood-bright">{error}</p>}
     </div>
   );
 }

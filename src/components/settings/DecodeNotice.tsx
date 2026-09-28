@@ -33,13 +33,13 @@ export function DecodeNotice() {
   if (!status) return null;
 
   const row =
-    "flex flex-col items-start gap-1.5 rounded-xl border border-white/5 bg-black/30 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
+    "flex flex-col items-start gap-1.5 rounded-xl border border-line bg-void/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
 
   if (status.hardware) {
     return (
       <div className={row}>
-        <span className="text-sm text-slate-300">{t("decode.title")}</span>
-        <span className="font-mono text-xs text-emerald-300">
+        <span className="text-sm text-ink-soft">{t("decode.title")}</span>
+        <span className="font-mono text-xs text-jade-bright">
           {t("decode.hardware")}
           {status.driver ? ` · ${status.driver}` : ""}
         </span>
@@ -49,13 +49,13 @@ export function DecodeNotice() {
 
   return (
     <div className={row}>
-      <span className="text-sm text-slate-300">{t("decode.title")}</span>
+      <span className="text-sm text-ink-soft">{t("decode.title")}</span>
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono text-xs text-amber-300">
+        <span className="font-mono text-xs text-gold-bright">
           {t("decode.software")}
         </span>
         {status.missing_package && (
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-ink-muted">
             {t("decode.install")}{" "}
             <code className="font-mono text-amber-200">
               {status.missing_package}
@@ -64,7 +64,7 @@ export function DecodeNotice() {
         )}
         <button
           onClick={() => void openUrl(DOC_URL).catch(() => {})}
-          className="text-xs text-cyan-300 underline decoration-cyan-500/40 transition hover:text-cyan-200"
+          className="text-xs text-sky-bright underline decoration-link/40 transition hover:text-ink"
         >
           {t("decode.doc")}
         </button>

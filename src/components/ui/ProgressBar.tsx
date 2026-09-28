@@ -1,18 +1,17 @@
 import clsx from "clsx";
 
-type Tone = "blood" | "gold" | "jade" | "sky";
+type Tone = "brand" | "link" | "ok" | "warn";
 
 const fills: Record<Tone, string> = {
-  blood: "bg-[repeating-linear-gradient(45deg,#c92a2a_0_6px,#e04040_6px_12px)]",
-  gold: "bg-[repeating-linear-gradient(45deg,#b58a3c_0_6px,#e8bc63_6px_12px)]",
-  jade: "bg-jade",
-  sky: "bg-sky",
+  brand: "bg-brand",
+  link: "bg-link",
+  ok: "bg-ok",
+  warn: "bg-warn",
 };
 
-/** Fanzine progress: ink-framed track with a hatched fill. */
 export function ProgressBar({
   percent,
-  tone = "blood",
+  tone = "brand",
   className,
 }: {
   percent: number | null;
@@ -23,7 +22,7 @@ export function ProgressBar({
   return (
     <div
       className={clsx(
-        "h-2 w-full overflow-hidden rounded-[2px] border border-ink-faint/50 bg-void/70",
+        "h-1.5 w-full overflow-hidden rounded-full bg-raised",
         className,
       )}
       role="progressbar"
@@ -32,7 +31,7 @@ export function ProgressBar({
       aria-valuemax={100}
     >
       <div
-        className={clsx("h-full transition-[width] duration-200", fills[tone])}
+        className={clsx("h-full rounded-full transition-[width] duration-200", fills[tone])}
         style={{ width: `${clamped ?? 5}%` }}
       />
     </div>

@@ -5,23 +5,24 @@ import type {
 } from "react";
 import clsx from "clsx";
 
-const field =
-  "w-full rounded-stamp border border-line bg-void/70 px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-faint outline-none transition-colors focus:border-gold/60 focus:bg-void";
+export const fieldClass =
+  "w-full rounded-control border border-line bg-black/60 px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-faint outline-none transition-colors focus:border-link";
 
 export function Input({
   className,
   ...rest
 }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={clsx(field, className)} {...rest} />;
+  return <input className={clsx(fieldClass, className)} {...rest} />;
 }
 
+/** Native fallback select (custom Select lives in ./Select.tsx). */
 export function Select({
   className,
   children,
   ...rest
 }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select className={clsx(field, "cursor-pointer", className)} {...rest}>
+    <select className={clsx(fieldClass, "cursor-pointer", className)} {...rest}>
       {children}
     </select>
   );
@@ -41,16 +42,14 @@ export function Field({
 }) {
   return (
     <label className={clsx("block", className)}>
-      <span className="mb-1 block text-xs font-medium uppercase tracking-[0.14em] text-ink-muted">
-        {label}
-      </span>
+      <span className="mb-1.5 block text-xs font-medium text-ink-muted">{label}</span>
       {children}
       {hint && <span className="mt-1 block text-[11px] text-ink-faint">{hint}</span>}
     </label>
   );
 }
 
-/** Fanzine checkbox: paper square with an ink check. */
+/** Checkbox drawn by us so both webviews match. */
 export function Checkbox({
   className,
   ...rest
@@ -59,8 +58,8 @@ export function Checkbox({
     <input
       type="checkbox"
       className={clsx(
-        "mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer appearance-none rounded-[3px] border border-ink-faint/80 bg-void/60 transition-colors",
-        "checked:border-gold checked:bg-gold checked:bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6 9.5 3.6' fill='none' stroke='%231a1410' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")] checked:bg-[length:10px_10px] checked:bg-center checked:bg-no-repeat",
+        "mt-0.5 h-4 w-4 shrink-0 cursor-pointer appearance-none rounded-[4px] border border-line-strong bg-black/60 transition-colors",
+        "checked:border-link checked:bg-link checked:bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6 9.5 3.6' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")] checked:bg-[length:10px_10px] checked:bg-center checked:bg-no-repeat",
         className,
       )}
       {...rest}

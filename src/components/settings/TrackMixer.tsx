@@ -66,12 +66,12 @@ export function TrackMixer() {
     <div className="flex items-center gap-2">
       <button
         onClick={() => void commitMute(track, !muted)}
-        className={`rounded-md p-1 transition ${muted ? "text-red-400" : "text-slate-400 hover:text-slate-200"}`}
+        className={`rounded-control p-1 transition ${muted ? "text-blood-bright" : "text-ink-muted hover:text-ink"}`}
         title={track === "game" ? t("rec.game") : t("rec.mic")}
       >
         {muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
       </button>
-      <span className="w-8 text-[11px] text-slate-400">
+      <span className="w-8 text-[11px] text-ink-muted">
         {track === "game" ? t("rec.game") : t("rec.mic")}
       </span>
       <input
@@ -87,20 +87,20 @@ export function TrackMixer() {
         onPointerUp={(e) => void commitGain(track, Number((e.target as HTMLInputElement).value))}
         onKeyUp={(e) => void commitGain(track, Number((e.target as HTMLInputElement).value))}
         onBlur={(e) => void commitGain(track, Number((e.target as HTMLInputElement).value))}
-        className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-cyan-400 disabled:opacity-40"
+        className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-raised accent-gold disabled:opacity-40"
       />
-      <span className="w-9 text-right font-mono text-[11px] text-slate-300">
+      <span className="w-9 text-right font-mono text-[11px] text-ink-soft">
         {applying === track ? "…" : `${value}%`}
       </span>
     </div>
   );
 
   return (
-    <div className="space-y-1.5 rounded-xl border border-white/5 bg-black/30 p-2.5">
+    <div className="space-y-1.5 rounded-xl border border-line bg-void/50 p-2.5">
       {row("game", gains.game, gains.mute_game)}
       {row("mic", gains.mic, gains.mute_mic)}
-      <p className="px-1 pt-0.5 text-[10px] text-slate-600">{t("audio.gain_live")}</p>
-      {error && <p className="break-all px-1 font-mono text-[11px] text-red-400">{error}</p>}
+      <p className="px-1 pt-0.5 text-[10px] text-ink-faint">{t("audio.gain_live")}</p>
+      {error && <p className="break-all px-1 font-mono text-[11px] text-blood-bright">{error}</p>}
     </div>
   );
 }

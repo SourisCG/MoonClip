@@ -1,20 +1,41 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
 
-type Tone = "neutral" | "gold" | "blood" | "jade" | "aether" | "lava" | "sky" | "paper";
+type Tone =
+  | "neutral"
+  | "brand"
+  | "link"
+  | "ok"
+  | "warn"
+  | "aqua"
+  | "edit"
+  | "gold"
+  | "blood"
+  | "jade"
+  | "aether"
+  | "lava"
+  | "sky"
+  | "paper";
 
 const tones: Record<Tone, string> = {
-  neutral: "border-ink-faint/50 bg-void/60 text-ink-muted",
-  gold: "border-gold/60 bg-gold/10 text-gold-bright",
-  blood: "border-blood/60 bg-blood/10 text-blood-bright",
-  jade: "border-jade/60 bg-jade/10 text-jade-bright",
-  aether: "border-aether/60 bg-aether/10 text-aether-bright",
-  lava: "border-lava/60 bg-lava/10 text-lava-bright",
-  sky: "border-sky/60 bg-sky/10 text-sky-bright",
-  paper: "border-ink bg-paper text-ink",
+  neutral: "border-line bg-raised text-ink-soft",
+  brand: "border-brand/50 bg-brand/15 text-brand-bright",
+  link: "border-link/50 bg-link/15 text-link-bright",
+  ok: "border-ok/50 bg-ok/15 text-ok-bright",
+  warn: "border-warn/50 bg-warn/15 text-warn-bright",
+  aqua: "border-aqua/50 bg-aqua/15 text-aqua-bright",
+  edit: "border-edit/50 bg-edit/15 text-edit-bright",
+  // v1 aliases
+  gold: "border-warn/50 bg-warn/15 text-warn-bright",
+  blood: "border-brand/50 bg-brand/15 text-brand-bright",
+  jade: "border-ok/50 bg-ok/15 text-ok-bright",
+  aether: "border-edit/50 bg-edit/15 text-edit-bright",
+  lava: "border-warn/50 bg-warn/15 text-warn-bright",
+  sky: "border-link/50 bg-link/15 text-link-bright",
+  paper: "border-line bg-raised text-ink-soft",
 };
 
-/** Stamped micro-label (uppercase mono), the fanzine badge. */
+/** Compact uppercase mono chip; the only "stamp" detail that stays. */
 export function Tag({
   tone = "neutral",
   className,
@@ -27,7 +48,7 @@ export function Tag({
   return (
     <span
       className={clsx(
-        "inline-flex items-center gap-1 rounded-stamp border px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-[0.16em]",
+        "inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 font-mono text-[10px] uppercase leading-none tracking-[0.14em]",
         tones[tone],
         className,
       )}

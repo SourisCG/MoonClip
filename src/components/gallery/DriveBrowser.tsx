@@ -105,23 +105,23 @@ export function DriveBrowser({
 
   return (
     <Modal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-        <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/80 p-4">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-card border border-line bg-panel p-4 shadow-panel">
         <div className="mb-2 flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-slate-100">{t("drive.title")}</h3>
+          <h3 className="text-sm font-semibold text-ink">{t("drive.title")}</h3>
           <button
             onClick={onClose}
-            className="ml-auto rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+            className="ml-auto rounded-control p-1.5 text-ink-faint transition hover:bg-raised hover:text-ink"
           >
             <X size={15} />
           </button>
         </div>
 
-        <div className="mb-2 flex items-center gap-1 text-xs text-slate-500">
+        <div className="mb-2 flex items-center gap-1 text-xs text-ink-faint">
           <button
             onClick={goBack}
             disabled={path.length === 0}
-            className="rounded p-1 transition hover:bg-white/10 hover:text-slate-200 disabled:opacity-30"
+            className="rounded p-1 transition hover:bg-raised hover:text-ink disabled:opacity-30"
           >
             <ChevronLeft size={14} />
           </button>
@@ -133,39 +133,39 @@ export function DriveBrowser({
 
         <div className="max-h-[50vh] space-y-1 overflow-y-auto pr-1">
           {busy && (
-            <p className="flex items-center gap-2 py-4 text-xs text-slate-500">
+            <p className="flex items-center gap-2 py-4 text-xs text-ink-faint">
               <Loader2 size={13} className="animate-spin" /> {t("drive.loading")}
             </p>
           )}
           {!busy && entries.length === 0 && !error && (
-            <p className="py-4 text-xs text-slate-500">{t("drive.empty")}</p>
+            <p className="py-4 text-xs text-ink-faint">{t("drive.empty")}</p>
           )}
           {entries.map((entry) => (
             <div
               key={entry.id}
-              className="flex items-center gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-1.5 text-xs text-slate-200"
+              className="flex items-center gap-2 rounded-control border border-line bg-void/50 px-3 py-1.5 text-xs text-ink"
             >
               {entry.is_folder ? (
                 <button
                   onClick={() => openFolder(entry)}
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left transition hover:text-cyan-200"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left transition hover:text-ink"
                 >
-                  <Folder size={13} className="shrink-0 text-cyan-300" />
+                  <Folder size={13} className="shrink-0 text-sky-bright" />
                   <span className="truncate">{entry.name}</span>
                 </button>
               ) : (
                 <>
-                  <Video size={13} className="shrink-0 text-slate-500" />
+                  <Video size={13} className="shrink-0 text-ink-faint" />
                   <span className="min-w-0 flex-1 truncate" title={entry.name}>
                     {entry.name}
                   </span>
-                  <span className="shrink-0 font-mono text-[10px] text-slate-500">
+                  <span className="shrink-0 font-mono text-[10px] text-ink-faint">
                     {fmtSize(entry.size)}
                   </span>
                   <button
                     onClick={() => void download(entry)}
                     disabled={downloading !== null}
-                    className="shrink-0 rounded-md border border-white/10 bg-white/5 p-1 text-slate-300 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50"
+                    className="shrink-0 rounded-control border border-line bg-raised/60 p-1 text-ink-soft transition hover:border-gold/50 hover:text-ink disabled:opacity-50"
                     title={t("drive.download")}
                   >
                     {downloading === entry.id ? (
@@ -182,18 +182,18 @@ export function DriveBrowser({
 
         {downloading && (
           <div className="mt-2">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
               <div
-                className="h-full rounded-full bg-cyan-400 transition-all"
+                className="h-full rounded-full bg-gold transition-all"
                 style={{ width: `${pct ?? 5}%` }}
               />
             </div>
-            <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+            <p className="mt-1 text-right font-mono text-[10px] text-ink-faint">
               {pct !== null ? `${pct}%` : t("drive.downloading")}
             </p>
           </div>
         )}
-        {error && <p className="mt-2 break-all font-mono text-xs text-red-400">{error}</p>}
+        {error && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{error}</p>}
       </div>
     </div>
     </Modal>

@@ -43,52 +43,52 @@ export function AppManager() {
     }
   };
 
-  if (loading) return <p className="text-sm text-slate-400">{t("common.loading")}</p>;
-  if (error) return <p className="text-sm text-red-400">{error}</p>;
+  if (loading) return <p className="text-sm text-ink-muted">{t("common.loading")}</p>;
+  if (error) return <p className="text-sm text-blood-bright">{error}</p>;
 
   return (
     <div className="max-w-2xl space-y-4">
       <button
         onClick={() => void runRegister()}
         disabled={busy !== null}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-500/15 px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-cyan-100 transition hover:bg-cyan-500/25 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-control border border-line bg-raised px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-ink transition hover:bg-link/25 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
       >
         {busy === "register" ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
         {t("games.register_game")}
       </button>
-      <p className="text-xs text-slate-500">{t("games.register_hint")}</p>
+      <p className="text-xs text-ink-faint">{t("games.register_hint")}</p>
 
       {busy !== null && (
-        <div className="flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2.5 text-sm text-cyan-100">
+        <div className="flex items-center gap-2 rounded-xl border border-gold/40 bg-sky/10 px-3 py-2.5 text-sm text-ink">
           <Loader2 size={15} className="shrink-0 animate-spin" />
           <span>{t("games.picking")}</span>
         </div>
       )}
-      {formError && <p className="break-words font-mono text-xs text-red-400">{formError}</p>}
+      {formError && <p className="break-words font-mono text-xs text-blood-bright">{formError}</p>}
 
       <div>
-        <h4 className="mb-2 text-sm font-semibold text-slate-200">
+        <h4 className="mb-2 text-sm font-semibold text-ink">
           {t("games.registered_title")}
         </h4>
         {inputs.length === 0 ? (
-          <p className="text-sm text-slate-500">{t("games.empty")}</p>
+          <p className="text-sm text-ink-faint">{t("games.empty")}</p>
         ) : (
           <ul className="space-y-2">
             {inputs.map((g) => (
               <li
                 key={g.id}
-                className="flex flex-col items-start gap-2 rounded-xl border border-white/5 bg-black/30 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4"
+                className="flex flex-col items-start gap-2 rounded-xl border border-line bg-void/50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4"
               >
                 <div className="flex w-full min-w-0 items-center gap-2.5 sm:w-auto">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-cyan-200">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-raised text-ink">
                     <Gamepad2 size={15} />
                   </span>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-slate-200">
+                    <p className="truncate text-sm font-medium text-ink">
                       {g.display_name}
                     </p>
                     {!g.window_title && (
-                      <p className="text-[11px] text-amber-300/80">
+                      <p className="text-[11px] text-gold-bright/80">
                         {t("games.no_identity")}
                       </p>
                     )}
@@ -99,7 +99,7 @@ export function AppManager() {
                     onClick={() => void runEdit(g.id)}
                     disabled={busy !== null}
                     title={t("games.edit_hint")}
-                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-50 sm:flex-none"
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:bg-raised disabled:cursor-wait disabled:opacity-50 sm:flex-none"
                   >
                     {busy === g.id ? (
                       <Loader2 size={13} className="animate-spin" />
@@ -112,7 +112,7 @@ export function AppManager() {
                     onClick={() => void runDelete(g.id)}
                     disabled={busy !== null}
                     title={t("games.delete")}
-                    className="rounded-lg p-2 text-slate-500 transition hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+                    className="rounded-control p-2 text-ink-faint transition hover:bg-blood/20 hover:text-blood-bright disabled:opacity-50"
                   >
                     <Trash2 size={15} />
                   </button>
