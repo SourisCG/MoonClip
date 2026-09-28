@@ -61,10 +61,10 @@ function SegmentItem({ segment }: { segment: Segment }) {
     >
       <div style={itemContentStyle}>
         <div
-          className={`relative h-full w-full cursor-grab overflow-hidden rounded-md border px-2 text-[11px] leading-[32px] ${
+          className={`relative h-full w-full cursor-grab overflow-hidden rounded-control border px-2 text-[11px] leading-[32px] ${
             selected
-              ? "border-cyan-300/80 bg-cyan-500/25 text-cyan-50"
-              : "border-white/15 bg-white/10 text-slate-200 hover:bg-white/15"
+              ? "border-link/80 bg-link/25 text-ink"
+              : "border-line-strong bg-raised text-ink hover:bg-raised"
           }`}
           title={`${name ?? ""} · ${fmt(segment.inMs)} – ${fmt(segment.outMs)}${
             segment.freezeMs > 0 ? " · freeze" : ""
@@ -72,7 +72,7 @@ function SegmentItem({ segment }: { segment: Segment }) {
         >
           {segment.freezeMs > 0 && segment.freezeAtMs > segment.inMs && (
             <span
-              className="pointer-events-none absolute inset-y-0 border-x border-sky-200/70 bg-sky-300/30"
+              className="pointer-events-none absolute inset-y-0 border-x border-aqua/60 bg-aqua/25"
               style={{
                 left: `${
                   ((Math.min(segment.freezeAtMs, segment.outMs) - segment.inMs) /
@@ -124,10 +124,10 @@ function OverlayItem({ overlay }: { overlay: Overlay }) {
     >
       <div style={itemContentStyle}>
         <div
-          className={`h-full w-full cursor-grab overflow-hidden rounded-md border px-2 text-[11px] leading-[26px] ${
+          className={`h-full w-full cursor-grab overflow-hidden rounded-control border px-2 text-[11px] leading-[26px] ${
             selected
-              ? "border-amber-300/80 bg-amber-400/25 text-amber-50"
-              : "border-amber-400/30 bg-amber-400/10 text-amber-100 hover:bg-amber-400/20"
+              ? "border-warn/80 bg-warn/25 text-ink"
+              : "border-warn/40 bg-warn/10 text-warn-bright hover:bg-warn/20"
           }`}
           title={overlay.text ?? overlay.kind}
         >
@@ -156,14 +156,14 @@ function Lane({
     <div style={{ ...rowWrapperStyle, height }}>
       <div
         style={rowSidebarStyle}
-        className="flex items-center border-r border-white/10 pr-2 text-[11px] text-slate-400"
+        className="flex items-center border-r border-line pr-2 text-[11px] text-ink-muted"
       >
         {label}
       </div>
       <div
         ref={setNodeRef}
         style={rowStyle}
-        className="overflow-hidden border-b border-white/5 bg-black/20"
+        className="overflow-hidden border-b border-line bg-black/40"
       >
         {children}
       </div>
@@ -185,11 +185,11 @@ function Ruler({ visibleEnd }: { visibleEnd: number }) {
   const ticks: number[] = [];
   for (let t = 0; t <= visibleEnd; t += stepMs) ticks.push(t);
   return (
-    <div className="relative h-6 border-b border-white/10">
+    <div className="relative h-6 border-b border-line">
       {ticks.map((t) => (
         <div
           key={t}
-          className="absolute top-0 h-full border-l border-white/10 pl-1 font-mono text-[9px] text-slate-500"
+          className="absolute top-0 h-full border-l border-line pl-1 font-mono text-[9px] text-ink-faint"
           style={{ left: sidebarWidth + valueToPixels(t - range.start) }}
         >
           {fmt(t)}
@@ -204,9 +204,14 @@ function Playhead() {
   const { range, valueToPixels, sidebarWidth } = useTimelineContext();
   return (
     <div
-      className="pointer-events-none absolute bottom-0 top-0 z-20 w-0.5 bg-cyan-300"
+      className="pointer-events-none absolute bottom-0 top-0 z-20 w-[3px] -translate-x-1/2 bg-brand-bright shadow-[0_0_10px_rgba(239,68,68,0.85)]"
       style={{ left: sidebarWidth + valueToPixels(playhead - range.start) }}
-    />
+    >
+      <span
+        aria-hidden
+        className="absolute -top-1 left-1/2 h-3 w-4 -translate-x-1/2 rounded-[3px] border border-ink/40 bg-brand-bright"
+      />
+    </div>
   );
 }
 

@@ -117,7 +117,7 @@ export function TrackMixer({ running }: { running: boolean }) {
     const level = levels ? (track === "game" ? levels.game : levels.mic) : 0;
     const peak = levels ? (track === "game" ? levels.game_peak : levels.mic_peak) : 0;
     return (
-      <div className="rounded-control border border-line bg-black/40 px-3 py-2.5">
+      <div className="rounded-control border border-line bg-black/60 px-3 py-2.5">
         <div className="mb-1.5 flex items-center gap-2">
           <button
             onClick={() => void commitMute(track, !muted)}

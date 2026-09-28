@@ -392,19 +392,19 @@ export function VideoSection() {
     }
   };
 
-  if (error && !opts) return <p className="font-mono text-xs text-blood-bright">{error}</p>;
+  if (error && !opts) return <p className="font-mono text-xs text-brand-bright">{error}</p>;
   if (!opts || !settings) return <p className="text-sm text-ink-muted">{t("common.loading")}</p>;
 
   const pill = (active: boolean) =>
     `rounded-control px-2 py-0.5 font-mono text-[11px] transition ${
       active
-        ? "bg-sky/20 text-ink"
+        ? "bg-link/20 text-ink"
         : "bg-raised/60 text-ink-muted hover:bg-raised hover:text-ink"
     }`;
   const select =
-    "w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-ink outline-none focus:border-gold/60";
+    "w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-ink outline-none focus:border-warn/60";
   const num =
-    "w-full rounded-control border border-line bg-raised/60 px-2 py-1 font-mono text-xs text-ink outline-none focus:border-gold/60";
+    "w-full rounded-control border border-line bg-raised/60 px-2 py-1 font-mono text-xs text-ink outline-none focus:border-warn/60";
 
   const codecIdx = Math.max(0, opts.codecs.findIndex((c) => c.id === opts.current_codec));
   const overSource = opts.max_source_height > 0 && opts.current_height > opts.max_source_height;
@@ -442,10 +442,10 @@ export function VideoSection() {
               key={row.height}
               onClick={() => pickHeight(row.height)}
               disabled={busy}
-              className={`rounded-xl border px-3 py-2 text-left transition disabled:opacity-60 ${
+              className={`rounded-card border px-3 py-2 text-left transition disabled:opacity-60 ${
                 selected
-                  ? "border-gold/50 bg-sky/10"
-                  : "border-line bg-void/40 hover:border-white/15"
+                  ? "border-warn/50 bg-link/10"
+                  : "border-line bg-base/40 hover:border-line-strong"
               }`}
             >
               <div className="flex flex-wrap items-center gap-x-2">
@@ -458,7 +458,7 @@ export function VideoSection() {
                   </span>
                 )}
                 {recommended && (
-                  <span className="ml-auto rounded-control bg-link/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-sky-bright">
+                  <span className="ml-auto rounded-control bg-link/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-link-bright">
                     {recommended}
                   </span>
                 )}
@@ -471,7 +471,7 @@ export function VideoSection() {
                     {t("video.ram_60")} ~{row.ring_mb_60s[Math.min(codecIdx, row.ring_mb_60s.length - 1)]} MB
                   </span>
                   {row.height > opts.max_source_height && opts.max_source_height > 0 && (
-                    <span className="text-gold-bright">↑</span>
+                    <span className="text-warn-bright">↑</span>
                   )}
                 </div>
               )}
@@ -481,7 +481,7 @@ export function VideoSection() {
       </div>
 
       {/* Custom toggle */}
-      <div className="space-y-2 rounded-xl border border-line bg-void/40 px-3 py-3">
+      <div className="space-y-2 rounded-card border border-line bg-base/40 px-3 py-3">
         <label className="flex items-center gap-2 text-sm text-ink-soft">
           <input
             type="checkbox"
@@ -492,7 +492,7 @@ export function VideoSection() {
                 { key: "video_mode", value: e.target.checked ? "custom" : "ladder" },
               ]);
             }}
-            className="h-3.5 w-3.5 accent-gold"
+            className="h-3.5 w-3.5 accent-warn"
           />
           {t("video.custom_mode")}
         </label>
@@ -513,7 +513,7 @@ export function VideoSection() {
               </select>
             </label>
             {schema && !schema.validated && (
-              <p className="text-[11px] text-gold-bright">{t("video.custom_unvalidated")}</p>
+              <p className="text-[11px] text-warn-bright">{t("video.custom_unvalidated")}</p>
             )}
 
             {/* Per-encoder options (unsupported = greyed out, never sent) */}
@@ -560,7 +560,7 @@ export function VideoSection() {
               })}
 
             {/* Video tab */}
-            <div className="space-y-2 rounded-control border border-line bg-void/50 p-2.5">
+            <div className="space-y-2 rounded-control border border-line bg-base/50 p-2.5">
               <p className="text-xs font-semibold text-ink-soft">{t("video.custom_group_video")}</p>
               <div className="grid grid-cols-2 gap-2">
                 <label className="block text-[11px] text-ink-muted">
@@ -721,7 +721,7 @@ export function VideoSection() {
               <button
                 onClick={applyCustom}
                 disabled={busy || !activeId}
-                className="rounded-control border border-gold/40 bg-sky/10 px-2.5 py-1 text-xs font-semibold text-ink transition hover:bg-sky/20 disabled:opacity-50"
+                className="rounded-control border border-warn/40 bg-link/10 px-2.5 py-1 text-xs font-semibold text-ink transition hover:bg-link/20 disabled:opacity-50"
               >
                 {t("video.apply")}
               </button>
@@ -735,13 +735,13 @@ export function VideoSection() {
               <button
                 onClick={() => void runTest()}
                 disabled={testing || busy || !activeId}
-                className="rounded-control border border-emerald-500/30 bg-jade/10 px-2.5 py-1 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                className="rounded-control border border-emerald-500/30 bg-ok/10 px-2.5 py-1 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
               >
                 {testing ? t("video.custom_testing", { s: elapsed }) : t("video.custom_test")}
               </button>
             </div>
             {testResult && (
-              <p className={`font-mono text-[11px] ${testResult.ok ? "text-jade-bright" : "text-gold-bright"}`}>
+              <p className={`font-mono text-[11px] ${testResult.ok ? "text-ok-bright" : "text-warn-bright"}`}>
                 {testResult.ok
                   ? t("video.custom_test_ok", {
                       codec: testResult.probe?.codec_name ?? testResult.codec,
@@ -764,7 +764,7 @@ export function VideoSection() {
       </div>
 
       {/* Duration + container */}
-      <div className="space-y-2 rounded-xl border border-line bg-void/40 px-3 py-3">
+      <div className="space-y-2 rounded-card border border-line bg-base/40 px-3 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-ink-soft">{t("video.duration")}</span>
           {DURATION_PRESETS.map((s) => (
@@ -784,7 +784,7 @@ export function VideoSection() {
             step={5}
             ariaLabel={t("video.custom")}
             placeholder={t("video.custom")}
-            className="w-20 rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-gold/60"
+            className="w-20 rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-warn/60"
             onCommit={(v) => setCustomSeconds(String(v))}
           />
           <button
@@ -793,22 +793,22 @@ export function VideoSection() {
               void applySettings([{ key: "buffer_seconds", value: customSeconds }])
             }
             disabled={busy || customSeconds.trim() === ""}
-            className="rounded-control border border-gold/40 bg-sky/10 px-2.5 py-1 text-xs font-semibold text-ink transition hover:bg-sky/20 disabled:opacity-50"
+            className="rounded-control border border-warn/40 bg-link/10 px-2.5 py-1 text-xs font-semibold text-ink transition hover:bg-link/20 disabled:opacity-50"
           >
             {t("video.apply")}
           </button>
           {overTwoMin && (
-            <span className="rounded-control bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-gold-bright">
+            <span className="rounded-control bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-warn-bright">
               {t("video.badge_experimental")}
             </span>
           )}
         </div>
-        <p className={`font-mono text-[11px] ${ramLow ? "text-blood-bright" : "text-ink-faint"}`}>
+        <p className={`font-mono text-[11px] ${ramLow ? "text-brand-bright" : "text-ink-faint"}`}>
           {t("video.ram_estimate", { ram: ramMb })}
           {freeMb != null ? ` · ${t("video.ram_free", { free: freeMb })}` : ""}
         </p>
         {overTwoMin && (
-          <label className="flex items-center gap-2 text-xs text-gold-bright">
+          <label className="flex items-center gap-2 text-xs text-warn-bright">
             <input
               type="checkbox"
               checked={riskAck}
@@ -818,7 +818,7 @@ export function VideoSection() {
             {t("video.risk_ack")}
           </label>
         )}
-        {ramLow && <p className="text-xs text-blood-bright">{t("video.ram_low")}</p>}
+        {ramLow && <p className="text-xs text-brand-bright">{t("video.ram_low")}</p>}
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <span className="text-sm text-ink-soft">{t("video.container")}</span>
           {["mp4", "mkv"].map((c) => (
@@ -835,11 +835,11 @@ export function VideoSection() {
       </div>
 
       {/* Perf hints */}
-      {overSource && !customMode && <p className="text-xs text-gold-bright">{t("video.upscale_warn")}</p>}
+      {overSource && !customMode && <p className="text-xs text-warn-bright">{t("video.upscale_warn")}</p>}
       <p className="text-[11px] text-ink-faint">{t("video.restart_notice")}</p>
 
-      {error && <p className="break-all font-mono text-xs text-blood-bright">{error}</p>}
-      {busy && <p className="font-mono text-[11px] text-sky-bright">…</p>}
+      {error && <p className="break-all font-mono text-xs text-brand-bright">{error}</p>}
+      {busy && <p className="font-mono text-[11px] text-link-bright">…</p>}
     </div>
   );
 }
@@ -873,7 +873,7 @@ function OptionControl({
 }) {
   const label = <span className="mb-0.5 block text-xs text-ink-soft">{t(spec.i18n)}</span>;
   const ctl =
-    "w-full rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-gold/60 disabled:opacity-60";
+    "w-full rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-warn/60 disabled:opacity-60";
   // Values requiring P010 while another format is active: not selectable.
   const enumOff = (v: string) => p010off && spec.p010_values.includes(v);
   const intOff = (v: number) => p010off && spec.p010_ints.includes(v);
@@ -885,7 +885,7 @@ function OptionControl({
           checked={value === true}
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
-          className="h-3.5 w-3.5 accent-gold"
+          className="h-3.5 w-3.5 accent-warn"
         />
         {t(spec.i18n)}
       </label>

@@ -9,12 +9,12 @@ type Tone =
   | "warn"
   | "aqua"
   | "edit"
-  | "gold"
-  | "blood"
-  | "jade"
-  | "aether"
-  | "lava"
-  | "sky"
+  | "warn"
+  | "brand"
+  | "ok"
+  | "edit"
+  | "brand"
+  | "link"
   | "paper";
 
 const tones: Record<Tone, string> = {
@@ -26,12 +26,12 @@ const tones: Record<Tone, string> = {
   aqua: "border-aqua/50 bg-aqua/15 text-aqua-bright",
   edit: "border-edit/50 bg-edit/15 text-edit-bright",
   // v1 aliases
-  gold: "border-warn/50 bg-warn/15 text-warn-bright",
-  blood: "border-brand/50 bg-brand/15 text-brand-bright",
-  jade: "border-ok/50 bg-ok/15 text-ok-bright",
-  aether: "border-edit/50 bg-edit/15 text-edit-bright",
-  lava: "border-warn/50 bg-warn/15 text-warn-bright",
-  sky: "border-link/50 bg-link/15 text-link-bright",
+  warn: "border-warn/50 bg-warn/15 text-warn-bright",
+  brand: "border-brand/50 bg-brand/15 text-brand-bright",
+  ok: "border-ok/50 bg-ok/15 text-ok-bright",
+  edit: "border-edit/50 bg-edit/15 text-edit-bright",
+  brand: "border-warn/50 bg-warn/15 text-warn-bright",
+  link: "border-link/50 bg-link/15 text-link-bright",
   paper: "border-line bg-raised text-ink-soft",
 };
 

@@ -36,9 +36,9 @@ function ProviderRow({
 }) {
   const { t } = useTranslation();
   const row =
-    "flex flex-col items-start gap-2 rounded-xl border border-line bg-void/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
+    "flex flex-col items-start gap-2 rounded-card border border-line bg-base/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
   const btn =
-    "rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50";
+    "rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-warn/50 hover:text-ink disabled:opacity-50";
   return (
     <div className={row}>
       <span className="inline-flex items-center gap-2 text-sm text-ink-soft">
@@ -48,7 +48,7 @@ function ProviderRow({
         {status?.connected ? (
           <>
             <span
-              className="max-w-[16rem] truncate text-xs text-jade-bright"
+              className="max-w-[16rem] truncate text-xs text-ok-bright"
               title={status.account}
             >
               {status.account || t("accounts.connected")}
@@ -145,11 +145,11 @@ export function AccountsSection() {
         onDisconnect={() => void run("google_drive", "disconnect_google_drive")}
       />
       {status?.google_drive.connected && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-void/40 px-3 py-2 sm:px-4">
+        <div className="flex flex-wrap items-center gap-2 rounded-card border border-line bg-base/40 px-3 py-2 sm:px-4">
           <button
             onClick={() => void restoreDrive()}
             disabled={busy !== null}
-            className="rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50"
+            className="rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-warn/50 hover:text-ink disabled:opacity-50"
           >
             <span className="inline-flex items-center gap-1.5">
               <RefreshCw size={12} className={busy === "drive-restore" ? "animate-spin" : ""} />
@@ -189,12 +189,12 @@ export function AccountsSection() {
         onDisconnect={() => void run("tiktok", "disconnect_tiktok")}
       />
       {status?.discord.connected && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-void/40 px-3 py-2 sm:px-4">
+        <div className="flex flex-wrap items-center gap-2 rounded-card border border-line bg-base/40 px-3 py-2 sm:px-4">
           <span className="text-xs text-ink-muted">{t("accounts.discord_limit")}</span>
           <select
             value={discordMaxMb}
             onChange={(e) => changeDiscordLimit(e.target.value)}
-            className="rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-gold/60"
+            className="rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-warn/60"
           >
             {["10", "25", "50", "100"].map((mb) => (
               <option key={mb} value={mb}>
@@ -205,7 +205,7 @@ export function AccountsSection() {
           <span className="text-[11px] text-ink-faint">{t("accounts.discord_limit_hint")}</span>
         </div>
       )}
-      {error && <p className="break-all font-mono text-xs text-blood-bright">{error}</p>}
+      {error && <p className="break-all font-mono text-xs text-brand-bright">{error}</p>}
     </div>
   );
 }

@@ -80,18 +80,18 @@ export function ExportDialog({
   };
 
   const select =
-    "rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-200 outline-none focus:border-cyan-500/50";
+    "rounded-control border border-line bg-raised/60 px-2 py-1 text-xs text-ink outline-none focus:border-link/60";
 
   if (!output) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0b0f19] p-5 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+      <div className="w-full max-w-lg rounded-card border border-line bg-surface p-5 shadow-panel">
         <div className="mb-4 flex items-center">
-          <h3 className="text-sm font-semibold text-slate-100">{t("editor.export_title")}</h3>
+          <h3 className="text-sm font-semibold text-ink">{t("editor.export_title")}</h3>
           <button
             onClick={running ? undefined : onClose}
             disabled={running}
-            className="ml-auto rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200 disabled:opacity-40"
+            className="ml-auto rounded-control p-1.5 text-ink-faint transition hover:bg-raised hover:text-ink disabled:opacity-40"
           >
             <X size={16} />
           </button>
@@ -99,7 +99,7 @@ export function ExportDialog({
 
         <div className="grid grid-cols-2 gap-3 text-xs">
           <label className="space-y-1">
-            <span className="text-slate-400">{t("editor.resolution")}</span>
+            <span className="text-ink-muted">{t("editor.resolution")}</span>
             <select
               className={`${select} w-full`}
               value={output.height}
@@ -114,7 +114,7 @@ export function ExportDialog({
             </select>
           </label>
           <label className="space-y-1">
-            <span className="text-slate-400">{t("editor.aspect")}</span>
+            <span className="text-ink-muted">{t("editor.aspect")}</span>
             <select
               className={`${select} w-full`}
               value={output.aspect}
@@ -129,7 +129,7 @@ export function ExportDialog({
             </select>
           </label>
           <label className="space-y-1">
-            <span className="text-slate-400">{t("editor.fps")}</span>
+            <span className="text-ink-muted">{t("editor.fps")}</span>
             <select
               className={`${select} w-full`}
               value={output.fps}
@@ -144,7 +144,7 @@ export function ExportDialog({
             </select>
           </label>
           <label className="space-y-1">
-            <span className="text-slate-400">{t("editor.bitrate")}</span>
+            <span className="text-ink-muted">{t("editor.bitrate")}</span>
             <select
               className={`${select} w-full`}
               value={output.bitrateKbps}
@@ -159,7 +159,7 @@ export function ExportDialog({
             </select>
           </label>
           <label className="space-y-1">
-            <span className="text-slate-400">{t("editor.encoder")}</span>
+            <span className="text-ink-muted">{t("editor.encoder")}</span>
             <select
               className={`${select} w-full`}
               value={output.encoder}
@@ -178,7 +178,7 @@ export function ExportDialog({
             </select>
           </label>
           <label className="space-y-1">
-            <span className="text-slate-400">{t("editor.container")}</span>
+            <span className="text-ink-muted">{t("editor.container")}</span>
             <select
               className={`${select} w-full`}
               value={output.container}
@@ -190,7 +190,7 @@ export function ExportDialog({
             </select>
           </label>
           <label className="space-y-1">
-            <span className="text-slate-400">{t("editor.audio_out")}</span>
+            <span className="text-ink-muted">{t("editor.audio_out")}</span>
             <select
               className={`${select} w-full`}
               value={output.audio ?? "mix"}
@@ -205,24 +205,24 @@ export function ExportDialog({
 
         {(running || percent > 0) && (
           <div className="mt-4">
-            <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+            <div className="h-1.5 overflow-hidden rounded-full bg-raised">
               <div
-                className="h-full bg-cyan-400 transition-[width] duration-200"
+                className="h-full bg-link transition-[width] duration-200"
                 style={{ width: `${Math.min(100, percent)}%` }}
               />
             </div>
-            <p className="mt-1 text-[11px] text-slate-400">
+            <p className="mt-1 text-[11px] text-ink-muted">
               {running ? `${t("editor.exporting")} · ${stage}` : `${Math.round(percent)}%`}
             </p>
           </div>
         )}
-        {error && <p className="mt-3 break-words font-mono text-xs text-red-400">{error}</p>}
+        {error && <p className="mt-3 break-words font-mono text-xs text-brand-bright">{error}</p>}
 
         <div className="mt-5 flex justify-end gap-2">
           {running ? (
             <button
               onClick={() => void cancel()}
-              className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm text-red-200 transition hover:bg-red-500/20"
+              className="rounded-control border border-brand/40 bg-brand/10 px-3 py-1.5 text-sm text-brand-bright transition hover:bg-brand/20"
             >
               {t("editor.cancel")}
             </button>
@@ -230,14 +230,14 @@ export function ExportDialog({
             <>
               <button
                 onClick={onClose}
-                className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-200 transition hover:bg-white/10"
+                className="rounded-control border border-line bg-raised/60 px-3 py-1.5 text-sm text-ink transition hover:bg-raised"
               >
                 {t("editor.close")}
               </button>
               <button
                 onClick={() => void start()}
                 disabled={!useEditorStore.getState().project?.segments.length}
-                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
+                className="rounded-control border border-link/40 bg-link/10 px-3 py-1.5 text-sm font-semibold text-link-bright transition hover:bg-link/20 disabled:opacity-50"
               >
                 {t("editor.start_export")}
               </button>

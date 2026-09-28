@@ -105,8 +105,8 @@ export function DriveBrowser({
 
   return (
     <Modal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/80 p-4">
-        <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-card border border-line bg-panel p-4 shadow-panel">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-base/80 p-4">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-card border border-line bg-surface p-4 shadow-panel">
         <div className="mb-2 flex items-center gap-2">
           <h3 className="text-sm font-semibold text-ink">{t("drive.title")}</h3>
           <button
@@ -143,14 +143,14 @@ export function DriveBrowser({
           {entries.map((entry) => (
             <div
               key={entry.id}
-              className="flex items-center gap-2 rounded-control border border-line bg-void/50 px-3 py-1.5 text-xs text-ink"
+              className="flex items-center gap-2 rounded-control border border-line bg-base/50 px-3 py-1.5 text-xs text-ink"
             >
               {entry.is_folder ? (
                 <button
                   onClick={() => openFolder(entry)}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left transition hover:text-ink"
                 >
-                  <Folder size={13} className="shrink-0 text-sky-bright" />
+                  <Folder size={13} className="shrink-0 text-link-bright" />
                   <span className="truncate">{entry.name}</span>
                 </button>
               ) : (
@@ -165,7 +165,7 @@ export function DriveBrowser({
                   <button
                     onClick={() => void download(entry)}
                     disabled={downloading !== null}
-                    className="shrink-0 rounded-control border border-line bg-raised/60 p-1 text-ink-soft transition hover:border-gold/50 hover:text-ink disabled:opacity-50"
+                    className="shrink-0 rounded-control border border-line bg-raised/60 p-1 text-ink-soft transition hover:border-warn/50 hover:text-ink disabled:opacity-50"
                     title={t("drive.download")}
                   >
                     {downloading === entry.id ? (
@@ -184,7 +184,7 @@ export function DriveBrowser({
           <div className="mt-2">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
               <div
-                className="h-full rounded-full bg-gold transition-all"
+                className="h-full rounded-full bg-warn transition-all"
                 style={{ width: `${pct ?? 5}%` }}
               />
             </div>
@@ -193,7 +193,7 @@ export function DriveBrowser({
             </p>
           </div>
         )}
-        {error && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{error}</p>}
+        {error && <p className="mt-2 break-all font-mono text-xs text-brand-bright">{error}</p>}
       </div>
     </div>
     </Modal>

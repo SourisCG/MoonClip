@@ -28,7 +28,7 @@ export function IconRail({
   children?: ReactNode;
 }) {
   return (
-    <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-surface/50 py-3">
+    <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3">
       <div className="mb-2 flex h-10 w-10 items-center justify-center">{brand}</div>
       {items.map((item) => (
         <button
@@ -66,7 +66,7 @@ export function ContextRail({
   return (
     <aside
       className={clsx(
-        "flex w-[224px] shrink-0 flex-col overflow-y-auto border-r border-line bg-surface/30 px-2 py-3",
+        "flex w-[224px] shrink-0 flex-col overflow-y-auto border-r border-line bg-surface px-2 py-3",
         className,
       )}
     >
@@ -127,7 +127,7 @@ export function ShellHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-base/85 px-4 backdrop-blur-md">
+    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-base px-4">
       <div className="flex min-w-0 flex-1 items-center gap-3">{children}</div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </header>

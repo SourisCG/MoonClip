@@ -33,13 +33,13 @@ export function DecodeNotice() {
   if (!status) return null;
 
   const row =
-    "flex flex-col items-start gap-1.5 rounded-xl border border-line bg-void/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
+    "flex flex-col items-start gap-1.5 rounded-card border border-line bg-base/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
 
   if (status.hardware) {
     return (
       <div className={row}>
         <span className="text-sm text-ink-soft">{t("decode.title")}</span>
-        <span className="font-mono text-xs text-jade-bright">
+        <span className="font-mono text-xs text-ok-bright">
           {t("decode.hardware")}
           {status.driver ? ` · ${status.driver}` : ""}
         </span>
@@ -51,7 +51,7 @@ export function DecodeNotice() {
     <div className={row}>
       <span className="text-sm text-ink-soft">{t("decode.title")}</span>
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono text-xs text-gold-bright">
+        <span className="font-mono text-xs text-warn-bright">
           {t("decode.software")}
         </span>
         {status.missing_package && (
@@ -64,7 +64,7 @@ export function DecodeNotice() {
         )}
         <button
           onClick={() => void openUrl(DOC_URL).catch(() => {})}
-          className="text-xs text-sky-bright underline decoration-link/40 transition hover:text-ink"
+          className="text-xs text-link-bright underline decoration-link/40 transition hover:text-ink"
         >
           {t("decode.doc")}
         </button>

@@ -133,7 +133,7 @@ function ClipCard({
   const src = useThumbnail(clip, actions.onError);
   const preview = useHoverPreview(clip);
   const iconBtn =
-    "rounded-control border border-line bg-black/70 p-1.5 text-ink-soft transition-colors hover:border-line-strong hover:bg-black/90 hover:text-ink";
+    "rounded-control border border-line bg-black/80 p-1.5 text-ink-soft transition-colors hover:border-line-strong hover:bg-black/90 hover:text-ink";
 
   return (
     <div

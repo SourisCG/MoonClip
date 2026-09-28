@@ -392,10 +392,10 @@ export function TrimPanel({
   };
 
   const handle =
-    "absolute top-0 h-full w-3 -translate-x-1/2 cursor-ew-resize rounded-full border border-gold/60 bg-gold/70 shadow-[0_0_10px_rgba(216,164,74,0.5)]";
+    "absolute top-0 h-full w-3 -translate-x-1/2 cursor-ew-resize rounded-full border border-warn/60 bg-warn/70 shadow-[0_0_10px_rgba(216,164,74,0.5)]";
   const pct = (ms: number) => `${(ms / Math.max(1, duration)) * 100}%`;
   const actionBtn =
-    "inline-flex items-center gap-1.5 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50";
+    "inline-flex items-center gap-1.5 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink transition hover:border-warn/50 hover:text-ink disabled:opacity-50";
   const chip = "inline-flex items-center gap-1 rounded bg-raised/60 px-1.5 py-0.5";
 
   const downloadPct =
@@ -405,8 +405,8 @@ export function TrimPanel({
 
   return (
     <Modal>
-      <div className="fixed inset-0 z-40 flex items-center justify-center bg-void/85 p-4">
-        <div className="max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto rounded-card border border-line bg-gradient-to-b from-raised to-panel p-4 shadow-panel">
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-base/90 p-4">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto rounded-card border border-line bg-gradient-to-b from-raised to-surface p-4 shadow-panel">
         {/* Header: title (rename inline), metadata chips, navigation */}
         <div className="mb-3 flex items-start gap-2">
           <div className="min-w-0 flex-1">
@@ -424,7 +424,7 @@ export function TrimPanel({
                   }
                 }}
                 onBlur={() => setEditing(false)}
-                className="w-full max-w-md rounded-control border border-gold/40 bg-void/60 px-2 py-0.5 text-sm font-semibold text-ink outline-none focus:border-link"
+                className="w-full max-w-md rounded-control border border-warn/40 bg-base/60 px-2 py-0.5 text-sm font-semibold text-ink outline-none focus:border-link"
               />
             ) : (
               <p
@@ -440,17 +440,17 @@ export function TrimPanel({
               <span className={chip}>{fmtSize(clip.file_size_bytes)}</span>
               <span className={chip}>{clip.created_at.slice(0, 16)}</span>
               {clip.is_favorite && (
-                <span className={`${chip} text-gold-bright`}>
+                <span className={`${chip} text-warn-bright`}>
                   <Star size={10} fill="currentColor" />
                 </span>
               )}
               {clip.cloud && (
-                <span className={`${chip} text-sky-bright`}>
+                <span className={`${chip} text-link-bright`}>
                   <Cloud size={10} /> {t("gallery.cloud")}
                 </span>
               )}
               {!clip.cloud && clip.drive_file_id && (
-                <span className={`${chip} text-jade-bright`}>
+                <span className={`${chip} text-ok-bright`}>
                   <Upload size={10} /> {t("gallery.uploaded")}
                 </span>
               )}
@@ -475,7 +475,7 @@ export function TrimPanel({
 
         {/* Player: the frame reserves its height from the first paint, so the
             video settles instantly (no resize jump when metadata arrives). */}
-        <div className="relative h-[52vh] w-full overflow-hidden rounded-xl border border-line bg-void/80">
+        <div className="relative h-[52vh] w-full overflow-hidden rounded-card border border-line bg-base/80">
           {url ? (
             <video
               ref={videoRef}
@@ -497,8 +497,8 @@ export function TrimPanel({
             <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-ink-faint">
               {clip.cloud ? (
                 <>
-                  <Loader2 size={18} className="animate-spin text-sky-bright" />
-                  <span className="text-sky-bright/80">
+                  <Loader2 size={18} className="animate-spin text-link-bright" />
+                  <span className="text-link-bright/80">
                     {t("gallery.downloading")} {downloadPct !== null ? `${downloadPct}%` : ""}
                   </span>
                 </>
@@ -530,15 +530,22 @@ export function TrimPanel({
             className="relative h-8 flex-1 cursor-pointer touch-none select-none rounded-control border border-line bg-raised/60"
           >
             <div
-              className="absolute inset-y-0 bg-gold/20"
+              className="absolute inset-y-0 bg-warn/20"
               style={{ left: pct(start), width: pct(end - start) }}
             />
             {/* The rAF loop owns this position while playing (no React
-                re-render can snap it back); the effect parks it otherwise. */}
+                re-render can snap it back); the effect parks it otherwise.
+                Thick, bright and centered with a top knob: the position must
+                read at a glance over the selection fill. */}
             <div
               ref={playheadRef}
-              className="absolute inset-y-0 w-0.5 bg-link-bright will-change-[left]"
-            />
+              className="absolute inset-y-0 z-[5] w-[3px] -translate-x-1/2 bg-brand-bright shadow-[0_0_10px_rgba(239,68,68,0.9)] will-change-[left]"
+            >
+              <span
+                aria-hidden
+                className="absolute -top-1 left-1/2 h-3 w-4 -translate-x-1/2 rounded-[3px] border border-ink/40 bg-brand-bright"
+              />
+            </div>
             <div
               role="slider"
               aria-valuenow={Math.round(start)}
@@ -574,7 +581,7 @@ export function TrimPanel({
                 onAdvancedEdit(clip);
               }}
               disabled={saving}
-              className={`${actionBtn} border-gold/40 bg-sky/10 text-ink`}
+              className={`${actionBtn} border-warn/40 bg-link/10 text-ink`}
               title={t("editor.open")}
             >
               <Wand2 size={13} /> {t("editor.open")}
@@ -582,7 +589,7 @@ export function TrimPanel({
           )}
           <button
             onClick={() => actions.onToggleFavorite(clip.id)}
-            className={`${actionBtn} ${clip.is_favorite ? "text-gold-bright" : ""}`}
+            className={`${actionBtn} ${clip.is_favorite ? "text-warn-bright" : ""}`}
             title={t("gallery.favorite")}
           >
             <Star size={13} fill={clip.is_favorite ? "currentColor" : "none"} />
@@ -596,7 +603,7 @@ export function TrimPanel({
           {clip.cloud && confirmDelete ? (
             <button
               onClick={() => actions.onDelete(clip.id)}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-control bg-blood/20 px-2.5 py-1.5 text-xs font-medium text-blood-bright transition hover:bg-blood/30"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-control bg-brand/20 px-2.5 py-1.5 text-xs font-medium text-brand-bright transition hover:bg-brand/30"
             >
               <Trash2 size={13} /> {t("gallery.confirm_cloud_delete")}
             </button>
@@ -610,7 +617,7 @@ export function TrimPanel({
                 }
                 actions.onDelete(clip.id);
               }}
-              className={`${actionBtn} ml-auto hover:border-blood/50 hover:text-blood-bright`}
+              className={`${actionBtn} ml-auto hover:border-brand/50 hover:text-brand-bright`}
               title={t("common.delete")}
             >
               <Trash2 size={13} />
@@ -626,7 +633,7 @@ export function TrimPanel({
               checked={precise}
               onChange={(e) => setPrecise(e.target.checked)}
               disabled={saving}
-              className="accent-gold"
+              className="accent-warn"
             />
             {t("trim.precise")}
           </label>
@@ -636,7 +643,7 @@ export function TrimPanel({
               checked={loop}
               onChange={(e) => setLoop(e.target.checked)}
               disabled={saving}
-              className="accent-gold"
+              className="accent-warn"
             />
             <Repeat size={12} /> {t("trim.loop")}
           </label>
@@ -650,14 +657,14 @@ export function TrimPanel({
           <div className="mt-3">
             <div className="h-1.5 overflow-hidden rounded-full bg-raised">
               <div
-                className="h-full bg-gold transition-[width] duration-200"
+                className="h-full bg-warn transition-[width] duration-200"
                 style={{ width: `${Math.min(100, percent)}%` }}
               />
             </div>
             <p className="mt-1 text-[11px] text-ink-muted">{t("trim.saving")}</p>
           </div>
         )}
-        {error && <p className="mt-2 break-words font-mono text-xs text-blood-bright">{error}</p>}
+        {error && <p className="mt-2 break-words font-mono text-xs text-brand-bright">{error}</p>}
 
         <div className="mt-4 flex items-center justify-end gap-2">
           <span className="mr-auto hidden text-[10px] text-ink-faint sm:block">
@@ -673,7 +680,7 @@ export function TrimPanel({
           <button
             onClick={() => void save()}
             disabled={saving || end - start < 100}
-            className="inline-flex items-center gap-1.5 rounded-control border border-link/50 bg-sky/20 px-3 py-1.5 text-sm font-medium text-ink transition hover:bg-sky/20 disabled:cursor-wait disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-control border border-link/50 bg-link/20 px-3 py-1.5 text-sm font-medium text-ink transition hover:bg-link/20 disabled:cursor-wait disabled:opacity-50"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}
             {saving ? t("trim.saving_short") : t("trim.save")}

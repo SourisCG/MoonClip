@@ -110,24 +110,24 @@ export function SettingsModal({
   };
 
   if (loading) return <p className="text-sm text-ink-muted">{t("common.loading")}</p>;
-  if (error) return <p className="text-sm text-blood-bright">{error}</p>;
+  if (error) return <p className="text-sm text-brand-bright">{error}</p>;
 
-  const row = "flex flex-col items-start gap-2 rounded-xl border border-line bg-void/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
+  const row = "flex flex-col items-start gap-2 rounded-card border border-line bg-base/50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4";
   const label = "text-sm text-ink-soft";
   const input =
-    "w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-ink outline-none focus:border-gold/60 sm:w-48";
+    "w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-ink outline-none focus:border-warn/60 sm:w-48";
 
   return (
     <div className="max-w-2xl space-y-3">
       <div className={row}>
         <span className={label}>{t("settings.clips_dir")}</span>
         <span className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
-          <code className="min-w-0 flex-1 truncate font-mono text-xs text-sky-bright sm:max-w-64 sm:flex-none">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs text-link-bright sm:max-w-64 sm:flex-none">
             {settings.clips_directory || "—"}
           </code>
           <button
             onClick={() => void browseDir()}
-            className="rounded-control border border-line bg-raised/60 p-1.5 text-ink transition hover:border-gold/50 hover:text-ink"
+            className="rounded-control border border-line bg-raised/60 p-1.5 text-ink transition hover:border-warn/50 hover:text-ink"
             title={t("settings.browse")}
           >
             <FolderOpen size={15} />
@@ -168,7 +168,7 @@ export function SettingsModal({
             }}
             onKeyDown={onHotkeyKeyDown}
             onBlur={() => setCapturing(false)}
-            className={`${input} text-left font-mono ${capturing ? "border-gold/60 text-ink" : ""}`}
+            className={`${input} text-left font-mono ${capturing ? "border-warn/60 text-ink" : ""}`}
             title={t("settings.hotkey_edit")}
           >
             {capturing ? t("settings.hotkey_press") : hotkey}
@@ -176,7 +176,7 @@ export function SettingsModal({
           {!capturing && hotkey !== "F9" && (
             <button
               onClick={() => void applyHotkey("F9")}
-              className="shrink-0 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink-soft transition hover:border-gold/50 hover:text-ink"
+              className="shrink-0 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink-soft transition hover:border-warn/50 hover:text-ink"
             >
               {t("settings.hotkey_reset")}
             </button>
@@ -184,7 +184,7 @@ export function SettingsModal({
         </div>
       </div>
       {hotkeyError && (
-        <p className="break-all font-mono text-xs text-blood-bright">{hotkeyError}</p>
+        <p className="break-all font-mono text-xs text-brand-bright">{hotkeyError}</p>
       )}
 
       {(status || saving) && (
@@ -202,7 +202,7 @@ export function SettingsModal({
         {onOpenWizard && (
           <button
             onClick={onOpenWizard}
-            className="rounded-control border border-line bg-raised/60 px-2.5 py-1 text-xs text-ink-soft transition hover:border-gold/50 hover:text-ink"
+            className="rounded-control border border-line bg-raised/60 px-2.5 py-1 text-xs text-ink-soft transition hover:border-warn/50 hover:text-ink"
           >
             {t("wizard.reopen")}
           </button>

@@ -146,7 +146,7 @@ export function AudioSection({ status }: { status: EngineStatus }) {
 
       <TrackMixer running={status.running || monitoring || status.monitoring} />
 
-      <label className="flex items-start gap-2 rounded-control border border-line bg-black/30 px-3 py-2">
+      <label className="flex items-start gap-2 rounded-control border border-line bg-black/50 px-3 py-2">
         <Checkbox
           checked={singleTrack}
           onChange={(e) => void toggleSingleTrack(e.target.checked)}

@@ -395,12 +395,12 @@ export function ShareDialog({
   const discordOverLimit =
     clip.file_size_bytes > (Number(discordMaxMb) || 10) * 1024 * 1024;
   const btn =
-    "inline-flex items-center justify-center gap-1.5 rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50";
+    "inline-flex items-center justify-center gap-1.5 rounded-control border border-line bg-raised/60 px-3 py-1.5 text-xs text-ink transition hover:border-warn/50 hover:text-ink disabled:opacity-50";
 
   return (
     <Modal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/80 p-4">
-        <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-card border border-line bg-panel p-4 shadow-panel">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-base/80 p-4">
+        <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-card border border-line bg-surface p-4 shadow-panel">
         <div className="mb-3 flex items-center">
           <h3 className="text-sm font-semibold text-ink">{t("share.title")}</h3>
           <button
@@ -417,7 +417,7 @@ export function ShareDialog({
 
         {uploaded ? (
           <div className="space-y-2">
-            <p className="flex items-center gap-1.5 text-xs text-jade-bright">
+            <p className="flex items-center gap-1.5 text-xs text-ok-bright">
               <CloudUpload size={13} />
               {cloud ? t("share.in_drive_only") : t("share.uploaded")}
             </p>
@@ -455,7 +455,7 @@ export function ShareDialog({
                   <button
                     onClick={() => void run("replace", { makePublic: !!result?.web_link, deleteLocal: false, replace: true })}
                     disabled={busy !== null}
-                    className="inline-flex items-center gap-1.5 rounded-control bg-blood/20 px-3 py-1.5 text-xs font-medium text-blood-bright transition hover:bg-blood/30 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-control bg-brand/20 px-3 py-1.5 text-xs font-medium text-brand-bright transition hover:bg-brand/30 disabled:opacity-50"
                   >
                     <Trash2 size={13} /> {t("share.replace_confirm")}
                   </button>
@@ -478,7 +478,7 @@ export function ShareDialog({
           </div>
         ) : (
           <>
-            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-control border border-line bg-void/50 px-3 py-2 text-xs text-ink-soft">
+            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-control border border-line bg-base/50 px-3 py-2 text-xs text-ink-soft">
               <input
                 type="checkbox"
                 checked={makePublic}
@@ -492,7 +492,7 @@ export function ShareDialog({
                 </span>
               </span>
             </label>
-            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-control border border-line bg-void/50 px-3 py-2 text-xs text-ink-soft">
+            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-control border border-line bg-base/50 px-3 py-2 text-xs text-ink-soft">
               <input
                 type="checkbox"
                 checked={deleteLocal}
@@ -507,7 +507,7 @@ export function ShareDialog({
             <button
               onClick={() => void run("upload", { makePublic, deleteLocal, replace: false })}
               disabled={busy !== null}
-              className="flex w-full items-center justify-center gap-2 rounded-control border border-gold/40 bg-sky/10 px-3 py-2 text-sm text-ink transition hover:bg-sky/20 disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-2 rounded-control border border-warn/40 bg-link/10 px-3 py-2 text-sm text-ink transition hover:bg-link/20 disabled:opacity-50"
             >
               <CloudUpload size={15} />
               {busy === "upload" ? t("share.uploading") : t("share.drive_upload")}
@@ -519,7 +519,7 @@ export function ShareDialog({
           <div className="mt-3">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
               <div
-                className="h-full rounded-full bg-gold transition-all"
+                className="h-full rounded-full bg-warn transition-all"
                 style={{ width: `${pct ?? 5}%` }}
               />
             </div>
@@ -547,7 +547,7 @@ export function ShareDialog({
             </button>
           ) : ytResult ? (
             <div className="space-y-2">
-              <p className="flex items-center gap-1.5 text-xs text-jade-bright">
+              <p className="flex items-center gap-1.5 text-xs text-ok-bright">
                 <CloudUpload size={13} /> {t("youtube.uploaded")}
               </p>
               <div className="flex flex-wrap gap-2">
@@ -571,13 +571,13 @@ export function ShareDialog({
                 onChange={(e) => setYtTitle(e.target.value)}
                 maxLength={100}
                 placeholder={t("youtube.title_ph")}
-                className="w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-gold/60"
+                className="w-full rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-warn/60"
               />
               <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={ytPrivacy}
                   onChange={(e) => setYtPrivacy(e.target.value)}
-                  className="rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-gold/60"
+                  className="rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-warn/60"
                 >
                   <option value="private">{t("youtube.private")}</option>
                   <option value="unlisted">{t("youtube.unlisted")}</option>
@@ -599,7 +599,7 @@ export function ShareDialog({
               <button
                 onClick={() => void uploadYouTube()}
                 disabled={ytBusy !== null || !ytConfirmed || !ytTitle.trim()}
-                className="flex w-full items-center justify-center gap-2 rounded-control border border-blood/40 bg-blood/10 px-3 py-2 text-sm text-red-100 transition hover:bg-blood/20 disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-control border border-brand/40 bg-brand/10 px-3 py-2 text-sm text-red-100 transition hover:bg-brand/20 disabled:opacity-50"
               >
                 <SquarePlay size={15} />
                 {ytBusy === "upload" ? t("share.uploading") : t("youtube.upload")}
@@ -608,7 +608,7 @@ export function ShareDialog({
                 <div>
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-raised">
                     <div
-                      className="h-full rounded-full bg-blood-bright transition-all"
+                      className="h-full rounded-full bg-brand-bright transition-all"
                       style={{ width: `${ytPct ?? 5}%` }}
                     />
                   </div>
@@ -620,7 +620,7 @@ export function ShareDialog({
               <p className="text-[11px] text-ink-faint">{t("youtube.audit_note")}</p>
             </div>
           ) : null}
-          {ytError && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{ytError}</p>}
+          {ytError && <p className="mt-2 break-all font-mono text-xs text-brand-bright">{ytError}</p>}
         </div>
 
         {/* Discord: connect your account (pick a channel); over-limit clips
@@ -640,7 +640,7 @@ export function ShareDialog({
             </button>
           ) : dcResult ? (
             <div className="space-y-2">
-              <p className="flex min-w-0 items-center gap-1.5 text-xs text-jade-bright">
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-ok-bright">
                 <CloudUpload size={13} /> {t("discord.sent")}
                 {dcResult.channel && (
                   <span className="truncate text-ink-faint" title={dcResult.channel}>
@@ -684,12 +684,12 @@ export function ShareDialog({
                 </label>
               )}
               {discordOverLimit && !dcCompress && (
-                <p className="text-[11px] text-gold-bright/80">{t("discord.too_big")}</p>
+                <p className="text-[11px] text-warn-bright/80">{t("discord.too_big")}</p>
               )}
               <button
                 onClick={() => void shareDiscord()}
                 disabled={dcBusy !== null || !dcTitle.trim() || (discordOverLimit && !dcCompress)}
-                className="flex w-full items-center justify-center gap-2 rounded-control border border-aether/40 bg-aether/10 px-3 py-2 text-sm text-ink transition hover:bg-aether/20 disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-control border border-edit/40 bg-edit/10 px-3 py-2 text-sm text-ink transition hover:bg-edit/20 disabled:opacity-50"
               >
                 <MessageSquare size={15} />
                 {dcBusy === "upload" ? t("share.uploading") : t("discord.send")}
@@ -713,7 +713,7 @@ export function ShareDialog({
               )}
             </div>
           ) : null}
-          {dcError && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{dcError}</p>}
+          {dcError && <p className="mt-2 break-all font-mono text-xs text-brand-bright">{dcError}</p>}
         </div>
 
         {/* TikTok: Direct Post; privacy options come from creator_info and
@@ -733,7 +733,7 @@ export function ShareDialog({
             </button>
           ) : ttResult ? (
             <div className="space-y-1">
-              <p className="flex items-center gap-1.5 text-xs text-jade-bright">
+              <p className="flex items-center gap-1.5 text-xs text-ok-bright">
                 <CloudUpload size={13} /> {t("tiktok.published")}
               </p>
               <p className="text-[11px] text-ink-faint">{t("tiktok.note")}</p>
@@ -791,10 +791,10 @@ export function ShareDialog({
               <p className="text-[11px] text-ink-faint">{t("tiktok.note")}</p>
             </div>
           ) : null}
-          {ttError && <p className="mt-2 break-all font-mono text-xs text-blood-bright">{ttError}</p>}
+          {ttError && <p className="mt-2 break-all font-mono text-xs text-brand-bright">{ttError}</p>}
         </div>
 
-        {error && <p className="mt-3 break-all font-mono text-xs text-blood-bright">{error}</p>}
+        {error && <p className="mt-3 break-all font-mono text-xs text-brand-bright">{error}</p>}
       </div>
     </div>
     </Modal>

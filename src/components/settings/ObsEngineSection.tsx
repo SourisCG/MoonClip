@@ -47,13 +47,13 @@ export function ObsEngineSection() {
   const label = "text-sm text-ink-soft";
   const value = "min-w-0 break-all font-mono text-xs text-ink-muted";
 
-  if (error && !info) return <p className="font-mono text-xs text-blood-bright">{error}</p>;
+  if (error && !info) return <p className="font-mono text-xs text-brand-bright">{error}</p>;
   if (!info) return <p className="text-sm text-ink-muted">{t("common.loading")}</p>;
 
   const missing = !info.present;
 
   return (
-    <div className="space-y-3 rounded-xl border border-line bg-void/50 px-3 py-3">
+    <div className="space-y-3 rounded-card border border-line bg-base/50 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold text-ink">{t("obs.title")}</h4>
@@ -62,7 +62,7 @@ export function ObsEngineSection() {
         <button
           onClick={() => void repair()}
           disabled={busy}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink transition hover:border-gold/50 hover:text-ink disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-control border border-line bg-raised/60 px-2.5 py-1.5 text-xs text-ink transition hover:border-warn/50 hover:text-ink disabled:opacity-50"
         >
           <Wrench size={13} />
           {busy ? t("obs.repairing") : t("obs.repair")}
@@ -71,7 +71,7 @@ export function ObsEngineSection() {
 
       {missing ? (
         <div className="space-y-1">
-          <p className="text-xs text-gold-bright">{t("obs.missing")}</p>
+          <p className="text-xs text-warn-bright">{t("obs.missing")}</p>
           <p className="text-[11px] text-ink-faint">{t("obs.missing_hint", { source: info.source })}</p>
         </div>
       ) : (
@@ -97,9 +97,9 @@ export function ObsEngineSection() {
         </div>
       )}
 
-      {repaired && <p className="text-xs text-sky-bright">{t("obs.repaired")}</p>}
+      {repaired && <p className="text-xs text-link-bright">{t("obs.repaired")}</p>}
 
-      <p className="flex items-center gap-1.5 text-[11px] text-jade-bright">
+      <p className="flex items-center gap-1.5 text-[11px] text-ok-bright">
         <ShieldCheck size={13} /> {t("obs.anti_cheat")}
       </p>
 
@@ -116,7 +116,7 @@ export function ObsEngineSection() {
         </pre>
       )}
 
-      {error && <p className="break-all font-mono text-xs text-blood-bright">{error}</p>}
+      {error && <p className="break-all font-mono text-xs text-brand-bright">{error}</p>}
     </div>
   );
 }

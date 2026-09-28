@@ -86,7 +86,7 @@ const isFreezeHold = (seg: Segment, timelineMs: number) => {
 function TimeLabel({ total }: { total: number }) {
   const ms = useEditorStore((s) => s.playheadMs);
   return (
-    <span className="font-mono text-xs text-slate-400">
+    <span className="font-mono text-xs text-ink-muted">
       {fmt(ms)} / {fmt(total)}
     </span>
   );
@@ -115,7 +115,7 @@ function ScrubBar({
   return (
     <div
       ref={ref}
-      className="group relative h-2.5 cursor-pointer rounded-full border border-line bg-raised"
+      className="group relative h-3 cursor-pointer rounded-full border border-line bg-raised"
       onPointerDown={(e) => {
         dragging.current = true;
         onScrubStart();
@@ -137,14 +137,14 @@ function ScrubBar({
       }}
     >
       <div
-        className="h-full rounded-full bg-link/80 transition-[width] duration-75"
+        className="h-full rounded-full bg-link transition-[width] duration-75"
         style={{ width: `${total > 0 ? Math.min(100, (ms / total) * 100) : 0}%` }}
       />
-      {/* Always-visible position line: the fill alone disappears at 0 and is
-          easy to miss on very short clips. */}
+      {/* Always-visible thumb: the fill alone disappears at 0 and is easy to
+          miss on very short clips. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-link-bright shadow-[0_0_6px_rgba(96,165,250,0.75)]"
+        className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-link-bright shadow-[0_0_8px_rgba(59,130,246,0.9)]"
         style={{ left: `${total > 0 ? Math.min(100, (ms / total) * 100) : 0}%` }}
       />
     </div>
@@ -255,7 +255,7 @@ function Adjust({
   format?: (v: number) => string;
 }) {
   return (
-    <label className="space-y-0.5 text-[10px] text-slate-400">
+    <label className="space-y-0.5 text-[10px] text-ink-muted">
       <span className="flex items-center">
         {label}
         <span className="ml-auto font-mono">{format ? format(value) : value.toFixed(2)}</span>
@@ -267,7 +267,7 @@ function Adjust({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-cyan-400"
+        className="w-full accent-link"
       />
     </label>
   );
@@ -301,9 +301,9 @@ function LevelMeters({
   return (
     <div className="space-y-1">
       {labels.map((label, i) => (
-        <div key={label} className="flex items-center gap-2 text-[10px] text-slate-500">
+        <div key={label} className="flex items-center gap-2 text-[10px] text-ink-faint">
           <span className="w-12 shrink-0">{label}</span>
-          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-raised">
             <span
               ref={(el) => {
                 bars.current[i] = el;
@@ -933,11 +933,11 @@ export default function EditorApp({
   if (error) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="max-w-md rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+        <div className="max-w-md rounded-card border border-brand/40 bg-brand/10 p-4 text-sm text-brand-bright">
           <p className="break-words font-mono text-xs">{error}</p>
           <button
             onClick={() => void exit()}
-            className="mt-3 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-slate-200"
+            className="mt-3 rounded-control border border-line bg-raised/60 px-3 py-1.5 text-ink"
           >
             {t("editor.back")}
           </button>
@@ -947,7 +947,7 @@ export default function EditorApp({
   }
   if (!session || !project) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-400">
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-ink-muted">
         <Loader2 size={22} className="animate-spin" />
         <p className="text-sm">{t("editor.loading")}</p>
       </div>
@@ -955,7 +955,7 @@ export default function EditorApp({
   }
 
   const iconBtn =
-    "rounded-lg border border-white/10 bg-white/5 p-2 text-slate-300 transition hover:bg-white/10 disabled:opacity-40";
+    "rounded-control border border-line bg-raised/60 p-2 text-ink-soft transition hover:bg-raised disabled:opacity-40";
   // Clip audio panel: Game/Mic for multi-stem sources, one Volume (the mix
   // fallback) otherwise. The selected clip's own source decides, not the one
   // under the playhead.
@@ -977,19 +977,19 @@ export default function EditorApp({
     selection?.kind === "overlay" ? overlayEls.current[selection.id] : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#070a12]">
+    <div className="flex h-full min-h-0 flex-col bg-base">
       {/* Header */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <button onClick={() => void exit()} className={iconBtn} title={t("editor.back")}>
           <ArrowLeft size={15} />
         </button>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-100">{project.name}</p>
-          <p className="truncate text-[11px] text-slate-500">
+          <p className="truncate text-sm font-semibold text-ink">{project.name}</p>
+          <p className="truncate text-[11px] text-ink-faint">
             {session.clip.gameTitle} · {session.clip.width}×{session.clip.height}
             {session.usingProxy ? ` · ${t("editor.proxy_active")}` : ""}
             {dirty ? " · …" : ""}
-            <span className="ml-1 font-mono text-[9px] text-slate-600">build {BUILD}</span>
+            <span className="ml-1 font-mono text-[9px] text-ink-faint">build {BUILD}</span>
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
@@ -1047,13 +1047,13 @@ export default function EditorApp({
           </button>
           <button
             onClick={() => setShowLibrary(true)}
-            className="ml-1 inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+            className="ml-1 inline-flex items-center gap-1.5 rounded-control border border-line-strong bg-raised/60 px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-raised"
           >
             <Plus size={14} /> {t("editor.add_clip")}
           </button>
           <button
             onClick={() => setShowExport(true)}
-            className="ml-1 inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-3 py-1.5 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-500/25"
+            className="ml-1 inline-flex items-center gap-1.5 rounded-control border border-link/50 bg-link/15 px-3 py-1.5 text-xs font-semibold text-ink transition hover:bg-link/25"
           >
             <Download size={14} /> {t("editor.export")}
           </button>
@@ -1062,14 +1062,14 @@ export default function EditorApp({
 
       <div className="flex min-h-0 flex-1">
         {/* Tool rail */}
-        <aside className="flex w-56 shrink-0 flex-col gap-3 overflow-y-auto border-r border-white/10 p-3">
+        <aside className="flex w-56 shrink-0 flex-col gap-3 overflow-y-auto border-r border-line p-3">
           {/* Audio first: it is the panel people actually touch, and it must
               never be pushed off-screen by the clip-adjustment sliders. */}
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">
             <Volume2 size={12} /> {t("editor.audio")}
           </p>
-          <p className="text-[10px] leading-snug text-slate-600">{t("editor.mix_hint")}</p>
-          <p className="font-mono text-[10px] text-slate-500">
+          <p className="text-[10px] leading-snug text-ink-faint">{t("editor.mix_hint")}</p>
+          <p className="font-mono text-[10px] text-ink-faint">
             {videoClock
               ? t("editor.mode_video")
               : t("editor.mode_stems", {
@@ -1081,24 +1081,24 @@ export default function EditorApp({
             engineRef={engineRef}
             labels={[t("editor.mix"), t("editor.game"), t("editor.mic")]}
           />
-          <div className="space-y-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-200/80">
+          <div className="space-y-2 rounded-control border border-link/30 bg-link/5 p-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-link-bright/80">
               {t("editor.clip_audio")}
             </p>
             {!clipSegment && (
-              <p className="text-[10px] leading-snug text-slate-500">
+              <p className="text-[10px] leading-snug text-ink-faint">
                 {t("editor.clip_audio_hint")}
               </p>
             )}
             {clipSegment && (
               <>
                 {selectedClipTitle && (
-                  <p className="truncate font-mono text-[10px] text-slate-500">
+                  <p className="truncate font-mono text-[10px] text-ink-faint">
                     {selectedClipTitle}
                   </p>
                 )}
                 {clipGainSliders.map(([field, label]) => (
-                  <label key={field} className="space-y-1 text-[11px] text-slate-400">
+                  <label key={field} className="space-y-1 text-[11px] text-ink-muted">
                     <span className="flex items-center gap-1">
                       {label}
                       <span className="ml-auto font-mono">
@@ -1119,7 +1119,7 @@ export default function EditorApp({
                             Number(e.target.value) / 100,
                           )
                       }
-                      className="w-full accent-cyan-400"
+                      className="w-full accent-link"
                     />
                   </label>
                 ))}
@@ -1131,12 +1131,12 @@ export default function EditorApp({
                       gainMic: 1,
                     })
                   }
-                  className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/10"
+                  className="w-full rounded border border-line bg-raised/60 px-2 py-1 text-[10px] text-ink-soft transition hover:bg-raised"
                 >
                   {t("editor.clip_audio_reset")}
                 </button>
                 {playing && !selectedClipAudible && (
-                  <p className="text-[10px] leading-snug text-amber-300/90">
+                  <p className="text-[10px] leading-snug text-warn-bright/90">
                     {t("editor.clip_audio_not_audible")}
                   </p>
                 )}
@@ -1146,21 +1146,21 @@ export default function EditorApp({
           <div className="mt-1 flex gap-2">
             <button
               onClick={() => setShowLibrary(true)}
-              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-control border border-link/40 bg-link/10 px-2 py-1.5 text-[11px] font-semibold text-ink transition hover:bg-link/20"
             >
               <Plus size={13} /> {t("editor.add_clip")}
             </button>
             <button
               onClick={addText}
-              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-400/20"
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-control border border-warn/40 bg-warn/10 px-2 py-1.5 text-[11px] font-semibold text-warn-bright transition hover:bg-warn/20"
             >
               <Type size={13} /> {t("editor.add_text")}
             </button>
           </div>
 
           {selectedOverlay && (
-            <div className="space-y-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-2">
-              <p className="text-[11px] font-semibold text-amber-100">{t("editor.text")}</p>
+            <div className="space-y-2 rounded-control border border-amber-400/20 bg-amber-400/5 p-2">
+              <p className="text-[11px] font-semibold text-warn-bright">{t("editor.text")}</p>
               <textarea
                 rows={2}
                 value={selectedOverlay.text ?? ""}
@@ -1169,9 +1169,9 @@ export default function EditorApp({
                     .getState()
                     .updateOverlay(selectedOverlay.id, { text: e.target.value })
                 }
-                className="w-full rounded border border-white/10 bg-black/30 px-2 py-1 text-xs text-slate-100 outline-none focus:border-amber-300/50"
+                className="w-full rounded border border-line bg-black/50 px-2 py-1 text-xs text-ink outline-none focus:border-amber-300/50"
               />
-              <label className="block text-[10px] text-slate-400">
+              <label className="block text-[10px] text-ink-muted">
                 {t("editor.text_size")}
                 <input
                   type="range"
@@ -1187,7 +1187,7 @@ export default function EditorApp({
                 />
               </label>
               <div className="flex gap-2">
-                <label className="flex flex-1 items-center gap-1 text-[10px] text-slate-400">
+                <label className="flex flex-1 items-center gap-1 text-[10px] text-ink-muted">
                   {t("editor.text_color")}
                   <input
                     type="color"
@@ -1197,10 +1197,10 @@ export default function EditorApp({
                         .getState()
                         .updateOverlay(selectedOverlay.id, { color: e.target.value })
                     }
-                    className="h-6 w-8 cursor-pointer rounded border border-white/10 bg-transparent"
+                    className="h-6 w-8 cursor-pointer rounded border border-line bg-transparent"
                   />
                 </label>
-                <label className="flex flex-1 items-center gap-1 text-[10px] text-slate-400">
+                <label className="flex flex-1 items-center gap-1 text-[10px] text-ink-muted">
                   {t("editor.text_stroke")}
                   <input
                     type="color"
@@ -1210,11 +1210,11 @@ export default function EditorApp({
                         .getState()
                         .updateOverlay(selectedOverlay.id, { strokeColor: e.target.value })
                     }
-                    className="h-6 w-8 cursor-pointer rounded border border-white/10 bg-transparent"
+                    className="h-6 w-8 cursor-pointer rounded border border-line bg-transparent"
                   />
                 </label>
               </div>
-              <label className="block text-[10px] text-slate-400">
+              <label className="block text-[10px] text-ink-muted">
                 {t("editor.text_opacity")}
                 <input
                   type="range"
@@ -1235,8 +1235,8 @@ export default function EditorApp({
           )}
 
           {selectedSegment && (
-            <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-2">
-              <p className="text-[11px] font-semibold text-slate-300">{t("editor.speed")}</p>
+            <div className="space-y-2 rounded-control border border-line bg-black/40 p-2">
+              <p className="text-[11px] font-semibold text-ink-soft">{t("editor.speed")}</p>
               <div className="flex flex-wrap gap-1">
                 {[0.25, 0.5, 1, 1.5, 2, 3, 4].map((v) => (
                   <button
@@ -1252,21 +1252,21 @@ export default function EditorApp({
                     }}
                     className={`rounded border px-1.5 py-0.5 font-mono text-[10px] transition ${
                       Math.abs(selectedSegment.speed - v) < 0.001
-                        ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-100"
-                        : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
+                        ? "border-link/60 bg-link/20 text-ink"
+                        : "border-line bg-raised/60 text-ink-muted hover:bg-raised"
                     }`}
                   >
                     {v}x
                   </button>
                 ))}
               </div>
-              <p className="text-[10px] text-slate-500">{t("editor.speed_hint")}</p>
+              <p className="text-[10px] text-ink-faint">{t("editor.speed_hint")}</p>
             </div>
           )}
 
           {selectedSegment && (
-            <div className="space-y-2 rounded-lg border border-sky-400/20 bg-sky-400/5 p-2">
-              <p className="text-[11px] font-semibold text-sky-100">{t("editor.freeze")}</p>
+            <div className="space-y-2 rounded-control border border-aqua/20 bg-link-400/5 p-2">
+              <p className="text-[11px] font-semibold text-aqua-bright">{t("editor.freeze")}</p>
               <button
                 onClick={() => {
                   const seg = selectedSegment;
@@ -1279,7 +1279,7 @@ export default function EditorApp({
                   });
                 }}
                 disabled={!freezeHereEnabled}
-                className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-200 transition hover:bg-white/10 disabled:opacity-40"
+                className="w-full rounded border border-line bg-raised/60 px-2 py-1 text-[10px] text-ink transition hover:bg-raised disabled:opacity-40"
               >
                 {t("editor.freeze_here")}
               </button>
@@ -1305,21 +1305,21 @@ export default function EditorApp({
                         .getState()
                         .updateSegment(selectedSegment.id, { freezeAtMs: 0, freezeMs: 0 })
                     }
-                    className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/10"
+                    className="w-full rounded border border-line bg-raised/60 px-2 py-1 text-[10px] text-ink-soft transition hover:bg-raised"
                   >
                     {t("editor.freeze_remove")}
                   </button>
                 </>
               )}
               {!freezeHereEnabled && (
-                <p className="text-[10px] text-slate-500">{t("editor.freeze_hint")}</p>
+                <p className="text-[10px] text-ink-faint">{t("editor.freeze_hint")}</p>
               )}
             </div>
           )}
 
           {selectedSegment && (
-            <details className="rounded-lg border border-white/10 bg-black/20">
-              <summary className="cursor-pointer select-none px-2 py-1.5 text-[11px] font-semibold text-slate-300 [&::-webkit-details-marker]:hidden">
+            <details className="rounded-control border border-line bg-black/40">
+              <summary className="cursor-pointer select-none px-2 py-1.5 text-[11px] font-semibold text-ink-soft [&::-webkit-details-marker]:hidden">
                 {t("editor.adjust")}
               </summary>
               <div className="space-y-2 p-2 pt-0">
@@ -1478,7 +1478,7 @@ export default function EditorApp({
                     vignette: 0,
                   })
                 }
-                className="w-full rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/10"
+                className="w-full rounded border border-line bg-raised/60 px-2 py-1 text-[10px] text-ink-soft transition hover:bg-raised"
               >
                 {t("editor.reset")}
               </button>
@@ -1486,7 +1486,7 @@ export default function EditorApp({
             </details>
           )}
 
-          <p className="mt-auto text-[10px] leading-relaxed text-slate-600">
+          <p className="mt-auto text-[10px] leading-relaxed text-ink-faint">
             {t("editor.shortcuts")}
           </p>
         </aside>
@@ -1642,7 +1642,7 @@ export default function EditorApp({
               )}
             </div>
           </div>
-          <div className="space-y-2 border-t border-white/10 px-3 py-2">
+          <div className="space-y-2 border-t border-line px-3 py-2">
             <ScrubBar
               total={total}
               onSeek={seek}
@@ -1664,7 +1664,7 @@ export default function EditorApp({
                 {playing ? <Pause size={15} /> : <Play size={15} />}
               </button>
               <TimeLabel total={total} />
-              <span className="ml-auto font-mono text-[11px] text-slate-500">
+              <span className="ml-auto font-mono text-[11px] text-ink-faint">
                 {project.segments.length} clips · {project.overlays.length} text
                 {videoClock ? " · audio del video" : ""}
               </span>
@@ -1674,26 +1674,26 @@ export default function EditorApp({
       </div>
 
       {/* Timeline toolbar: always-visible entries for adding content */}
-      <div className="flex items-center gap-2 border-t border-white/10 bg-black/40 px-3 py-1.5">
+      <div className="flex items-center gap-2 border-t border-line bg-black/60 px-3 py-1.5">
         <button
           onClick={() => setShowLibrary(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+          className="inline-flex items-center gap-1.5 rounded-control border border-link/40 bg-link/10 px-2.5 py-1 text-xs font-semibold text-ink transition hover:bg-link/20"
         >
           <Plus size={13} /> {t("editor.add_clip")}
         </button>
         <button
           onClick={addText}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-100 transition hover:bg-amber-400/20"
+          className="inline-flex items-center gap-1.5 rounded-control border border-warn/40 bg-warn/10 px-2.5 py-1 text-xs font-semibold text-warn-bright transition hover:bg-warn/20"
         >
           <Type size={13} /> {t("editor.add_text")}
         </button>
-        <span className="ml-auto font-mono text-[10px] text-slate-600">
+        <span className="ml-auto font-mono text-[10px] text-ink-faint">
           {library.filter((c) => c.exists).length} clips
         </span>
       </div>
 
       {/* Timeline */}
-      <div className="h-[210px] shrink-0 overflow-hidden border-t border-white/10 bg-black/30">
+      <div className="h-[210px] shrink-0 overflow-hidden border-t border-line bg-black/50">
         <TimelineView
           audioTracks={session.audioTracks}
           waveSources={waveSources}
@@ -1721,24 +1721,24 @@ export default function EditorApp({
       </div>
 
       {showLibrary && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b0f19] p-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+          <div className="w-full max-w-md rounded-card border border-line bg-surface p-4 shadow-panel">
             <div className="mb-3 flex items-center">
-              <h3 className="text-sm font-semibold text-slate-100">{t("editor.add_clip")}</h3>
+              <h3 className="text-sm font-semibold text-ink">{t("editor.add_clip")}</h3>
               <button
                 onClick={() => setShowLibrary(false)}
-                className="ml-auto rounded-lg p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-slate-200"
+                className="ml-auto rounded-control p-1.5 text-ink-faint transition hover:bg-raised hover:text-ink"
               >
                 <X size={15} />
               </button>
             </div>
             <div className="max-h-[50vh] space-y-1 overflow-y-auto pr-1">
               {library.filter((c) => c.exists).length === 0 && (
-                <p className="text-xs text-slate-500">{t("editor.no_clips")}</p>
+                <p className="text-xs text-ink-faint">{t("editor.no_clips")}</p>
               )}
               {groupLibrary(library.filter((c) => c.exists)).map((group) => (
                 <div key={group.key}>
-                  <p className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-500">
+                  <p className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wide text-ink-faint">
                     {group.key === "__flat__"
                       ? t("gallery.unfiled")
                       : group.key === "Unknown"
@@ -1752,14 +1752,14 @@ export default function EditorApp({
                         setShowLibrary(false);
                         void addClip(c);
                       }}
-                      className="flex w-full items-center gap-2 rounded-lg border border-white/5 bg-black/30 px-3 py-1.5 text-left text-xs text-slate-200 transition hover:bg-cyan-500/10"
+                      className="flex w-full items-center gap-2 rounded-control border border-line bg-black/50 px-3 py-1.5 text-left text-xs text-ink transition hover:bg-link/10"
                       title={c.file_name}
                     >
-                      <Plus size={13} className="shrink-0 text-cyan-300" />
+                      <Plus size={13} className="shrink-0 text-link-bright" />
                       <span className="min-w-0 flex-1 truncate">
                         {c.file_name.split("/").pop() ?? c.file_name}
                       </span>
-                      <span className="font-mono text-[10px] text-slate-500">
+                      <span className="font-mono text-[10px] text-ink-faint">
                         {fmt(c.duration_ms)}
                       </span>
                     </button>
@@ -1775,7 +1775,7 @@ export default function EditorApp({
         <ExportDialog session={session} onClose={() => setShowExport(false)} onDone={exportDone} />
       )}
       {toast && (
-        <div className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-cyan-500/30 bg-cyan-500/15 px-4 py-2 text-sm text-cyan-100">
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-control border border-link/40 bg-link/15 px-4 py-2 text-sm text-ink">
           {toast}
         </div>
       )}

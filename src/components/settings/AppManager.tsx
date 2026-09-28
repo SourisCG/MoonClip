@@ -44,7 +44,7 @@ export function AppManager() {
   };
 
   if (loading) return <p className="text-sm text-ink-muted">{t("common.loading")}</p>;
-  if (error) return <p className="text-sm text-blood-bright">{error}</p>;
+  if (error) return <p className="text-sm text-brand-bright">{error}</p>;
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -59,12 +59,12 @@ export function AppManager() {
       <p className="text-xs text-ink-faint">{t("games.register_hint")}</p>
 
       {busy !== null && (
-        <div className="flex items-center gap-2 rounded-xl border border-gold/40 bg-sky/10 px-3 py-2.5 text-sm text-ink">
+        <div className="flex items-center gap-2 rounded-card border border-warn/40 bg-link/10 px-3 py-2.5 text-sm text-ink">
           <Loader2 size={15} className="shrink-0 animate-spin" />
           <span>{t("games.picking")}</span>
         </div>
       )}
-      {formError && <p className="break-words font-mono text-xs text-blood-bright">{formError}</p>}
+      {formError && <p className="break-words font-mono text-xs text-brand-bright">{formError}</p>}
 
       <div>
         <h4 className="mb-2 text-sm font-semibold text-ink">
@@ -77,7 +77,7 @@ export function AppManager() {
             {inputs.map((g) => (
               <li
                 key={g.id}
-                className="flex flex-col items-start gap-2 rounded-xl border border-line bg-void/50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4"
+                className="flex flex-col items-start gap-2 rounded-card border border-line bg-base/50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4"
               >
                 <div className="flex w-full min-w-0 items-center gap-2.5 sm:w-auto">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-raised text-ink">
@@ -88,7 +88,7 @@ export function AppManager() {
                       {g.display_name}
                     </p>
                     {!g.window_title && (
-                      <p className="text-[11px] text-gold-bright/80">
+                      <p className="text-[11px] text-warn-bright/80">
                         {t("games.no_identity")}
                       </p>
                     )}
@@ -112,7 +112,7 @@ export function AppManager() {
                     onClick={() => void runDelete(g.id)}
                     disabled={busy !== null}
                     title={t("games.delete")}
-                    className="rounded-control p-2 text-ink-faint transition hover:bg-blood/20 hover:text-blood-bright disabled:opacity-50"
+                    className="rounded-control p-2 text-ink-faint transition hover:bg-brand/20 hover:text-brand-bright disabled:opacity-50"
                   >
                     <Trash2 size={15} />
                   </button>

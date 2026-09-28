@@ -137,11 +137,11 @@ export function Topbar() {
             className={`fixed z-30 touch-none select-none ${cls}`}
           />
         ))}
-      <header className="relative z-20 flex h-10 select-none items-center justify-between border-b-2 border-line bg-void/90 pl-3 pr-2 backdrop-blur-md">
+      <header className="relative z-20 flex h-10 select-none items-center justify-between border-b-2 border-line bg-base/90 pl-3 pr-2 backdrop-blur-md">
         <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-2">
           <MoonClipLogo size={18} />
           <span className="hidden shrink-0 font-sans text-sm font-bold tracking-wide text-ink sm:inline">
-            Moon<span className="text-blood-bright">Clip</span>
+            Moon<span className="text-brand-bright">Clip</span>
           </span>
           <span className="hidden truncate font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint md:inline">
             {lastClip ?? t("app.tagline")}
@@ -171,7 +171,7 @@ export function Topbar() {
             title={t("window.close")}
             onPointerDown={stop}
             onClick={onClose}
-            className="rounded-control p-1.5 text-ink-muted transition hover:bg-blood hover:text-ink"
+            className="rounded-control p-1.5 text-ink-muted transition hover:bg-brand hover:text-ink"
           >
             <X size={15} />
           </button>
