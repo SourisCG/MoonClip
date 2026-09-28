@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 
@@ -9,9 +10,11 @@ export interface SelectOption {
 }
 
 /**
- * Custom select (button + popover). Native `<select>` renders differently in
- * WebKitGTK and WebView2 (dropdown styling, hover colors), so every choice in
- * the app uses this component instead.
+ * Custom select (button + portaled popover). Native `<select>` renders
+ * differently in WebKitGTK and WebView2, so every choice in the app uses this
+ * component. The popover lives in `document.body` with fixed coordinates so
+ * ancestor stacking contexts (headers with backdrop-blur, scroll areas) can
+ * never place it behind other content.
  */
 export function Select({
   value,
@@ -34,24 +37,48 @@ export function Select({
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [rect, setRect] = useState<{ left: number; top: number; width: number; up: boolean } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const current = options.find((option) => option.value === value);
 
+  const place = useCallback(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const box = node.getBoundingClientRect();
+    const estimated = Math.min(options.length * 34 + 8, 240);
+    const up = box.bottom + estimated > window.innerHeight - 8;
+    setRect({
+      left: box.left,
+      top: up ? box.top - 4 : box.bottom + 4,
+      width: box.width,
+      up,
+    });
+  }, [options.length]);
+
   useEffect(() => {
     if (!open) return;
+    place();
     const onPointer = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !(target as HTMLElement).closest?.("[data-moonclip-popover]")) {
+        setOpen(false);
+      }
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
+    const onScroll = () => place();
     document.addEventListener("mousedown", onPointer);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onPointer);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", onScroll, true);
     };
-  }, [open]);
+  }, [open, place]);
 
   useEffect(() => {
     if (open) {
@@ -108,36 +135,49 @@ export function Select({
         </span>
         <ChevronDown size={14} className="shrink-0 text-ink-faint" />
       </button>
-      {open && (
-        <ul
-          role="listbox"
-          className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-control border border-line bg-[#1f1f20] py-1 shadow-pop"
-        >
-          {options.map((option, index) => (
-            <li key={option.value}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={option.value === value}
-                disabled={option.disabled}
-                onMouseEnter={() => setActive(index)}
-                onClick={() => pick(index)}
-                className={clsx(
-                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors",
-                  index === active ? "bg-[#2c2c30] text-ink" : "text-ink-soft",
-                  option.disabled && "cursor-not-allowed opacity-40",
-                )}
-              >
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                {option.value === value && <Check size={13} className="shrink-0 text-link-bright" />}
-              </button>
-            </li>
-          ))}
-          {!options.length && (
-            <li className="px-2.5 py-1.5 text-xs text-ink-faint">—</li>
-          )}
-        </ul>
-      )}
+      {open &&
+        rect &&
+        createPortal(
+          <ul
+            data-moonclip-popover
+            role="listbox"
+            style={{
+              position: "fixed",
+              left: rect.left,
+              top: rect.top,
+              width: rect.width,
+              transform: rect.up ? "translateY(-100%)" : undefined,
+            }}
+            className="z-[70] max-h-60 overflow-y-auto rounded-control border border-line bg-[#1f1f20] py-1 shadow-pop"
+          >
+            {options.map((option, index) => (
+              <li key={option.value}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={option.value === value}
+                  disabled={option.disabled}
+                  onMouseEnter={() => setActive(index)}
+                  onClick={() => pick(index)}
+                  className={clsx(
+                    "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors",
+                    index === active ? "bg-[#2c2c30] text-ink" : "text-ink-soft",
+                    option.disabled && "cursor-not-allowed opacity-40",
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  {option.value === value && (
+                    <Check size={13} className="shrink-0 text-link-bright" />
+                  )}
+                </button>
+              </li>
+            ))}
+            {!options.length && (
+              <li className="px-2.5 py-1.5 text-xs text-ink-faint">—</li>
+            )}
+          </ul>,
+          document.body,
+        )}
     </div>
   );
 }

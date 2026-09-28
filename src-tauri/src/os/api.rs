@@ -75,6 +75,9 @@ pub struct CaptureConfig {
     pub active_input: String,
     /// Setup run: keep the OBS window visible so the user can pick the window.
     pub setup: bool,
+    /// Audio monitor run: no capture inputs and no replay buffer; the engine
+    /// exists only to feed the live level meters.
+    pub audio_monitor: bool,
     /// Game/desktop audio device id ("default_output" = OS default).
     pub desktop_device: String,
     /// Microphone device id ("default_input" = OS default).
@@ -119,6 +122,10 @@ pub trait CaptureEngine: Send + Sync {
     /// Engine liveness (child process still running).
     fn check_alive(&mut self) -> bool {
         true
+    }
+    /// Audio-monitor run (meters only, no replay buffer).
+    fn is_monitoring(&self) -> bool {
+        false
     }
     /// Bounded engine activity tail (last events) for diagnostics and the
     /// Settings activity panel. Never the upstream engine's own log.

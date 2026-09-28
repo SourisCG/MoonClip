@@ -1,16 +1,14 @@
 import clsx from "clsx";
-import { levelToDb, levelToPercent, meterTone } from "../../lib/audio";
+import { levelToDb, levelToPercent } from "../../lib/audio";
 
-const tones = {
-  ok: "bg-ok",
-  warn: "bg-warn",
-  hot: "bg-brand",
-} as const;
+/** OBS-like fixed zones: green to 75 %, amber to 92 %, red at the top. */
+const ZONES =
+  "linear-gradient(to right, #3fb950 0 75%, #d29922 75% 92%, #ef4444 92% 100%)";
 
 /**
- * OBS-like horizontal level meter with zones. `level` is the linear
- * amplitude (1.0 = full scale); it renders the current level plus a peak
- * tick so quiet signals still read visually.
+ * OBS-style horizontal level meter. The green/amber/red scale is always
+ * visible; the current level reveals it at full brightness while the unused
+ * part stays dimmed, plus a peak tick so quiet signals still read.
  */
 export function Meter({
   level,
@@ -25,25 +23,26 @@ export function Meter({
 }) {
   const percent = levelToPercent(level);
   const peakPercent = Math.max(percent, levelToPercent(peak ?? 0));
-  const tone = meterTone(percent);
   return (
     <div className={clsx("flex items-center gap-2", className)}>
-      <div className="relative h-2.5 flex-1 overflow-hidden rounded-[2px] border border-ink-faint/40 bg-void/80">
-        {/* Zone guides at 75% and 92%. */}
-        <span aria-hidden className="absolute inset-y-0 left-[75%] w-px bg-paper/10" />
-        <span aria-hidden className="absolute inset-y-0 left-[92%] w-px bg-paper/10" />
-        <div
-          className={clsx(
-            "h-full rounded-[1px] transition-[width] duration-75",
-            tones[tone],
-          )}
-          style={{ width: `${percent}%` }}
-        />
+      <div className="relative h-2.5 flex-1 overflow-hidden rounded-[3px] border border-line bg-black/70">
+        {/* The fixed scale. */}
+        <span aria-hidden className="absolute inset-0 opacity-30" style={{ background: ZONES }} />
+        {/* Revealed (loud) part. */}
         <span
           aria-hidden
-          className="absolute inset-y-0 w-[2px] bg-paper/80"
+          className="absolute inset-y-0 left-0 transition-[width] duration-75"
+          style={{ width: `${percent}%`, background: ZONES }}
+        />
+        {/* Peak tick. */}
+        <span
+          aria-hidden
+          className="absolute inset-y-0 w-[2px] bg-white/85"
           style={{ left: `calc(${peakPercent}% - 1px)` }}
         />
+        {/* Zone separators. */}
+        <span aria-hidden className="absolute inset-y-0 left-[75%] w-px bg-black/50" />
+        <span aria-hidden className="absolute inset-y-0 left-[92%] w-px bg-black/50" />
       </div>
       {showDb && (
         <span className="w-12 shrink-0 text-right font-mono text-[10px] text-ink-muted">

@@ -40,7 +40,9 @@
     "sort_name": "Name",
     "sort_size": "Size",
     "confirm_cloud_delete": "Delete from Drive?",
-    "downloading": "Downloading from Drive…"
+    "downloading": "Downloading from Drive…",
+    "rail_hide": "Hide side panel",
+    "rail_show": "Show side panel"
   },
   "audio": {
     "title": "Capture audio",
@@ -57,7 +59,12 @@
     "stopped_hint": "Start the buffer to link audio tracks.",
     "gain_live": "Applies live while the buffer runs; otherwise on the next start.",
     "mute": "Mute",
-    "unmute": "Unmute"
+    "unmute": "Unmute",
+    "monitor_start": "Audio monitor",
+    "monitor_stop": "Stop monitor",
+    "monitor_busy": "Starting…",
+    "monitor_hint": "Shows mic and desktop levels without recording (hidden engine; stops when you leave Settings).",
+    "monitor_buffer_hint": "The buffer is running: meters are already live."
   },
   "decode": {
     "title": "Video decoding",

@@ -383,15 +383,19 @@ impl ObsProfile {
             }
         };
 
-        if cfg.inputs.is_empty() {
+        if !cfg.audio_monitor && cfg.inputs.is_empty() {
             return Err("no registered capture input (add one in Games first)".into());
         }
         // Only the active input is rendered into the collection: OBS activates
         // EVERY source it contains (hidden scene items included), so shipping
         // the whole registry opened one portal dialog per registered game on
         // every start and consumed their restore tokens.
+        // Monitor runs ship NO inputs at all (audio devices are global), so
+        // no screen/portal source is ever created.
         let active = cfg.active_input.trim();
-        let inputs: Vec<CaptureInput> = if active.is_empty() {
+        let inputs: Vec<CaptureInput> = if cfg.audio_monitor {
+            Vec::new()
+        } else if active.is_empty() {
             cfg.inputs.iter().take(1).cloned().collect()
         } else {
             cfg.inputs
@@ -400,7 +404,7 @@ impl ObsProfile {
                 .cloned()
                 .collect()
         };
-        if inputs.is_empty() {
+        if !cfg.audio_monitor && inputs.is_empty() {
             return Err(format!("active capture input '{active}' is not registered"));
         }
         Ok(Self {
@@ -434,13 +438,17 @@ impl ObsProfile {
             },
             desktop_device: normalize_device_id(&cfg.desktop_device, true),
             mic_device: normalize_device_id(&cfg.mic_device, false),
-            gain_game: cfg.gain_game.clamp(0, 200),
-            gain_mic: cfg.gain_mic.clamp(0, 200),
+            gain_game: cfg.gain_game.clamp(0, 100),
+            gain_mic: cfg.gain_mic.clamp(0, 100),
             mute_game: cfg.mute_game,
             mute_mic: cfg.mute_mic,
             single_track: cfg.audio_single_track,
             inputs,
-            active_input: cfg.active_input.clone(),
+            active_input: if cfg.audio_monitor {
+                String::new()
+            } else {
+                cfg.active_input.clone()
+            },
             game_audio_id: platform.game_audio_source_id().to_string(),
             mic_audio_id: platform.mic_audio_source_id().to_string(),
             websocket_port: cfg.websocket_port,
@@ -928,6 +936,8 @@ pub struct ObsEngine {
     config_root: PathBuf,
     error: Option<String>,
     events: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// Audio-monitor run: meters only, no replay buffer.
+    monitoring: bool,
 }
 
 impl ObsEngine {
@@ -940,6 +950,7 @@ impl ObsEngine {
             config_root: PathBuf::new(),
             error: None,
             events: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            monitoring: false,
         }
     }
 
@@ -1229,6 +1240,17 @@ impl CaptureEngine for ObsEngine {
             Err(e) => eprintln!("[moonclip] audio meters unavailable: {e}"),
         }
 
+        // Monitor runs exist only to feed the level meters: no replay buffer,
+        // no scene checks, no capture input (audio devices only).
+        if config.audio_monitor {
+            self.monitoring = true;
+            self.profile = Some(profile);
+            self.obsws = Some(ws);
+            self.push_event("audio monitor active (meters only)");
+            eprintln!("[moonclip] engine: audio monitor active");
+            return Ok(());
+        }
+
         // Setup runs exist only to let the user pick a capture target: hand
         // the engine back with no replay buffer so the caller can wait for
         // the pick to land in the source settings.
@@ -1312,7 +1334,12 @@ impl CaptureEngine for ObsEngine {
         ));
         self.profile = Some(profile);
         self.obsws = Some(ws);
+        self.monitoring = false;
         Ok(())
+    }
+
+    fn is_monitoring(&self) -> bool {
+        self.monitoring
     }
 
     async fn save_clip(&mut self) -> Result<PathBuf, String> {
@@ -1357,6 +1384,7 @@ impl CaptureEngine for ObsEngine {
             let _ = child.wait().await;
         }
         self.profile = None;
+        self.monitoring = false;
         super::audio_meters::deactivate();
         self.push_event("engine stopped");
         Ok(())
@@ -1500,6 +1528,7 @@ mod tests {
             }],
             active_input: "Game".into(),
             setup: false,
+            audio_monitor: false,
             desktop_device: "default_output".into(),
             mic_device: "default_input".into(),
             gain_game: 100,

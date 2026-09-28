@@ -575,6 +575,8 @@ pub fn run() {
 
             commands::start_buffer,
             commands::stop_buffer,
+            commands::start_audio_monitor,
+            commands::stop_audio_monitor,
             commands::clear_portal_token,
             commands::engine_status,
             commands::current_game,

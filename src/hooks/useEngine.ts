@@ -5,6 +5,7 @@ import type { ClipMetadata } from "../types";
 
 export interface EngineStatus {
   running: boolean;
+  monitoring: boolean;
   backend: string;
   tracks_linked: number;
   audio_error: string | null;
@@ -14,6 +15,7 @@ export interface EngineStatus {
 export function useEngine(onClipSaved: () => void) {
   const [status, setStatus] = useState<EngineStatus>({
     running: false,
+    monitoring: false,
     backend: "",
     tracks_linked: 0,
     audio_error: null,

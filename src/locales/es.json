@@ -40,7 +40,9 @@
     "sort_name": "Nombre",
     "sort_size": "Tamaño",
     "confirm_cloud_delete": "¿Borrar de Drive?",
-    "downloading": "Descargando de Drive…"
+    "downloading": "Descargando de Drive…",
+    "rail_hide": "Ocultar panel lateral",
+    "rail_show": "Mostrar panel lateral"
   },
   "audio": {
     "title": "Audio de captura",
@@ -57,7 +59,12 @@
     "stopped_hint": "Inicia el búfer para enlazar las pistas de audio.",
     "gain_live": "Se aplica en vivo mientras el búfer graba; sin el búfer, se aplica al iniciar.",
     "mute": "Silenciar",
-    "unmute": "Quitar silencio"
+    "unmute": "Quitar silencio",
+    "monitor_start": "Monitor de audio",
+    "monitor_stop": "Detener monitor",
+    "monitor_busy": "Iniciando…",
+    "monitor_hint": "Muestra los niveles de micrófono y escritorio sin grabar (motor oculto; se detiene al salir de Ajustes).",
+    "monitor_buffer_hint": "El buffer ya está activo: los medidores están en vivo."
   },
   "decode": {
     "title": "Decodificación de video",

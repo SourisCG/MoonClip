@@ -143,18 +143,39 @@ impl ObsPlatform for LinuxPlatform {
                 }
                 // KWin may not be ready for scripting at spawn time; a couple
                 // of quick attempts cover that without any visible window.
-                let mut ok = false;
+                let mut script = None;
                 for attempt in 0..5 {
-                    if conceal_with_kwin(pid) {
-                        ok = true;
+                    if let Some(id) = conceal_with_kwin(pid) {
+                        script = Some(id);
                         break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(200 * (attempt + 1)));
                 }
-                if ok {
-                    eprintln!("[moonclip] obs window concealed via persistent KWin script (pid={pid})");
-                } else {
+                let Some(id) = script else {
                     eprintln!("[moonclip] warning: KWin conceal failed for pid={pid}");
+                    return;
+                };
+                concealed_map().lock().unwrap().insert(pid, id);
+                eprintln!(
+                    "[moonclip] obs window concealed via persistent KWin script (pid={pid})"
+                );
+                // OBS re-shows its main window after loading profiles/scenes
+                // and when the replay buffer starts; the persistent script
+                // reacts to the common signals, and this watchdog re-runs the
+                // idempotent hide loop as a second line of defense. Runs only
+                // while the engine owns the pid (unconceal removes the entry).
+                let mut tick: u32 = 0;
+                loop {
+                    let delay = if tick < 30 {
+                        std::time::Duration::from_secs(1)
+                    } else {
+                        std::time::Duration::from_secs(10)
+                    };
+                    std::thread::sleep(delay);
+                    tick += 1;
+                    let id = concealed_map().lock().unwrap().get(&pid).cloned();
+                    let Some(id) = id else { break };
+                    let _ = run_kwin_script(&id);
                 }
             });
             return;
@@ -194,6 +215,8 @@ impl ObsPlatform for LinuxPlatform {
         if !kwin_available() {
             return;
         }
+        // Stop the re-hide watchdog first (it exits when the entry is gone).
+        concealed_map().lock().unwrap().remove(&pid);
         let plugin = format!("moonclip-conceal-{pid}");
         let _ = std::process::Command::new("gdbus")
             .args([
@@ -292,10 +315,52 @@ fn kwin_available() -> bool {
         .unwrap_or(false)
 }
 
+/// pid -> KWin script id of the active conceal script (lets the watchdog
+/// re-run the idempotent hide loop).
+fn concealed_map() -> &'static std::sync::Mutex<std::collections::HashMap<u32, String>> {
+    static MAP: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<u32, String>>,
+    > = std::sync::OnceLock::new();
+    MAP.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Re-run an already loaded KWin script (the top-level hide loop is
+/// idempotent; signal connections are armed only once).
+fn run_kwin_script(id: &str) -> bool {
+    use std::process::Command;
+    match Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.kde.KWin",
+            "--object-path",
+            &format!("/Scripting/Script{id}"),
+            "--method",
+            "org.kde.kwin.Script.run",
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => {
+            eprintln!(
+                "[moonclip] KWin Script.run failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("[moonclip] KWin Script.run spawn failed: {e}");
+            false
+        }
+    }
+}
+
 /// Load a PERSISTENT KWin script that hides our OBS windows (exact child PID)
-/// the instant they are created and keeps them out of taskbar/pager/Alt+Tab.
-/// Returns true when KWin accepted the script.
-fn conceal_with_kwin(pid: u32) -> bool {
+/// the instant they are created AND whenever OBS re-shows them (profile load,
+/// replay start). Keeps them out of taskbar/pager/Alt+Tab. Returns the KWin
+/// script id when accepted.
+fn conceal_with_kwin(pid: u32) -> Option<String> {
     use std::process::Command;
 
     let plugin = format!("moonclip-conceal-{pid}");
@@ -311,20 +376,29 @@ fn conceal_with_kwin(pid: u32) -> bool {
              w.minimized = true;\n\
            }}\n\
          }}\n\
+         function arm(w) {{\n\
+           hideOurs(w);\n\
+           if (w && w.minimizedChanged) {{ w.minimizedChanged.connect(function () {{ hideOurs(w); }}); }}\n\
+           if (w && w.activeChanged) {{ w.activeChanged.connect(function () {{ hideOurs(w); }}); }}\n\
+         }}\n\
+         if (typeof moonclipArmed === \"undefined\") {{\n\
+           var moonclipArmed = true;\n\
+           if (workspace.windowAdded) {{ workspace.windowAdded.connect(arm); }}\n\
+           if (workspace.windowActivated) {{ workspace.windowActivated.connect(hideOurs); }}\n\
+         }}\n\
          var wins = workspace.windowList ? workspace.windowList() : [];\n\
-         for (var i = 0; i < wins.length; ++i) {{ hideOurs(wins[i]); }}\n\
-         if (workspace.windowAdded) {{ workspace.windowAdded.connect(hideOurs); }}\n"
+         for (var i = 0; i < wins.length; ++i) {{ hideOurs(wins[i]); }}\n"
     );
     // KWin reads the script file when the script is loaded/run, so it must
     // stay on disk while the script lives (removed on unconceal).
     let path = std::env::temp_dir().join(format!("moonclip-kwin-conceal-{pid}.js"));
     let tmp = std::env::temp_dir().join(format!("moonclip-kwin-conceal-{pid}.js.tmp"));
     if std::fs::write(&tmp, script).is_err() {
-        return false;
+        return None;
     }
     if std::fs::rename(&tmp, &path).is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return false;
+        return None;
     }
     let loaded = Command::new("gdbus")
         .args([
@@ -340,13 +414,13 @@ fn conceal_with_kwin(pid: u32) -> bool {
             &plugin,
         ])
         .output();
-    let Ok(out) = loaded else { return false };
+    let Ok(out) = loaded else { return None };
     if !out.status.success() {
         eprintln!(
             "[moonclip] KWin loadScript failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
-        return false;
+        return None;
     }
     let id: String = String::from_utf8_lossy(&out.stdout)
         .chars()
@@ -357,33 +431,12 @@ fn conceal_with_kwin(pid: u32) -> bool {
             "[moonclip] KWin loadScript returned no id: {}",
             String::from_utf8_lossy(&out.stdout).trim()
         );
-        return false;
+        return None;
     }
-    let run = Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.kde.KWin",
-            "--object-path",
-            &format!("/Scripting/Script{id}"),
-            "--method",
-            "org.kde.kwin.Script.run",
-        ])
-        .output();
-    match run {
-        Ok(o) if o.status.success() => true,
-        Ok(o) => {
-            eprintln!(
-                "[moonclip] KWin Script.run failed: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            );
-            false
-        }
-        Err(e) => {
-            eprintln!("[moonclip] KWin Script.run spawn failed: {e}");
-            false
-        }
+    if run_kwin_script(&id) {
+        Some(id)
+    } else {
+        None
     }
 }
 

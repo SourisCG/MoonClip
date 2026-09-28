@@ -12,6 +12,8 @@ import {
   HardDriveDownload,
   Library,
   Monitor,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings,
   Square,
@@ -78,6 +80,15 @@ export default function App() {
   };
   const [showDrive, setShowDrive] = useState(false);
   const [purgeMsg, setPurgeMsg] = useState<string | null>(null);
+  const [railOpen, setRailOpenState] = useState<boolean>(
+    () => localStorage.getItem("moonclip.rail") !== "0",
+  );
+  const toggleRail = () => {
+    setRailOpenState((open) => {
+      localStorage.setItem("moonclip.rail", open ? "0" : "1");
+      return !open;
+    });
+  };
 
   // Drive library recovery (auto on connect + manual): refresh quietly when
   // the sync finishes so restored cloud clips show up immediately.
@@ -280,9 +291,21 @@ export default function App() {
       </ContextRail>
     ) : null;
 
+  const raiToggle = (
+    <button
+      onClick={toggleRail}
+      title={railOpen ? t("gallery.rail_hide") : t("gallery.rail_show")}
+      aria-label={railOpen ? t("gallery.rail_hide") : t("gallery.rail_show")}
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-line bg-raised/60 text-ink-muted transition-colors hover:border-line-strong hover:text-ink"
+    >
+      {railOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+    </button>
+  );
+
   const header =
     view === "clips" ? (
       <>
+        {raiToggle}
         <div className="relative w-full max-w-sm">
           <Search
             size={14}
@@ -308,9 +331,12 @@ export default function App() {
         />
       </>
     ) : (
-      <h2 className="truncate text-sm font-semibold text-ink">
-        {view === "games" ? t("nav.games") : t("nav.settings")}
-      </h2>
+      <>
+        {raiToggle}
+        <h2 className="truncate text-sm font-semibold text-ink">
+          {view === "games" ? t("nav.games") : t("nav.settings")}
+        </h2>
+      </>
     );
 
   const headerActions = (
@@ -419,7 +445,7 @@ export default function App() {
               </button>
             </IconRail>
 
-            {contextRail}
+            {railOpen && contextRail}
 
             <div className="flex min-w-0 flex-1 flex-col">
               <ShellHeader actions={headerActions}>{header}</ShellHeader>

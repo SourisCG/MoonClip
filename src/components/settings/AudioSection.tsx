@@ -22,6 +22,8 @@ export function AudioSection({ status }: { status: EngineStatus }) {
   const [desktop, setDesktop] = useState("default_output");
   const [error, setError] = useState<string | null>(null);
   const [singleTrack, setSingleTrack] = useState(false);
+  const [monitoring, setMonitoring] = useState(false);
+  const [monitorBusy, setMonitorBusy] = useState(false);
 
   useEffect(() => {
     invoke<AudioDevice[]>("list_audio_devices").then(setDevices).catch((e) => setError(String(e)));
@@ -33,6 +35,30 @@ export function AudioSection({ status }: { status: EngineStatus }) {
       })
       .catch(console.error);
   }, []);
+
+  // Leaving Settings → Audio always turns the monitor off (never leave a
+  // hidden engine running behind the user's back).
+  useEffect(
+    () => () => {
+      void invoke("stop_audio_monitor").catch(() => {});
+    },
+    [],
+  );
+
+  const toggleMonitor = async () => {
+    setMonitorBusy(true);
+    setError(null);
+    try {
+      const status = await invoke<{ monitoring: boolean }>(
+        monitoring ? "stop_audio_monitor" : "start_audio_monitor",
+      );
+      setMonitoring(status.monitoring);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setMonitorBusy(false);
+    }
+  };
 
   const changeDevice = async (key: "mic_device" | "desktop_device", value: string) => {
     setError(null);
@@ -96,7 +122,29 @@ export function AudioSection({ status }: { status: EngineStatus }) {
         </div>
       </div>
 
-      <TrackMixer running={status.running} />
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => void toggleMonitor()}
+          disabled={monitorBusy || status.running}
+          className={
+            "rounded-control border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 " +
+            (monitoring
+              ? "border-brand/50 bg-brand/15 text-brand-bright hover:bg-brand/25"
+              : "border-line bg-raised text-ink-soft hover:border-line-strong hover:text-ink")
+          }
+        >
+          {monitorBusy
+            ? t("audio.monitor_busy")
+            : monitoring
+              ? t("audio.monitor_stop")
+              : t("audio.monitor_start")}
+        </button>
+        <span className="text-[11px] text-ink-faint">
+          {status.running ? t("audio.monitor_buffer_hint") : t("audio.monitor_hint")}
+        </span>
+      </div>
+
+      <TrackMixer running={status.running || monitoring || status.monitoring} />
 
       <label className="flex items-start gap-2 rounded-control border border-line bg-black/30 px-3 py-2">
         <Checkbox

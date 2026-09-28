@@ -247,6 +247,8 @@ pub(crate) struct StartOverrides {
     /// running registered apps). `setup` keeps OBS visible for window picking.
     pub record_input: Option<String>,
     pub setup: bool,
+    /// Audio monitor run: engine up for the level meters only.
+    pub audio_monitor: bool,
 }
 
 /// Validate Custom JSON payloads before persisting: unknown encoder ids,
@@ -495,11 +497,11 @@ pub(crate) async fn build_capture_config(
         gain_game: setting_str(&db, "gain_game", "100")
             .parse()
             .unwrap_or(100)
-            .clamp(0, 200),
+            .clamp(0, 100),
         gain_mic: setting_str(&db, "gain_mic", "100")
             .parse()
             .unwrap_or(100)
-            .clamp(0, 200),
+            .clamp(0, 100),
         mute_game: matches!(setting_str(&db, "mute_game", "0").as_str(), "1" | "true"),
         mute_mic: matches!(setting_str(&db, "mute_mic", "0").as_str(), "1" | "true"),
         audio_single_track: matches!(
@@ -517,6 +519,7 @@ pub(crate) async fn build_capture_config(
         inputs,
         active_input,
         setup: overrides.setup,
+        audio_monitor: overrides.audio_monitor,
         custom_encoder,
         custom_video,
         obs_bin: Some(obs_bin),
@@ -582,12 +585,30 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
         set_audio_error(app, None).await;
         return Ok(EngineStatus {
             running: true,
+            monitoring: false,
             backend: backend_name().to_string(),
             tracks_linked: tracks,
             audio_error: None,
             engine_error: None,
         });
     }
+    // Audio monitor runs stop here: the engine is up for the level meters
+    // only, with no capture input and no replay buffer.
+    if overrides.audio_monitor {
+        let st = app.state::<AppState>();
+        *st.recorder.lock().await = Some(engine);
+        set_engine_error(app, None).await;
+        set_audio_error(app, None).await;
+        return Ok(EngineStatus {
+            running: false,
+            monitoring: true,
+            backend: backend_name().to_string(),
+            tracks_linked: 0,
+            audio_error: None,
+            engine_error: None,
+        });
+    }
+
     // Portal token + real canvas size: OBS refreshes the restore token on a
     // successful Start and the portal (not our profile) decides the captured
     // size. The settings are persisted the moment the source reports them, so
@@ -643,6 +664,7 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
         let _ = db.set_setting("engine_source_height", &src_h.to_string());
     }
     let tracks = engine.tracks_linked();
+    let engine_monitoring = engine.is_monitoring();
     {
         let st = app.state::<AppState>();
         *st.recorder.lock().await = Some(engine);
@@ -658,6 +680,7 @@ async fn start_engine(app: &AppHandle, overrides: &StartOverrides) -> Result<Eng
     set_audio_error(app, None).await;
     Ok(EngineStatus {
         running: true,
+        monitoring: engine_monitoring,
         backend: backend_name().to_string(),
         tracks_linked: tracks,
         audio_error: None,
@@ -677,6 +700,7 @@ async fn stop_engine(app: &AppHandle) -> Result<EngineStatus, String> {
     set_engine_error(app, None).await;
     Ok(EngineStatus {
         running: false,
+        monitoring: false,
         backend: backend_name().to_string(),
         tracks_linked: 0,
         audio_error: None,
@@ -962,6 +986,8 @@ pub fn read_thumbnail(
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EngineStatus {
     pub running: bool,
+    /// Audio-monitor run: engine up for the meters, not recording.
+    pub monitoring: bool,
     pub backend: String,
     /// Audio tracks the running configuration records (0, 1 or 3).
     pub tracks_linked: usize,
@@ -1035,6 +1061,39 @@ pub async fn start_buffer(app: AppHandle) -> Result<EngineStatus, String> {
         }
     }
     manual_start(&app).await
+}
+
+/// Start the engine in audio-monitor mode: meters only, no capture input and
+/// no replay buffer. Used by Settings → Audio to check device levels without
+/// recording. A no-op when the buffer is already running.
+#[tauri::command]
+pub async fn start_audio_monitor(app: AppHandle) -> Result<EngineStatus, String> {
+    {
+        let st = app.state::<AppState>();
+        if st.recorder.lock().await.is_some() {
+            return engine_status(app).await;
+        }
+    }
+    let overrides = StartOverrides {
+        audio_monitor: true,
+        ..Default::default()
+    };
+    start_engine(&app, &overrides).await
+}
+
+/// Stop the audio monitor. Never touches a running replay buffer.
+#[tauri::command]
+pub async fn stop_audio_monitor(app: AppHandle) -> Result<EngineStatus, String> {
+    let monitoring = {
+        let st = app.state::<AppState>();
+        let guard = st.recorder.lock().await;
+        guard.as_ref().map(|e| e.is_monitoring()).unwrap_or(false)
+    };
+    if monitoring {
+        stop_engine(&app).await
+    } else {
+        engine_status(app).await
+    }
 }
 
 /// Start button / hotkey: record the running registered game; if none is
@@ -1521,15 +1580,20 @@ pub(crate) async fn sweep_engine_liveness(app: &AppHandle) -> bool {
 #[tauri::command]
 pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
     let alive = sweep_engine_liveness(&app).await;
-    let tracks = if alive {
+    let (tracks, monitoring) = if alive {
         let st = app.state::<AppState>();
         let guard = st.recorder.lock().await;
-        guard.as_ref().map(|e| e.tracks_linked()).unwrap_or(0)
+        guard
+            .as_ref()
+            .map(|e| (e.tracks_linked(), e.is_monitoring()))
+            .unwrap_or((0, false))
     } else {
-        0
+        (0, false)
     };
     Ok(EngineStatus {
-        running: alive,
+        // A monitor run keeps the engine alive without recording.
+        running: alive && !monitoring,
+        monitoring,
         backend: backend_name().to_string(),
         tracks_linked: tracks,
         audio_error: read_audio_error(&app).await,
