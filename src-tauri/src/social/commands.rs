@@ -40,7 +40,7 @@ impl From<DriveFile> for DriveEntry {
 }
 
 /// Root folder id (cached in settings) or a fresh one.
-async fn root_folder(db: &DbState, client: &DriveClient) -> Result<String, String> {
+pub(crate) async fn root_folder(db: &DbState, client: &DriveClient) -> Result<String, String> {
     let cached = db
         .get_settings()?
         .get("drive_root_folder_id")

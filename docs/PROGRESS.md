@@ -16,7 +16,7 @@ Canonical phase numbers live in `ROADMAP_PHASES.md`; technical specs in `01_*`�
 | 3-ui | Transparent tray icon, i18n codec labels, opener perms, disk note | ✅ done | `7c5d733` (batch) | user-verified pending |
 | 4 | Game detection + launchers + custom apps | ✅ done | `e956ebe`, `d39ec45` | Browser windows/title suffixes never fake a game (live-verified) |
 | 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | ✅ done | `b67080e`, `3067a4c`, `367a8bf` | E1 lossless + 3 tracks; export E2E 1 video + 1 audio |
-| 6 | Drive + social sharing | 🚧 Drive + YouTube + Discord + TikTok done; Twitter/X pending | `4b3668b`→`15e3e91` | Drive public link verified; Discord + TikTok live passes pending |
+| 6 | Drive + social sharing | 🚧 Drive (+restore) + YouTube + Discord + TikTok done; Twitter/X pending | `4b3668b`→`15e3e91` | Drive public link verified; Discord/TikTok live + Windows restore pending |
 | 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
 | 8 | Distribution & dependencies (decode matrix, audit, any-PC fallbacks) | 🚧 in progress | `f62e6d3`→`425aab2` | Decode notice + dependency audit shipped; bundles pending |
 
@@ -29,6 +29,23 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **Drive: restaurar biblioteca en otro equipo (2026-09-27)** —
+  `social/sync.rs` + `drive_sync_library`: al conectar Drive (o con el botón
+  "Restaurar biblioteca" en Ajustes → Cuentas) la app recorre
+  `MoonClip/<juego>/` y reconstruye la galería: cada video remoto sin fila
+  local se inserta como clip **solo nube** (`insert_cloud_clip`: `cloud=1`,
+  `drive_file_id`/`drive_web_url`, duración de `videoMediaMetadata`,
+  `created_at` normalizado a formato SQLite) con la miniatura que Drive
+  genera (`thumbnailLink` a `=s480`). `upsert_drive_folder` por carpeta para
+  que los uploads futuros reutilicen las existentes. Sync idempotente (match
+  por `drive_file_id`, nombres únicos `_2`), uno a la vez (`AtomicBool`),
+  auto-reparación de miniaturas faltantes en cada pasada y evento
+  `moonclip://drive-sync-done` que refresca la galería. Cliente Drive:
+  `list()` ahora pagina (`nextPageToken`) y `DriveFile` gana `createdTime`,
+  `webViewLink` y `videoMediaMetadata`. Tests: normalización de fecha,
+  recorte del `thumbnailLink`, sanitizado de carpetas, nombres únicos, mapper
+  Drive→fila, parseo de metadata y paginación con mock. 243 Rust tests,
+  clippy `-D warnings`, `pnpm build`. Prueba real pendiente en Windows.
 - **TikTok (2026-09-27)** — `social/tiktok.rs`: desktop Login Kit with an
   ephemeral loopback (`http://127.0.0.1:<port>/callback/`) and PKCE
   **hex-encoded SHA256** (TikTok's desktop doc: it does not use the RFC 7636

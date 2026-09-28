@@ -12,6 +12,7 @@ pub mod discord;
 pub mod drive;
 pub mod google;
 pub mod oauth;
+pub mod sync;
 pub mod tiktok;
 pub mod token_store;
 pub mod youtube;
@@ -257,6 +258,18 @@ pub async fn connect_google_drive(app: AppHandle) -> Result<SocialStatus, String
         let drive_client = drive::DriveClient::new(access);
         drive::ensure_root_folder(&db, &drive_client).await?;
     }
+    // Medal-style: a fresh machine picks up the clips already in Drive.
+    let sync_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match sync::sync_library(&sync_app).await {
+            Ok(summary) if summary.restored > 0 || summary.thumbs_repaired > 0 => eprintln!(
+                "[moonclip] drive sync: {} clip(s) restored, {} thumbnail(s) repaired",
+                summary.restored, summary.thumbs_repaired
+            ),
+            Ok(_) => {}
+            Err(e) => eprintln!("[moonclip] drive sync failed: {e}"),
+        }
+    });
     social_status(app)
 }
 

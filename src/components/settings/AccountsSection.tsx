@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { HardDrive, MessageSquare, Music2, SquarePlay } from "lucide-react";
+import { HardDrive, MessageSquare, Music2, RefreshCw, SquarePlay } from "lucide-react";
 import type { ReactNode } from "react";
 
 interface ProviderStatus {
@@ -77,6 +77,7 @@ export function AccountsSection() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [discordMaxMb, setDiscordMaxMb] = useState("10");
+  const [restoreMsg, setRestoreMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -102,6 +103,24 @@ export function AccountsSection() {
     void invoke("set_setting", { key: "discord_max_mb", value }).catch(() => {});
   };
 
+  const restoreDrive = async () => {
+    setBusy("drive-restore");
+    setError(null);
+    setRestoreMsg(null);
+    try {
+      const res = await invoke<{ restored: number }>("drive_sync_library");
+      setRestoreMsg(
+        res.restored > 0
+          ? t("accounts.restore_done", { n: res.restored })
+          : t("accounts.restore_none"),
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const run = async (key: string, command: string) => {
     setBusy(key);
     setError(null);
@@ -125,6 +144,23 @@ export function AccountsSection() {
         onConnect={() => void run("google_drive", "connect_google_drive")}
         onDisconnect={() => void run("google_drive", "disconnect_google_drive")}
       />
+      {status?.google_drive.connected && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/20 px-3 py-2 sm:px-4">
+          <button
+            onClick={() => void restoreDrive()}
+            disabled={busy !== null}
+            className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <RefreshCw size={12} className={busy === "drive-restore" ? "animate-spin" : ""} />
+              {busy === "drive-restore" ? t("accounts.restoring") : t("accounts.restore")}
+            </span>
+          </button>
+          <span className="text-[11px] text-slate-500">
+            {restoreMsg ?? t("accounts.restore_hint")}
+          </span>
+        </div>
+      )}
       <ProviderRow
         icon={<SquarePlay size={14} />}
         label={t("accounts.youtube")}

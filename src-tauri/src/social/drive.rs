@@ -13,6 +13,18 @@ const ROOT_FOLDER_NAME: &str = "MoonClip";
 /// Resumable upload chunk (Google requires multiples of 256 KiB).
 const CHUNK: usize = 8 * 1024 * 1024;
 
+/// Video metadata Drive exposes for uploaded videos (duration for restored
+/// library rows).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VideoMediaMetadata {
+    #[serde(default, rename = "durationMillis")]
+    pub duration_millis: Option<i64>,
+    #[serde(default)]
+    pub width: Option<i64>,
+    #[serde(default)]
+    pub height: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriveFile {
     pub id: String,
@@ -23,14 +35,22 @@ pub struct DriveFile {
     pub size: Option<String>,
     #[serde(default, rename = "modifiedTime")]
     pub modified_time: Option<String>,
+    #[serde(default, rename = "createdTime")]
+    pub created_time: Option<String>,
     #[serde(default, rename = "thumbnailLink")]
     pub thumbnail_link: Option<String>,
+    #[serde(default, rename = "webViewLink")]
+    pub web_view_link: Option<String>,
+    #[serde(default, rename = "videoMediaMetadata")]
+    pub video_media_metadata: Option<VideoMediaMetadata>,
 }
 
 #[derive(Deserialize)]
 struct FileList {
     #[serde(default)]
     files: Vec<DriveFile>,
+    #[serde(default, rename = "nextPageToken")]
+    next_page_token: Option<String>,
 }
 
 pub struct DriveClient {
@@ -370,18 +390,43 @@ impl DriveClient {
         serde_json::from_str(&text).map_err(|e| format!("cannot decode the Drive response: {e}"))
     }
 
-    /// Files matching a Drive query, newest first.
+    /// Files matching a Drive query, newest first. Follows `nextPageToken`
+    /// until the listing is complete (libraries can exceed 200 files).
     pub async fn list(&self, query: &str, fields: &str) -> Result<Vec<DriveFile>, String> {
-        let url = format!(
-            "{}/files?q={}&fields={}&pageSize=200&orderBy=modifiedTime desc",
-            self.api,
-            urlencoding::encode(query),
-            urlencoding::encode(fields),
-        );
-        let value = self.get_json(&url).await?;
-        let list: FileList =
-            serde_json::from_value(value).map_err(|e| format!("unexpected file list: {e}"))?;
-        Ok(list.files)
+        let mut files = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut url = format!(
+                "{}/files?q={}&fields={}&pageSize=200&orderBy=modifiedTime desc",
+                self.api,
+                urlencoding::encode(query),
+                urlencoding::encode(fields),
+            );
+            if let Some(token) = &token {
+                url.push_str(&format!("&pageToken={}", urlencoding::encode(token)));
+            }
+            let value = self.get_json(&url).await?;
+            let page: FileList = serde_json::from_value(value)
+                .map_err(|e| format!("unexpected file list: {e}"))?;
+            files.extend(page.files);
+            match page.next_page_token {
+                Some(next) if !next.is_empty() => token = Some(next),
+                _ => break,
+            }
+        }
+        Ok(files)
+    }
+
+    /// Children of a folder with everything the library sync needs (original
+    /// timestamps, duration and the generated thumbnail link).
+    pub async fn list_library_children(&self, parent: &str) -> Result<Vec<DriveFile>, String> {
+        let escaped = parent.replace('\'', "\\'");
+        let query = format!("'{escaped}' in parents and trashed = false");
+        self.list(
+            &query,
+            "files(id,name,mimeType,size,modifiedTime,createdTime,thumbnailLink,webViewLink,videoMediaMetadata),nextPageToken",
+        )
+        .await
     }
 
     pub async fn find_folder(
@@ -461,6 +506,64 @@ mod tests {
     #[test]
     fn folder_mime_is_the_drive_folder_type() {
         assert_eq!(FOLDER_MIME, "application/vnd.google-apps.folder");
+    }
+
+    #[test]
+    fn library_files_parse_the_sync_metadata() {
+        let file: DriveFile = serde_json::from_str(
+            r#"{
+                "id": "f1",
+                "name": "clip.mp4",
+                "mimeType": "video/mp4",
+                "size": "19654086",
+                "createdTime": "2026-09-27T18:04:05.123Z",
+                "thumbnailLink": "https://lh3.googleusercontent.com/x=s220",
+                "webViewLink": "https://drive.google.com/file/d/f1/view",
+                "videoMediaMetadata": {"durationMillis": 8800, "width": 1920, "height": 1080}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(file.created_time.as_deref(), Some("2026-09-27T18:04:05.123Z"));
+        assert_eq!(file.thumbnail_link.as_deref(), Some("https://lh3.googleusercontent.com/x=s220"));
+        assert_eq!(
+            file.web_view_link.as_deref(),
+            Some("https://drive.google.com/file/d/f1/view")
+        );
+        let metadata = file.video_media_metadata.unwrap();
+        assert_eq!(metadata.duration_millis, Some(8800));
+        assert_eq!(metadata.width, Some(1920));
+    }
+
+    /// `list` follows `nextPageToken` until the listing is complete.
+    #[tokio::test]
+    async fn list_follows_pagination() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let first = server.recv().unwrap();
+            assert!(!first.url().contains("pageToken"));
+            first
+                .respond(tiny_http::Response::from_string(
+                    r#"{"files":[{"id":"a","name":"a.mp4","mimeType":"video/mp4"}],"nextPageToken":"TOKEN1"}"#,
+                ))
+                .unwrap();
+            let second = server.recv().unwrap();
+            assert!(second.url().contains("pageToken=TOKEN1"), "{}", second.url());
+            second
+                .respond(tiny_http::Response::from_string(
+                    r#"{"files":[{"id":"b","name":"b.mp4","mimeType":"video/mp4"}]}"#,
+                ))
+                .unwrap();
+        });
+        let client = DriveClient::with_base(format!("http://127.0.0.1:{port}"), "tok");
+        let files = client
+            .list("'root' in parents", "files(id,name,mimeType)")
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].id, "a");
+        assert_eq!(files[1].id, "b");
+        handle.join().unwrap();
     }
 
     /// A local mock Drive answers the folder query and the create call.

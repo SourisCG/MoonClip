@@ -562,6 +562,7 @@ pub fn run() {
             social::commands::drive_upload_clip,
             social::commands::drive_browse,
             social::commands::drive_download,
+            social::sync::drive_sync_library,
             commands::reconcile_library,
             commands::organize_library,
             commands::resolve_clip_src,

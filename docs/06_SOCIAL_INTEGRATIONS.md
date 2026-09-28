@@ -38,6 +38,15 @@ All uploads are client-to-service. No MoonClip server.
   nuevo) y "Reemplazar en Drive" manda el viejo a la papelera. El diálogo de
   compartir tiene estado pendiente/subido (copiar link, hacer público, abrir
   en Drive, borrar local ahora, reemplazar).
+- **Restaurar biblioteca (2026-09-27)**: conectar Drive en otro equipo
+  reconstruye la galería desde el árbol remoto: los videos ya subidos se
+  indexan como filas **solo nube** (`cloud=1`, ids, duración de
+  `videoMediaMetadata`, `created_at` original normalizado) con la miniatura
+  que genera Drive (`thumbnailLink`) y el mapeo de carpetas reutilizado
+  (`drive_folders`). Automático al conectar + botón "Restaurar biblioteca" en
+  Ajustes → Cuentas; abrir/editar descarga on-demand (`ensure_local`). El sync
+  es idempotente (match por `drive_file_id`, nombres `_2`), corre de a uno y
+  auto-repara miniaturas faltantes en cada pasada.
 - **Navegación estilo Medal (2026-09-27)**: galería en grid de tarjetas 16:9,
   sidebar con Todos/Favoritos/Subidos/En Drive/juegos y toolbar con búsqueda y
   orden. Al hacer clic se abre UN solo panel (el de recorte, agrandado) con

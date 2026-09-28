@@ -359,6 +359,76 @@ impl DbState {
         Ok(clip)
     }
 
+    /// Insert a Drive-only clip restored by the library sync: keeps the
+    /// original creation date and the Drive ids in a single statement.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_cloud_clip(
+        &self,
+        file_name: &str,
+        thumbnail_name: &str,
+        game_title: &str,
+        duration_ms: i64,
+        file_size_bytes: i64,
+        folder: &str,
+        drive_file_id: &str,
+        drive_web_url: Option<&str>,
+        created_at: &str,
+    ) -> Result<ClipRecord, String> {
+        if !paths::is_safe_relative_media_name(file_name)
+            || !paths::is_safe_relative_media_name(thumbnail_name)
+        {
+            return Err("invalid file name".into());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO clips
+             (id, file_name, thumbnail_name, game_title, duration_ms, file_size_bytes,
+              folder, cloud, drive_file_id, drive_web_url, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10)",
+            params![
+                id,
+                file_name,
+                thumbnail_name,
+                game_title,
+                duration_ms,
+                file_size_bytes,
+                folder,
+                drive_file_id,
+                drive_web_url,
+                created_at
+            ],
+        )
+        .map_err(|e| format!("cannot insert the restored clip: {e}"))?;
+        let clip: ClipRecord = conn
+            .query_row(
+                "SELECT id, file_name, thumbnail_name, game_title, duration_ms,
+                        file_size_bytes, created_at, is_favorite, drive_file_id, drive_web_url,
+                        folder, cloud
+                 FROM clips WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(ClipRecord {
+                        id: r.get(0)?,
+                        file_name: r.get(1)?,
+                        thumbnail_name: r.get(2)?,
+                        game_title: r.get(3)?,
+                        duration_ms: r.get(4)?,
+                        file_size_bytes: r.get(5)?,
+                        created_at: r.get(6)?,
+                        is_favorite: r.get::<_, i64>(7)? != 0,
+                        drive_file_id: r.get(8)?,
+                        drive_web_url: r.get(9)?,
+                        folder: r.get(10)?,
+                        cloud: r.get::<_, i64>(11)? != 0,
+                        exists: false,
+                    })
+                },
+            )
+            .map_err(|e| format!("cannot read the restored clip: {e}"))?;
+        Ok(clip)
+    }
+
     /// Correct a stored duration (measured, not assumed).
     pub fn update_duration(&self, id: &str, duration_ms: i64) -> Result<(), String> {
         let conn = self.lock()?;

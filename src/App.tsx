@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { Circle, Clapperboard, Gamepad2, Monitor, Settings, Square } from "lucide-react";
@@ -33,6 +34,17 @@ export default function App() {
     setGalleryTick((n) => n + 1);
     void refreshClips();
   }, [refreshClips]);
+
+  // Drive library recovery (auto on connect + manual): refresh quietly when
+  // the sync finishes so restored cloud clips show up immediately.
+  useEffect(() => {
+    const unlisten = listen("moonclip://drive-sync-done", () => {
+      onClipSaved();
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [onClipSaved]);
   const { status, busy, error: engineError, start, stop, saveNow } = useEngine(onClipSaved);
   const [screenBusy, setScreenBusy] = useState(false);
   const startScreen = async () => {
