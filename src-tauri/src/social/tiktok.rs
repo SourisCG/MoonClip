@@ -81,15 +81,34 @@ pub fn sanitize_title(raw: &str) -> Result<String, String> {
 }
 
 /// `FILE_UPLOAD` chunking: chunk size + chunk count. Files under 5 MB must
-/// use a single chunk equal to the file size; the last chunk may be smaller.
+/// use a single chunk equal to the file size. For larger files TikTok wants
+/// `total_chunk_count = floor(size / chunk_size)` and the LAST chunk absorbs
+/// the remainder (it is oversized, never smaller): `ceil` is rejected with
+/// `invalid_params` "total chunk count is invalid" (their own example:
+/// 50,000,123 bytes / 10,000,000 chunks => 5 chunks).
 pub fn chunk_plan(size: u64) -> (u64, u32) {
     let size = size.max(1);
     if size <= MIN_CHUNK {
         (size, 1)
     } else {
         let chunk = CHUNK.min(size);
-        (chunk, size.div_ceil(chunk) as u32)
+        (chunk, (size / chunk).max(1) as u32)
     }
+}
+
+/// Byte ranges to upload, in order. The first `count - 1` are exactly
+/// `chunk_size` bytes; the last one carries the remainder.
+pub fn chunk_ranges(size: u64) -> Vec<(u64, u64)> {
+    let size = size.max(1);
+    let (chunk, count) = chunk_plan(size);
+    let mut ranges = Vec::with_capacity(count as usize);
+    let mut start = 0u64;
+    for index in 0..count {
+        let end = if index + 1 == count { size } else { start + chunk };
+        ranges.push((start, end));
+        start = end;
+    }
+    ranges
 }
 
 /// Token endpoint mode: the Cloudflare Worker when configured, direct TikTok
@@ -534,14 +553,13 @@ async fn publish_video(
         .await
         .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     use tokio::io::AsyncReadExt;
-    let mut buffer = vec![0u8; chunk_size as usize];
-    let mut sent: u64 = 0;
-    while sent < size {
-        let want = ((size - sent).min(chunk_size)) as usize;
+    for (start, end) in chunk_ranges(size) {
+        let take = (end - start) as usize;
+        let mut buffer = vec![0u8; take];
         let mut filled = 0usize;
-        while filled < want {
+        while filled < take {
             let n = file
-                .read(&mut buffer[filled..want])
+                .read(&mut buffer[filled..])
                 .await
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
             if n == 0 {
@@ -549,12 +567,17 @@ async fn publish_video(
             }
             filled += n;
         }
-        let end = sent + filled as u64;
+        if filled != take {
+            return Err(format!(
+                "short read on {}: expected {take} bytes, got {filled}",
+                path.display()
+            ));
+        }
         let response = http
             .put(&init.data.upload_url)
             .header("Content-Type", "video/mp4")
-            .header("Content-Range", format!("bytes {}-{}/{}", sent, end - 1, size))
-            .body(buffer[..filled].to_vec())
+            .header("Content-Range", format!("bytes {start}-{}/{}", end - 1, size))
+            .body(buffer)
             .send()
             .await
             .map_err(|e| format!("TikTok upload failed: {e}"))?;
@@ -563,14 +586,13 @@ async fn publish_video(
             let text = response.text().await.unwrap_or_default();
             return Err(format!("TikTok chunk upload failed ({status}): {text}"));
         }
-        sent = end;
         let _ = app.emit(
             "moonclip://publish-progress",
             serde_json::json!({
                 "clipId": clip_id,
                 "provider": "tiktok",
                 "phase": "upload",
-                "sent": sent,
+                "sent": end,
                 "total": size,
             }),
         );
@@ -757,12 +779,41 @@ mod tests {
     }
 
     #[test]
-    fn chunk_plan_respects_tiktok_rules() {
+    fn chunk_plan_matches_tiktoks_floor_rule() {
         assert_eq!(chunk_plan(1), (1, 1));
         assert_eq!(chunk_plan(4 * 1024 * 1024), (4 * 1024 * 1024, 1));
         assert_eq!(chunk_plan(5 * 1024 * 1024), (5 * 1024 * 1024, 1));
-        assert_eq!(chunk_plan(25 * 1024 * 1024), (10 * 1024 * 1024, 3));
+        // The real rejected case: 19,654,086 bytes / 10 MiB => one oversized
+        // last chunk (ceil used to declare 2 and TikTok answered
+        // invalid_params "total chunk count is invalid").
+        assert_eq!(chunk_plan(19_654_086), (10 * 1024 * 1024, 1));
+        assert_eq!(chunk_plan(25 * 1024 * 1024), (10 * 1024 * 1024, 2));
         assert_eq!(chunk_plan(70 * 1024 * 1024), (10 * 1024 * 1024, 7));
+    }
+
+    #[test]
+    fn chunk_ranges_cover_the_whole_file() {
+        for size in [
+            1u64,
+            4 * 1024 * 1024,
+            5 * 1024 * 1024,
+            19_654_086,
+            25 * 1024 * 1024,
+            70 * 1024 * 1024,
+        ] {
+            let ranges = chunk_ranges(size);
+            assert_eq!(ranges.first().unwrap().0, 0);
+            assert_eq!(ranges.last().unwrap().1, size);
+            for pair in ranges.windows(2) {
+                assert_eq!(pair[0].1, pair[1].0, "gap in {ranges:?}");
+            }
+            let (chunk, _) = chunk_plan(size);
+            for (start, end) in &ranges[..ranges.len() - 1] {
+                assert_eq!(end - start, chunk);
+            }
+            let (last_start, last_end) = *ranges.last().unwrap();
+            assert!(last_end > last_start);
+        }
     }
 
     #[test]
