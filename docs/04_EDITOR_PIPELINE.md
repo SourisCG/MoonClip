@@ -110,20 +110,21 @@ Commons fallback. Author/license is shown in the picker (CC-BY requires
 attribution). Giphy/Tenor/Klipy are out: all require an API key and Google
 **shut down the Tenor API in June 2026**.
 
-### Sub-phases
+### Sub-phases (Phase 5 closed; UI pass pending in the v2 shell)
 
-- **E1** Quick trim — **done**. (Acceptance: lossless <1 s, precise exact, 3 tracks kept).
+- **E1** Quick trim — **done**. (Acceptance: lossless <1 s, precise exact, 3 tracks kept.)
 - **E2** In-app maximized editor view + project JSON + single-clip timeline
   (trim/split/duplicate, undo/redo, Ctrl+K/S/D) + export presets with
   progress/cancel — **done** (lazy chunk, encoder auto/CPU fallback, 3 audio
   lanes, staged export).
 - **E3** Overlays: text (all properties + entrance/exit/effects), local
-  stickers/images/GIFs, upload, Openverse search, Moveable interactions.
+  stickers/images/GIFs, upload, Openverse search, Moveable interactions — **done**.
 - **E4** Effects: speed 0.25x+, freeze, zoom/crop/rotate keyframes, filters,
-  chroma, opacity.
-- **E5** Multi-clip + transitions + 3-stem mixing and music → 1-track export.
+  chroma, opacity — **done**.
+- **E5** Multi-clip + transitions + 3-stem mixing and music → 1-track export — **done**.
 - **E6** Polish: autosave/reopen, full hotkeys, complete export dialog, E2E
-  and cross-platform close (Linux + Windows).
+  and cross-platform close (Linux + Windows) — **done**; the remaining work is
+  visual (migrate the editor to the v2 tokens in `07_UI_MOONCLIP.md`).
 
 Every sub-phase: Rust golden-arg tests for the graph, `cargo test/clippy`,
 `pnpm build`, and an E2E export of a 3 s clip asserting 1 video + 1 audio.

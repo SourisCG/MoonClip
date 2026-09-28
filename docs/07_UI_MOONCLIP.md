@@ -1,66 +1,129 @@
-# 07 — MoonClip UI (Nocturnal + Zero-Cost While Gaming)
+# 07 — UI (Medal-style shell, v2 design system)
 
-Inspired by https://moonclip.souriscg.dev / https://github.com/SourisCG/MoonClip (C starfield). Web re-implementation must cost 0 GPU/CPU while gaming.
+> The UI was rebuilt (2026-09-28) around Medal-style navigation: a fixed icon
+> rail, a contextual rail, a full-width header and flat surfaces. The old
+> "MoonLit" glass/cyan look is gone. This document is the reference for the
+> tokens, components and cross-webview rules.
 
-## 1. Palette (Tailwind v3, see `tailwind.config.js`)
+## 1. Direction
 
-- Base void: `#050608` (app bg), panels `#0b0f19/50` + `backdrop-blur-xl border-white/5`.
-- Cards: `#0d1220/60`.
-- Accents: lunar `#38bdf8` → astral `#818cf8`, starlight `#e0e7ff`.
-- Glow: `shadow-[0_0_15px_rgba(56,189,248,0.3)]`, hover borders `hover:border-cyan-500/40`.
-- Top aura: `w-[700px] h-[250px] bg-gradient-to-b from-cyan-500/10 via-indigo-500/5 to-transparent blur-3xl`.
+- Neutral layered blacks (Medal-like), **no generic dark-app cyan/purple**.
+- Accents come from the brand mark: **red** `#ef4444` (actions) and **blue**
+  `#3b82f6` (links/focus); aqua is reserved for Aero-like glows.
+- Contrast is measured, not guessed: body text is ≥ 4.5:1 on every surface.
 
-Already in `tailwind.config.js` as `colors.moonclip.{void,panel,card,lunar,astral,starlight}`.
+## 2. Tokens (`tailwind.config.js` + `src/index.css`)
 
-## 2. Starfield: `src/components/starfield/MoonClipStarfield.tsx`
+| Token | Value | Use |
+|---|---|---|
+| `base` | `#000000` | app background (root, header) |
+| `surface` | `#161617` | rails, panels, cards |
+| `raised` | `#1f1f20` | rows, chips, inputs, hover |
+| `line` / `line-strong` | `rgba(255,255,255,.08)` / `.16` | hairlines and borders |
+| `ink` | `#ffffff` | primary text (21:1) |
+| `ink-soft` | `#b3b1b6` | secondary text (9.9:1) |
+| `ink-muted` | `#8b8b90` | labels, meta (5.3:1) |
+| `ink-faint` | `#6e6e73` | decorative only (3.2:1) |
+| `brand` / `brand-bright` | `#ef4444` / `#f87171` | primary buttons, recording, playheads |
+| `link` / `link-bright` | `#3b82f6` / `#60a5fa` | links, focus, selections, meters |
+| `ok` / `warn` / `aqua` / `edit` | `#3fb950` / `#d29922` / `#39c5cf` / `#a371f7` | states and editor accents |
 
-- `<canvas fixed inset-0 pointer-events-none z-0 opacity-70>`, 70–100 stars (spec: 85), size 0.4–2px, `sin(frame*speed)*0.35` twinkle, glow on `size>1.4`.
-- **Critical:** pause on hidden:
-  ```tsx
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { isPaused=true; cancelAnimationFrame(id); }
-    else if (isPaused) { isPaused=false; render(); }
-  });
-  // + window blur/focus, + unmount cleanup
-  ```
-- No CSS-div stars, no uncontrolled rAF. Implement in Phase 1.
+Radii: `rounded-control` (8 px) for controls, `rounded-card` (10 px) for panels.
+Shadows: `shadow-panel` (floating surfaces), `shadow-pop` (popovers).
+Legacy v1 aliases (`blood`, `gold`, `jade`, `sky`, `panel`, …) are kept in the
+config only as a transition aid; new code uses the tokens above.
 
-## 3. Layout (Phase 1 target)
+## 3. Fonts
 
-- Sidebar `w-64 rounded-2xl bg-[#0b0f19]/50 backdrop-blur-xl border-white/5`: logo (🌙 gradient), nav (My Clips, Games, Settings), live status (pulsing dot "Replay Buffer Active / F9").
-- **Responsive (portrait/second screens)**: window min `420x420` fits a 768-wide rotated monitor. Sidebar collapses to a 56 px icon rail below `lg` (1024) — logo, nav icons with `title` tooltips, status dot + icon-only start/stop; hotkey card and language row return at `lg` (language also lives in Settings). Main padding `p-3` → `sm:p-4` → `lg:p-6`. Gallery rows and settings/AppManager rows stack below `sm` (640), thumbs switch to `aspect-video` full width; topbar wordmark shows from `sm`, tagline from `md`. No new deps: Tailwind breakpoints only.
-- Main `flex-1 rounded-2xl bg-[#0b0f19]/30 border-white/5`: gallery or editor outlet.
-- Clip cards: `group rounded-xl overflow-hidden border-white/5 hover:border-cyan-500/40 hover:shadow-[0_0_20px_rgba(56,189,248,0.15)]`, `aspect-video` thumb + bottom gradient + `gameTitle` + `duration`.
+- **Inter** (UI) and **JetBrains Mono** (metas, numbers, keycaps), packaged as
+  local `woff2` in `public/fonts/` (latin + latin-ext) and declared in
+  `src/fonts.css`; no network fetch, identical metrics offline and cross-engine.
+- No serif display font anymore. Mono uppercase labels are the only "indie"
+  detail that stays.
 
-## 4. i18n (bilingual ES/EN)
+## 4. Shell (`src/components/shell/AppShell.tsx`)
 
-- `react-i18next` already installed. `src/locales/{en,es}.json`, detector = `settings.locale` (not browser-only). All strings via `t()` from Phase 1. Docs/README stay in English.
+```text
+Topbar (frameless: drag region, window controls)
+┌──────────┬───────────────┬──────────────────────────────────────────┐
+│ IconRail │ ContextRail   │ Header (search / sort / actions)         │
+│ 72 px    ├───────────────┴──────────────────────────────────────────┤
+│ Library  │                                                          │
+│ Games    │ Main (scrollable)                                        │
+│ Settings │   gallery grid / games / settings                        │
+│ …        │                                                          │
+│ record   │                                                          │
+└──────────┴──────────────────────────────────────────────────────────┘
+```
 
-## 5. React perf note (why it won't lag games)
+- **IconRail**: Library, Games, Settings, plus the record status dot, the
+  start/stop button, "record screen" and the ES/EN toggle. The active item
+  carries a brand-colored side bar.
+- **ContextRail**: changes per view — library filters (All/Favorites/Uploaded/
+  In Drive + games with counts), registered games, or settings sections. It can
+  be collapsed from the header (`PanelLeft` button); the state persists in
+  `localStorage` (`moonclip.rail`).
+- **Header**: global search, sort select, Drive browser, purge, "Save now" while
+  buffering.
+- **Main**: edge-to-edge scroll area, no nested cards.
 
-- While gaming, window is tray-hidden → WebView2/WebKitGTK pauses render, CSS, rAF. Capture lives in GSR/Rust VRAM, zero JS.
-- React never processes pixels; `<video>`/`<audio>` are HW-decoded. Editor is lazy-unmounted (see `04_EDITOR_PIPELINE.md`).
-- Tauri (~30–60 MB) vs Electron/Medal (300–800 MB): no bundled Chromium, Rust binary not Node.
+## 5. Component kit (`src/components/ui/`)
 
-## 6. Windows notes (WebView2) + tray/taskbar icons
+`Button` (primary/secondary/ghost/danger, sizes), `Field` + `Input` +
+`Checkbox`, **`Select`** (custom button + portaled popover — native selects
+render differently per engine), `Card` + `CardHeader`, `Tag`, `Tabs`,
+`Dialog` (portal, Escape, click-outside, focus restore), `Meter`,
+`ProgressBar`, `Kbd`, `EmptyState`.
 
-- Renderer is WebView2 (Chromium) on Windows vs WebKitGTK on Linux: `<video>`
-  H.264/AAC playback works in both; asset protocol scope
-  (`$HOME/$RESOURCE/$TEMP`) resolves on both (see `tauri.conf.json`).
-- Frameless custom topbar (`Topbar.tsx`): drag region, minimize/maximize/
-  close-to-tray and edge/cube resize grips use Tauri window APIs only —
-  cross-platform by construction. Never use CSS `app-region` hacks.
-- Icons: window/taskbar set in `tauri.conf.json` (`icons/`, generated from
-  `build-aux/common/moonclip-icon.svg` as transparent artwork); tray uses
-  `icons/tray-icon.png` loaded explicitly in `lib.rs` (kept as a separate
-  asset so tray and taskbar can evolve independently).
-  Master artwork: `build-aux/common/moonclip-icon.svg`.
-- Linux taskbar association needs TWO entries, one per context:
-  - **Dev** (`tauri dev` / `target/debug`): `build-aux/common/dev.souriscg.moonclip.desktop.template`
-    + `build-aux/linux/install-dev-desktop.sh` (exposed as `pnpm desktop:install`).
-    Wayland matches the window by `appId` (`dev.souriscg.moonclip` via
-    `app.enableGTKAppId`) against `StartupWMClass` + the `.desktop` filename —
-    without it the taskbar shows the generic Wayland icon while the tray
-    (explicit pixels) still renders.
-  - **Packaging** (deb/rpm/AppImage, Phase 7): the bundler ships the
-    production `.desktop` + icons — that part is still pending (see `08`).
+Rules:
+- The modal system **must** portal into `document.body` (the shell uses
+  `backdrop-filter`, which turns `fixed` descendants into scroll-away elements)
+  and registers with `src/lib/overlay.ts` so the starfield pauses.
+- `user-select: none` globally; inputs/textareas opt back in.
+
+## 6. Gallery and clip panel
+
+- Grid of 16:9 cards (`surface`, hairline, duration badge, cloud badge, hover
+  actions). **Hover preview**: after a 260 ms dwell a muted looping video
+  replaces the thumbnail (local clips only — cloud clips would trigger a full
+  download).
+- Clicking a card opens the clip panel (`TrimPanel`): player, metadata,
+  inline rename, actions (share, advanced editor, favorite, reveal, delete with
+  cloud confirmation) and ←/→ navigation. Cloud clips download on demand with
+  progress and the temp copy is deleted on close.
+- Both editors show bolder position indicators: the quick-trim timeline and the
+  advanced timeline draw a 3 px brand-red playhead with a top handle and glow,
+  and the advanced editor's scrub bar (under the video) has an always-visible
+  round thumb plus its dB-free progress fill.
+
+## 7. Starfield and background
+
+- `MoonClipStarfield.tsx`: 85-star canvas, sinusoidal twinkle, warm-white stars
+  with a soft gold halo. It pauses on `document.hidden`, window blur and while
+  any overlay is open (`lib/overlay.ts`).
+- `.low-power` (software compositing detected at boot) disables all
+  `backdrop-blur-*` and hides the starfield entirely.
+
+## 8. Cross-webview parity (WebKitGTK ↔ WebView2)
+
+- Every interactive control is drawn by us: `appearance: none` + custom
+  `Select`, checkbox SVG, `input[type=range].fader` (track/thumb pseudo
+  elements), custom scrollbars (`::-webkit-scrollbar`), one focus ring
+  (`:focus-visible`), `color-scheme: dark`.
+- Bundled fonts for all text; no reliance on OS font fallbacks.
+- The layout uses flex/grid only (no `-webkit`-specific hacks) and the same
+  spacing scale on both platforms.
+
+## 9. i18n, icons, tests
+
+- All user-facing strings live in `src/locales/{es,en}.json` (identical key
+  sets); docs are English-only.
+- Icons: `lucide-react`.
+- Frontend tests: `pnpm test` (vitest, `src/lib/audio.test.ts` and pure logic);
+  gates are `pnpm build`, `cargo test`, `cargo clippy -D warnings`, `pnpm test`.
+
+## 10. Secrets reminder
+
+UI copy or settings must never contain credentials; `social.json` is read by
+Rust only and never crosses IPC. Never commit secrets (see
+`05_STORAGE_SECURITY.md` §Secrets policy).

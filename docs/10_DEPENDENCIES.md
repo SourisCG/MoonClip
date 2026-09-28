@@ -6,6 +6,9 @@ codec, NVENC or a proxy step. Everything here is either shipped in the
 bundle or is an optional accelerator; the app must stay fully usable when
 none of the optional parts are installed.
 
+> Last updated: 2026-09-28 (Linux table). Rename note: on Fedora/Arch the VA
+> driver package is `libva-nvidia-driver` (Debian: `nvidia-vaapi-driver`).
+
 This is the document the Settings decode notice links to: the UI only shows
 the **package name** to install, never a distro command (the app must not
 guess the user's package manager); the commands live here.
@@ -503,3 +506,27 @@ sudo pacman -S intel-media-driver        # Intel Gen8+
 - Tauri bundle `depends` (docs/08) covers the webview/appindicator floor;
   the generated table above is the complete engine truth for distro
   packaging.
+
+## 5. Windows bundle (what ships there)
+
+Windows has no `ldd`-style generated table yet; this is the audit checklist
+for the Windows agent (see `09_WINDOWS_HANDOFF.md`):
+
+- **Shipped as resources/sidecars** (`build-aux/windows/fetch-*.ps1`):
+  - `engine/bin/64bit/moonclip-engine.exe` — embedded OBS 32.2.2 (pinned +
+    sha256 in `fetch-obs.ps1`), with its `obs-plugins/64bit` tree and data.
+  - `ffmpeg-<triple>.exe` — pinned BtbN win64-gpl build (NVENC + libx264),
+    fetched by `fetch-ffmpeg.ps1` (sha256 asserted).
+- **System floor:** Windows 10 1903+ / Windows 11, WebView2 runtime, VC++ 2015+
+  runtime (the webview installer can bootstrap it), user-local install
+  (`%LOCALAPPDATA%`) — no admin rights required for the NSIS/MSI per-user
+  builds.
+- **GPU:** NVENC / AMF / QSV are provided by the vendor drivers; the bundled
+  ffmpeg ships a software x264 fallback. No vendor SDK is linked.
+- **Audit TODO (Windows agent):** use
+  `dumpbin /dependents target\release\moonclip.exe` (VS BuildTools) or the
+  Dependencies tool on the app, `moonclip-engine.exe` and the ffmpeg sidecar;
+  confirm only OS DLLs + WebView2 appear, and add the resulting table here.
+- **Secrets:** never bundle `social.json`; it is created per user at
+  `%APPDATA%\dev.souriscg.moonclip\social.json` (see
+  `05_STORAGE_SECURITY.md`).

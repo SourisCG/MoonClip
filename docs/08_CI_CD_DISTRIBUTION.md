@@ -2,6 +2,15 @@
 
 Developer OS: Fedora. Targets: WinGet/MS Store (later), Flathub (later), direct `.exe/.msi/.rpm/.deb/.AppImage` now.
 
+> **Status (2026-09-28): planning only.** `.github/workflows/` does not exist
+> yet — this is Phase 7. The real `tauri.conf.json` uses `targets: "all"` and
+> ships the engine/ffmpeg resources through the per-OS overlays described
+> below; the snippet in §1 is the target shape.
+>
+> **No secrets in CI, ever:** signing keys and store tokens go in repository
+> secrets (never in workflow files or the repo), and the build must never
+> package `social.json` (see `05_STORAGE_SECURITY.md` §Secrets policy).
+
 ## 1. Tauri bundles (MVP)
 
 ```json
