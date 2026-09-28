@@ -5,17 +5,18 @@ topic (`01_*`–`10_*`) and do **not** match phase numbers: each phase lists
 its technical doc. Sub-tracks (`3-win`, `1-fixes`, …) belong to their phase.
 
 Execute strictly in order. Do not start phase N+1 until phase N acceptance passes.
+**Never commit secrets** (see `docs/05_STORAGE_SECURITY.md` §Secrets policy).
 
 | Phase | Scope | Doc | Status |
 |---|---|---|---|
 | 0 | Architecture, stack rules, IPC contract, docs skeleton | `01_ARCHITECTURE.md` | ✅ done |
-| 1 | Scaffold, tray, F9, glass UI, starfield, i18n; Medal-style gallery | `07_UI_MOONCLIP.md` | ✅ done |
+| 1 | Scaffold, tray, F9, starfield, i18n; Medal shell UI v2 (icon rail + context rail + header) | `07_UI_MOONCLIP.md` | ✅ done |
 | 2 | Storage & security: SQLite relative paths, keyring, LRU quota, reconcile, per-game folders | `05_STORAGE_SECURITY.md` | ✅ done |
 | 3 | Capture engine: embedded isolated OBS, 3-track audio, quality ladder | `02_CAPTURE_ENGINE.md` | ✅ done (Linux) |
 | 3-win | Windows engine track (WGC, WASAPI, AMF/QSV/x264) | `09_WINDOWS_HANDOFF.md` | 🚧 code done, in-game pass pending |
 | 4 | Game detection + launchers + custom apps | `03_GAME_DETECTION.md` | ✅ done |
 | 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | `04_EDITOR_PIPELINE.md` | ✅ done |
-| 6 | Sharing: Google Drive first, other socials later | `06_SOCIAL_INTEGRATIONS.md` | 🚧 Drive done; Discord/Twitter/YouTube/TikTok pending |
+| 6 | Sharing: Google Drive (+ restore), YouTube, Discord, TikTok | `06_SOCIAL_INTEGRATIONS.md` | 🚧 code done; live passes + Twitter/X pending |
 | 7 | CI/CD packaging and signing | `08_CI_CD_DISTRIBUTION.md` | ⬜ pending |
 | 8 | Distribution & dependencies: decode matrix, dependency audit, any-PC fallbacks | `10_DEPENDENCIES.md` | 🚧 in progress |
 
@@ -28,13 +29,18 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 
 - Tauri v2 + tray (minimize-to-tray), `global-shortcut` F9 → capture event.
 - Tailwind MoonClip theme, `MoonClipStarfield.tsx` canvas (pauses off-screen), glass layout, i18n `en`/`es`.
-- **Accept:** F9 fires in any app; minimized <40 MB, 0% CPU; starfield pauses off-screen.
-- Later UI work (gallery grid, one clip panel, rename, low-power mode) lands here too.
+- UI v2 (2026-09-28): Medal-style shell (`AppShell.tsx`), layered-black palette
+  with measured contrast, component kit (`ui/*`), custom controls for
+  WebKitGTK/WebView2 parity, collapsible context rail, retro-tinted starfield,
+  low-power mode.
+- **Accept:** F9 fires in any app; minimized <40 MB, 0% CPU; starfield pauses off-screen;
+  the same pixels on WebKitGTK and WebView2.
 
 ## Phase 2 — Safe persistence & storage security
 
 - `rusqlite` migrations: `clips`, `custom_apps`, `settings`, `drive_folders` (relative paths only). `keyring` vault for OAuth tokens and the portal password.
-- IPC: `list_clips`, `toggle_favorite`, `register_app`, `get_settings/set_settings`, `resolve_clip_src`.
+- IPC: `list_clips`, `toggle_favorite`, `delete_clip`, `rename_clip`,
+  `get_settings/set_settings`, `resolve_clip_src`, `read_thumbnail`.
 - Hardening: WAL, `0700/0600` app data, CSP, asset protocol removed, LRU quota that never prunes favorites, boot reconcile (never deletes files), per-game folders.
 - **Accept:** CRUD works; `base_dir + file_name` resolves; no absolute path in DB; secrets only in the OS vault.
 
@@ -49,11 +55,17 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 - Toolchain, stubs and acceptance in `09_WINDOWS_HANDOFF.md`.
 - **Accept:** in-game F9 pass on Windows (BO7/CS2/Vanguard), coexistence with a system OBS install.
 
-## Phase 4 — Game detection + launchers
+## Phase 4 — Game detection (registered windows)
 
-- GPU FD scan, Wine cmdline parser + blacklist, `SteamAppId` + `.acf`, Minecraft/Prism, Heroic/Epic manifests, Battle.net child, Xbox title, `get_running_applications` + matcher.
-- Window matching rejects known non-game apps and title suffixes (`" - Brave"`, `"— Dolphin"`, …); custom apps override duration.
-- **Accept:** native + Wine/Proton + Minecraft report correct titles; a browser window never fakes a game.
+- Window-identity registration: the OS picker stores title + app id per input;
+  the autopilot (`poll_games`, 3 s) matches desktop windows and starts/stops the
+  buffer (`winlist` shared matching, KRunner / X11 / Win32 lists).
+- Matching rejects file managers and known non-game title suffixes
+  (`" - Brave"`, `" — Dolphin"`, …), tolerates launcher app-id formats and game
+  state suffixes (`" - 1.4.4.9"`); manual stop wins until the window returns.
+- Per-game library folders with stable associations.
+- **Accept:** registering a game starts the buffer when its window appears and
+  stops it when it closes; a browser window never fakes a game.
 
 ## Phase 5 — Editor (quick trim + Medal-style advanced editor)
 
@@ -63,8 +75,15 @@ Execute strictly in order. Do not start phase N+1 until phase N acceptance passe
 
 ## Phase 6 — Sharing (Drive + social)
 
-- Drive PKCE loopback + resumable chunks + progress + public link + clipboard; uploads persisted per clip (never duplicated); cloud-only clips with on-demand download; Discord webhook; Twitter intent+clipboard; YouTube (+`#Shorts`); TikTok draft/fallback.
-- **Accept:** Drive URL public + copied + notified; Discord/Twitter/YouTube flows work.
+- Drive PKCE loopback + resumable chunks + progress + public link + clipboard;
+  uploads persisted per clip (never duplicated); cloud-only clips with
+  on-demand download; **library restore** on a second machine; YouTube
+  `videos.insert`; Discord OAuth `webhook.incoming` (connect your account, no
+  bot) with optional 720p compression; TikTok Direct Post through the stateless
+  Cloudflare Worker; Twitter intent+clipboard.
+- **Accept:** Drive URL public + copied + notified; library restore rebuilds the
+  gallery as cloud rows; Discord/TikTok/YouTube live passes (sandbox for
+  TikTok) complete; Twitter flow opens the intent with the clipboard ready.
 
 ## Phase 7 — CI/CD packaging
 

@@ -55,8 +55,8 @@ component shipped inside MoonClip installers and what the GPL requires for each.
   - The engine kills the child if it fails to create its isolated config
     (see `os/shared/engine.rs` config guard). The user's `%APPDATA%\obs-studio`
     / `~/.config/obs-studio` is never read or written.
-  - obs-websocket binds `127.0.0.1` on a dedicated port with a generated
-    password; only the bundled obs-cmd talks to it.
+  - obs-websocket binds `127.0.0.1` on a dedicated port with a per-run
+    generated password; only MoonClip's in-process `obws` client talks to it.
 - **Anti-cheat:** the generated scene contains only the platform display
   capture source (`monitor_capture`/`window_capture` via DXGI/WGC on Windows,
   PipeWire portal on Linux). `game_capture` (the hooking source) is forbidden
@@ -117,6 +117,16 @@ chunk and are unmounted when the editor closes.
 - **License:** the static builds we ship (BtbN `win64-gpl` and `linux64-gpl`)
   are GPL builds. MoonClip as a whole is already `GPL-3.0-only`. FFmpeg stays
   a separate process (CLI boundary); no FFmpeg code is linked into MoonClip.
+
+## Fonts shipped in the app
+
+- **Inter** and **JetBrains Mono** — SIL Open Font License 1.1 (OFL). Bundled
+  as `woff2` subsets (latin + latin-ext) in `public/fonts/` and declared in
+  `src/fonts.css`. No network fetch at runtime.
+- **DejaVu Sans** — Bitstream Vera / public-domain-ish license. Bundled for the
+  editor's ASS text overlays (`src-tauri/fonts/DejaVuSans.ttf`); the export
+  pipeline resolves it from the bundle or the system font dir
+  (`editor/export.rs`).
 
 ## Removed components
 
