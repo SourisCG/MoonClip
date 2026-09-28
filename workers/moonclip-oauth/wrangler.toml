@@ -1,0 +1,7 @@
+name = "moonclip-oauth"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Secrets (never in this file):
+#   pnpm exec wrangler secret put TIKTOK_CLIENT_KEY
+#   pnpm exec wrangler secret put TIKTOK_CLIENT_SECRET

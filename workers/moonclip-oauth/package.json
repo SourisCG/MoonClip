@@ -1,0 +1,13 @@
+{
+  "name": "moonclip-oauth",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MoonClip OAuth broker: TikTok token exchange/refresh (client_secret stays here)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
