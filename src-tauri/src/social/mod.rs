@@ -12,6 +12,7 @@ pub mod discord;
 pub mod drive;
 pub mod google;
 pub mod oauth;
+pub mod tiktok;
 pub mod token_store;
 pub mod youtube;
 
@@ -47,6 +48,27 @@ pub(crate) fn discord_client_id(config: &SocialConfig) -> Option<String> {
         .map(|c| c.client_id.trim().to_string())
         .filter(|id| !id.is_empty())
         .or_else(|| Some(discord::DEFAULT_CLIENT_ID.to_string()))
+}
+
+/// TikTok needs the client key for the consent URL plus either the Worker
+/// broker or a local client secret for the token exchange.
+pub(crate) fn tiktok_configured(config: &SocialConfig) -> bool {
+    let has_key = config
+        .tiktok
+        .as_ref()
+        .map(|c| !c.client_id.trim().is_empty())
+        .unwrap_or(false);
+    let has_worker = config
+        .tiktok_worker_url
+        .as_deref()
+        .map(|url| !url.trim().is_empty())
+        .unwrap_or(false);
+    let has_secret = config
+        .tiktok
+        .as_ref()
+        .map(|c| !c.client_secret.is_empty())
+        .unwrap_or(false);
+    has_key && (has_worker || has_secret)
 }
 
 /// Authenticated Drive client from the vault (refreshes when needed).
@@ -215,10 +237,7 @@ pub fn social_status(app: AppHandle) -> Result<SocialStatus, String> {
             token_store::GOOGLE_YOUTUBE,
         ),
         discord: discord_status(),
-        tiktok: provider_status(
-            config.tiktok.is_some() && config.tiktok_worker_url.is_some(),
-            token_store::TIKTOK,
-        ),
+        tiktok: provider_status(tiktok_configured(&config), token_store::TIKTOK),
     })
 }
 

@@ -208,6 +208,7 @@
     "discord": "Discord",
     "discord_limit": "Límite del servidor",
     "discord_limit_hint": "10 MB sin boost; súbelo si tu servidor está boosteado.",
+    "tiktok": "TikTok",
     "connect": "Conectar",
     "disconnect": "Desconectar",
     "connecting": "Esperando al navegador…",
@@ -225,6 +226,22 @@
     "open": "Abrir mensaje",
     "compressing": "Comprimiendo",
     "compress_note": "Se genera una copia temporal a 720p; el original no se toca."
+  },
+  "tiktok": {
+    "section": "TikTok",
+    "connect": "Conectar TikTok",
+    "title_ph": "Descripción del video",
+    "privacy_ph": "Selecciona la privacidad…",
+    "publish": "Publicar en TikTok",
+    "published": "Publicado en TikTok",
+    "creator": "Publicando como",
+    "note": "Hasta pasar la auditoría de TikTok, el video se publica en privado (SELF_ONLY).",
+    "privacy": {
+      "SELF_ONLY": "Solo yo",
+      "MUTUAL_FOLLOW_FRIENDS": "Amigos mutuos",
+      "FOLLOWER_OF_CREATOR": "Seguidores",
+      "PUBLIC_TO_EVERYONE": "Todos"
+    }
   },
   "youtube": {
     "section": "YouTube",

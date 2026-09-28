@@ -73,8 +73,19 @@ All uploads are client-to-service. No MoonClip server.
   no cabe, AAC 96k, una pista) a un temporal que se borra siempre.
   Desconectar borra el webhook del canal. La app de MoonClip va embebida como
   client id público (override en `social.json`/`MOONCLIP_DISCORD_CLIENT_ID`).
-- Pendiente: TikTok (Worker broker para el `client_secret`) y X (navegador +
-  portapapeles de archivo).
+- **TikTok (2026-09-27)**: desktop Login Kit (loopback aleatorio
+  `http://127.0.0.1:<puerto>/callback/` + PKCE **hex** SHA256 — TikTok no usa
+  base64url) y Content Posting API Direct Post con `FILE_UPLOAD` por chunks de
+  10 MiB + polling de estado. El intercambio/refresh de tokens pasa por el
+  Worker de Cloudflare (`workers/moonclip-oauth/`, `/tiktok/exchange` y
+  `/tiktok/refresh`) para que el `client_secret` no viaje en la app; modo
+  directo con secret local en `social.json` como fallback. La UI lee
+  `creator_info` y renderiza el selector de privacidad **sin valor por
+  defecto** (regla de TikTok), respeta comment/duet/stitch del creador y
+  valida la duración máxima antes de subir. Sin auditar, los posts quedan
+  `SELF_ONLY` y la cuenta debe ser privada. Refresh tokens rotativos en el
+  keyring (`oauth_tiktok`).
+- Pendiente: X (navegador + portapapeles de archivo).
 
 ## 1. Google Drive (primary share)
 
@@ -102,7 +113,7 @@ All uploads are client-to-service. No MoonClip server.
 |---|---|---|
 | Discord | Essential | OAuth `webhook.incoming` (Public Client + PKCE, no bot, no backend): the user picks a server + channel and the webhook lands in the keyring. `POST ?wait=true` multipart with streaming progress. Over-limit clips compress to a temporary 720p copy (optional; never a Drive-link fallback). Zero API cost. |
 | YouTube | Essential | Data API v3 `videos.insert` over the same Google OAuth (implemented). Privacy selector: Private/Unlisted/Public. Fixed description `#MoonClip #moonclip`; default quota 100 `videos.insert`/day per project. Without the compliance audit, API uploads are locked private. |
-| TikTok | Essential | Content Posting API (Direct Post / Inbox Draft). Requires TikTok Developers app + audit. Upload as draft so user adds music. Fallback: open TikTok Studio Web with file ready. |
+| TikTok | Essential | Desktop Login Kit (loopback + PKCE, TikTok's hex S256) + Content Posting API Direct Post (`FILE_UPLOAD`, 10 MiB chunks, status polling). A Cloudflare Worker brokers token exchange/refresh so the secret never ships. Privacy dropdown rendered from `creator_info` with **no default** (TikTok rule); unaudited clients post `SELF_ONLY` to private accounts. |
 | Twitter/X | Essential | **No paid API.** Copy file to OS clipboard + open `https://twitter.com/compose/tweet?text=...` (or `twitter.com/intent/tweet?url=<drive>&text=...`). User presses Ctrl+V; video uploads natively. If using Drive link, ensure OpenGraph `twitter:card=player` on viewer page (future web viewer). |
 | Instagram/Facebook | Optional | Meta Graph API requires Business/Creator + audit; desktop Reels restricted. Defer past MVP. |
 
@@ -113,4 +124,6 @@ All uploads are client-to-service. No MoonClip server.
 - [ ] Discord: connect flow captures the webhook; the upload sends the file
       (or the compressed copy) with live progress (code + mock tests green;
       owner live pass pending).
+- [ ] TikTok: sandbox connect + publish shows live % and completes (code +
+      mock tests green; owner live pass pending).
 - [ ] Twitter flow opens intent with clipboard ready.

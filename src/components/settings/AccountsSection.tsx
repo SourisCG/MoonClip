@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { HardDrive, MessageSquare, SquarePlay } from "lucide-react";
+import { HardDrive, MessageSquare, Music2, SquarePlay } from "lucide-react";
 import type { ReactNode } from "react";
 
 interface ProviderStatus {
@@ -142,6 +142,15 @@ export function AccountsSection() {
         disabled={busy !== null}
         onConnect={() => void run("discord", "connect_discord")}
         onDisconnect={() => void run("discord", "disconnect_discord")}
+      />
+      <ProviderRow
+        icon={<Music2 size={14} />}
+        label={t("accounts.tiktok")}
+        status={status?.tiktok}
+        connecting={busy === "tiktok"}
+        disabled={busy !== null}
+        onConnect={() => void run("tiktok", "connect_tiktok")}
+        onDisconnect={() => void run("tiktok", "disconnect_tiktok")}
       />
       {status?.discord.connected && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/20 px-3 py-2 sm:px-4">

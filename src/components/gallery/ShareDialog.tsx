@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { CloudUpload, Copy, ExternalLink, HardDriveDownload, MessageSquare, RefreshCw, Trash2, X, SquarePlay } from "lucide-react";
+import { CloudUpload, Copy, ExternalLink, HardDriveDownload, MessageSquare, Music2, RefreshCw, Trash2, X, SquarePlay } from "lucide-react";
 import type { ClipMetadata } from "../../types";
 import { Modal } from "../Modal";
 
@@ -24,6 +24,22 @@ interface DiscordResult {
   message_id: string;
   url: string | null;
   channel: string;
+}
+
+interface TikTokCreator {
+  username: string;
+  nickname: string;
+  privacy_level_options: string[];
+  comment_disabled: boolean;
+  duet_disabled: boolean;
+  stitch_disabled: boolean;
+  max_video_post_duration_sec: number;
+}
+
+interface TikTokResult {
+  publish_id: string;
+  status: string;
+  privacy: string;
 }
 
 interface ProviderStatus {
@@ -106,6 +122,18 @@ export function ShareDialog({
   const [dcCopied, setDcCopied] = useState(false);
   const [discordMaxMb, setDiscordMaxMb] = useState("10");
 
+  // TikTok: Direct Post; privacy options come from creator_info and there is
+  // no default value (TikTok's UX requirement).
+  const [ttTitle, setTtTitle] = useState(
+    () => `${defaultTitle(clip.file_name)} #MoonClip #moonclip`.slice(0, 2200),
+  );
+  const [ttCreator, setTtCreator] = useState<TikTokCreator | null>(null);
+  const [ttPrivacy, setTtPrivacy] = useState("");
+  const [ttBusy, setTtBusy] = useState<string | null>(null);
+  const [ttProgress, setTtProgress] = useState<Progress | null>(null);
+  const [ttResult, setTtResult] = useState<TikTokResult | null>(null);
+  const [ttError, setTtError] = useState<string | null>(null);
+
   const uploaded = !!clip.drive_file_id;
   const cloud = clip.cloud;
 
@@ -149,6 +177,32 @@ export function ShareDialog({
       void unlisten.then((fn) => fn());
     };
   }, [clip.id]);
+
+  useEffect(() => {
+    const unlisten = listen<Progress>("moonclip://publish-progress", (event) => {
+      if (event.payload.clipId === clip.id && event.payload.provider === "tiktok") {
+        setTtProgress(event.payload);
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [clip.id]);
+
+  useEffect(() => {
+    if (!social?.tiktok.connected) return;
+    let cancelled = false;
+    invoke<TikTokCreator>("tiktok_creator_info")
+      .then((info) => {
+        if (!cancelled) setTtCreator(info);
+      })
+      .catch((e) => {
+        if (!cancelled) setTtError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [social?.tiktok.connected]);
 
   const toggleDeleteLocal = (value: boolean) => {
     setDeleteLocal(value);
@@ -289,6 +343,39 @@ export function ShareDialog({
     }
   };
 
+  const connectTikTok = async () => {
+    setTtBusy("connect");
+    setTtError(null);
+    try {
+      setSocial(await invoke<SocialStatus>("connect_tiktok"));
+    } catch (e) {
+      setTtError(String(e));
+    } finally {
+      setTtBusy(null);
+    }
+  };
+
+  const publishTikTok = async () => {
+    setTtBusy("publish");
+    setTtError(null);
+    setTtProgress(null);
+    setTtResult(null);
+    try {
+      setTtResult(
+        await invoke<TikTokResult>("tiktok_share_clip", {
+          clipId: clip.id,
+          title: ttTitle,
+          privacyLevel: ttPrivacy,
+        }),
+      );
+    } catch (e) {
+      setTtError(String(e));
+    } finally {
+      setTtBusy(null);
+      setTtProgress(null);
+    }
+  };
+
   const pct =
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.sent / progress.total) * 100))
@@ -300,6 +387,10 @@ export function ShareDialog({
   const dcPct =
     dcProgress && dcProgress.total > 0
       ? Math.min(100, Math.round((dcProgress.sent / dcProgress.total) * 100))
+      : null;
+  const ttPct =
+    ttProgress && ttProgress.total > 0
+      ? Math.min(100, Math.round((ttProgress.sent / ttProgress.total) * 100))
       : null;
   const discordOverLimit =
     clip.file_size_bytes > (Number(discordMaxMb) || 10) * 1024 * 1024;
@@ -623,6 +714,84 @@ export function ShareDialog({
             </div>
           ) : null}
           {dcError && <p className="mt-2 break-all font-mono text-xs text-red-400">{dcError}</p>}
+        </div>
+
+        {/* TikTok: Direct Post; privacy options come from creator_info and
+            there is deliberately no default value (TikTok UX rule). */}
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+            <Music2 size={14} /> {t("tiktok.section")}
+          </h4>
+          {social && !social.tiktok.connected ? (
+            <button
+              onClick={() => void connectTikTok()}
+              disabled={ttBusy !== null}
+              className={btn}
+            >
+              <Music2 size={13} />
+              {ttBusy === "connect" ? t("accounts.connecting") : t("tiktok.connect")}
+            </button>
+          ) : ttResult ? (
+            <div className="space-y-1">
+              <p className="flex items-center gap-1.5 text-xs text-emerald-300/90">
+                <CloudUpload size={13} /> {t("tiktok.published")}
+              </p>
+              <p className="text-[11px] text-slate-500">{t("tiktok.note")}</p>
+            </div>
+          ) : social ? (
+            <div className="space-y-2">
+              {ttCreator && (
+                <p className="text-[11px] text-slate-400">
+                  {t("tiktok.creator")}{" "}
+                  <span className="text-slate-200">
+                    {ttCreator.nickname || `@${ttCreator.username}`}
+                  </span>
+                </p>
+              )}
+              <input
+                value={ttTitle}
+                onChange={(e) => setTtTitle(e.target.value)}
+                maxLength={2200}
+                placeholder={t("tiktok.title_ph")}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-slate-400/50"
+              />
+              <select
+                value={ttPrivacy}
+                onChange={(e) => setTtPrivacy(e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-slate-400/50"
+              >
+                <option value="">{t("tiktok.privacy_ph")}</option>
+                {(ttCreator?.privacy_level_options ?? []).map((option) => (
+                  <option key={option} value={option}>
+                    {t(`tiktok.privacy.${option}`, { defaultValue: option })}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => void publishTikTok()}
+                disabled={ttBusy !== null || !ttTitle.trim() || !ttPrivacy || !ttCreator}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300/20 bg-slate-100/10 px-3 py-2 text-sm text-slate-100 transition hover:bg-slate-100/20 disabled:opacity-50"
+              >
+                <Music2 size={15} />
+                {ttBusy === "publish" ? t("share.uploading") : t("tiktok.publish")}
+              </button>
+              {ttBusy === "publish" && (
+                <div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-slate-200 transition-all"
+                      style={{ width: `${ttPct ?? 5}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+                    {ttPct !== null ? `${ttPct}%` : "…"}
+                  </p>
+                </div>
+              )}
+              <p className="text-[11px] text-slate-500">{t("tiktok.note")}</p>
+            </div>
+          ) : null}
+          {ttError && <p className="mt-2 break-all font-mono text-xs text-red-400">{ttError}</p>}
         </div>
 
         {error && <p className="mt-3 break-all font-mono text-xs text-red-400">{error}</p>}

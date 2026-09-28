@@ -16,7 +16,7 @@ Canonical phase numbers live in `ROADMAP_PHASES.md`; technical specs in `01_*`�
 | 3-ui | Transparent tray icon, i18n codec labels, opener perms, disk note | ✅ done | `7c5d733` (batch) | user-verified pending |
 | 4 | Game detection + launchers + custom apps | ✅ done | `e956ebe`, `d39ec45` | Browser windows/title suffixes never fake a game (live-verified) |
 | 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | ✅ done | `b67080e`, `3067a4c`, `367a8bf` | E1 lossless + 3 tracks; export E2E 1 video + 1 audio |
-| 6 | Drive + social sharing | 🚧 Drive + YouTube + Discord done; Twitter/TikTok pending | `4b3668b`→`38a4251` | Drive public link + cloud-only clips verified; Discord live pass pending |
+| 6 | Drive + social sharing | 🚧 Drive + YouTube + Discord + TikTok done; Twitter/X pending | `4b3668b`→`15e3e91` | Drive public link verified; Discord + TikTok live passes pending |
 | 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
 | 8 | Distribution & dependencies (decode matrix, audit, any-PC fallbacks) | 🚧 in progress | `f62e6d3`→`425aab2` | Decode notice + dependency audit shipped; bundles pending |
 
@@ -29,6 +29,25 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **TikTok (2026-09-27)** — `social/tiktok.rs`: desktop Login Kit with an
+  ephemeral loopback (`http://127.0.0.1:<port>/callback/`) and PKCE
+  **hex-encoded SHA256** (TikTok's desktop doc: it does not use the RFC 7636
+  base64url form) plus Content Posting API Direct Post (`FILE_UPLOAD` with
+  10 MiB `Content-Range` chunks, `/post/publish/status/fetch/` polling and
+  `moonclip://publish-progress` events, provider `tiktok`). Token
+  exchange/refresh goes through the Cloudflare Worker
+  `workers/moonclip-oauth/` (`/tiktok/exchange`, `/tiktok/refresh`; the
+  secret lives only in `wrangler secret`), with a direct mode using a local
+  `social.json` secret as fallback; TikTok rotates refresh tokens and the
+  rotated blob is re-saved. The UI queries `creator_info` and renders the
+  privacy dropdown with **no default value** (TikTok UX requirement), shows
+  the publishing account and honors comment/duet/stitch settings; the
+  creator's max duration is validated before uploading. Unaudited clients
+  post `SELF_ONLY` to private accounts. Worker deployed at
+  `https://moonclip-oauth.sebastian-garciab2004.workers.dev` with the sandbox
+  credentials. Tests: hex-SHA256 vector, PKCE pair, auth URL, chunk plan,
+  token parsing, broker vs direct mode + a mock exchange against the Worker.
+  234 Rust tests green, clippy `-D warnings`, `pnpm build` green.
 - **Discord (2026-09-27)** — `social/discord.rs`: "connect your account"
   instead of asking the user to paste a webhook. OAuth `webhook.incoming` with
   Public Client + PKCE S256 (no client secret) over the fixed loopback

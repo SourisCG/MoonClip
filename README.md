@@ -55,7 +55,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 
 - **Game detection** — Steam (`SteamAppId` + `.acf`), Wine/Proton cmdline + blacklist, Minecraft/Prism/Bedrock, Heroic/Epic/Battle.net/Xbox, custom apps + process picker.
 - **Lazy editor** — `React.lazy` ClipEditor + Wavesurfer Regions + dual waveforms, FFmpeg sidecar (lossless trim <1s, vertical HW, remix). Fully destroyed on close.
-- **Sharing** — Drive PKCE + resumable upload + public link + clipboard, YouTube uploads, Discord (connect your account, no bot; optional 720p compression), Twitter/TikTok flows.
+- **Sharing** — Drive PKCE + resumable upload + public link + clipboard, YouTube uploads, Discord (connect your account, no bot; optional 720p compression), TikTok Direct Post via a tiny Cloudflare Worker broker, Twitter flow.
 - **Distribution** — `.exe/.msi/.AppImage/.deb/.rpm` from GitHub Releases on `v*` tags. Flathub / MS Store / WinGet later.
 
 See [`docs/ROADMAP_PHASES.md`](./docs/ROADMAP_PHASES.md) and [`docs/PROGRESS.md`](./docs/PROGRESS.md) for acceptance checklists and build log.
