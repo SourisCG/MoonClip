@@ -6,7 +6,7 @@ Canonical phase numbers live in `ROADMAP_PHASES.md`; technical specs in `01_*`�
 | Phase | Scope | Status | Commit | Acceptance |
 |---|---|---|---|---|
 | 0 | Bare scaffold (Tauri v2 + React-TS + Tailwind v3) + `docs/` spec | ✅ done | `6965fac` (squashed in) | `pnpm build` + `cargo check` green |
-| 1 | Tray + F9 hotkey + glass UI + starfield + i18n ES/EN | ✅ done | `6965fac` | F9 fires globally, tray hide/show works |
+| 1 | Tray + F9 hotkey + starfield + i18n ES/EN + Medal shell UI v2 | ✅ done | `6965fac`→`79ffef0` | F9 fires globally, tray hide/show works, WebKitGTK/WebView2 parity |
 | 1-fixes | Frameless custom topbar + MoonLit CSS logo + smooth starfield + F9 dedupe | ✅ done | `8e4b5c1` | Single-count verified by user, no tray glitch |
 | license | GPL-3.0-only | ✅ done | `2b99add` | Verbatim LICENSE + metadata + README |
 | 2 | rusqlite persistence (relative paths) + keyring secrets + settings UI | ✅ done | `c72edba` | CRUD, vault OK, folder picker fixed |
@@ -14,7 +14,7 @@ Canonical phase numbers live in `ROADMAP_PHASES.md`; technical specs in `01_*`�
 | 3 | Capture engine Linux (embedded OBS, 3-track mix-first, gains, ladder, 30/60fps, monitor select) | ✅ done (Linux) | `5ffd70d`+ui | F9 → `.mp4` 3×aac, thumbs, durations, gains — user-verified |
 | 3-win | Windows engine track (WGC 0-copy + WASAPI, AMF/QSV/x264, same behaviors) | ✅ done (code, HW-verified; in-game F9 pass pending) | `7078a13`→rewrite | See `09_WINDOWS_HANDOFF.md`; e2e-tested on RTX 3060, A/V ±1 frame |
 | 3-ui | Transparent tray icon, i18n codec labels, opener perms, disk note | ✅ done | `7c5d733` (batch) | user-verified pending |
-| 4 | Game detection + launchers + custom apps | ✅ done | `e956ebe`, `d39ec45` | Browser windows/title suffixes never fake a game (live-verified) |
+| 4 | Registered windows + autopilot detection | ✅ done | `e956ebe`, `d39ec45` | Browser windows/launchers never fake a game (live-verified) |
 | 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | ✅ done | `b67080e`, `3067a4c`, `367a8bf` | E1 lossless + 3 tracks; export E2E 1 video + 1 audio |
 | 6 | Drive + social sharing | 🚧 Drive (+restore) + YouTube + Discord + TikTok done; Twitter/X pending | `4b3668b`→`15e3e91` | Drive public link verified; Discord/TikTok live + Windows restore pending |
 | 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
@@ -29,23 +29,67 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
-- **Drive: restaurar biblioteca en otro equipo (2026-09-27)** —
-  `social/sync.rs` + `drive_sync_library`: al conectar Drive (o con el botón
-  "Restaurar biblioteca" en Ajustes → Cuentas) la app recorre
-  `MoonClip/<juego>/` y reconstruye la galería: cada video remoto sin fila
-  local se inserta como clip **solo nube** (`insert_cloud_clip`: `cloud=1`,
-  `drive_file_id`/`drive_web_url`, duración de `videoMediaMetadata`,
-  `created_at` normalizado a formato SQLite) con la miniatura que Drive
-  genera (`thumbnailLink` a `=s480`). `upsert_drive_folder` por carpeta para
-  que los uploads futuros reutilicen las existentes. Sync idempotente (match
-  por `drive_file_id`, nombres únicos `_2`), uno a la vez (`AtomicBool`),
-  auto-reparación de miniaturas faltantes en cada pasada y evento
-  `moonclip://drive-sync-done` que refresca la galería. Cliente Drive:
-  `list()` ahora pagina (`nextPageToken`) y `DriveFile` gana `createdTime`,
-  `webViewLink` y `videoMediaMetadata`. Tests: normalización de fecha,
-  recorte del `thumbnailLink`, sanitizado de carpetas, nombres únicos, mapper
-  Drive→fila, parseo de metadata y paginación con mock. 243 Rust tests,
-  clippy `-D warnings`, `pnpm build`. Prueba real pendiente en Windows.
+- **Docs, README and Windows handoff rewritten in English (2026-09-28)** —
+  every doc is English again (SPEC, README, `01`–`11`, ROADMAP, THIRD_PARTY;
+  `PROGRESS` fully translated). `docs/11_AUDIO.md` documents the audio
+  subsystem; `docs/07_UI_MOONCLIP.md` the Medal UI v2; `docs/03` the
+  window-identity detection; `docs/10` gained the Windows bundle checklist.
+  `scripts/check-secrets.sh` scans the tree and staged diff for secret patterns
+  and is referenced from `README`, `SPEC`, `05`, `09` and `11` — **no secrets
+  in git** is stated repeatedly on purpose. Real credentials remain only in
+  the OS keyring, the gitignored `social.json` and the Cloudflare Worker.
+- **KWin concealment reverted to the proven script (2026-09-28)** — the
+  watchdog/extra-signal hardening added on 2026-09-28 made OBS appear again:
+  a throwing `w.minimizedChanged`/`w.activeChanged` connect can make KWin drop
+  the `windowAdded` handler, so the main window (created later) is never
+  hidden. `cd3dbda` restores the exact V3.5 `conceal_with_kwin` script
+  (`windowAdded.connect(hideOurs)` + the initial `windowList()` loop), no
+  extra signal connects, no periodic re-run. Same binary elsewhere.
+- **Playhead visibility + surface opacity fix (2026-09-28)** — both editors
+  now draw an unmistakable position indicator: the quick-trim timeline and the
+  advanced timeline use a 3 px brand-red playhead with a top handle and glow,
+  and the advanced editor's scrub bar (under the video) got an always-visible
+  round thumb. A first "opaque surfaces" pass (`f5b7071`) was reverted in
+  `cc14a45` — the previous translucency was fine; the washed look was a broken
+  CSS build (`Tag.tsx` duplicate keys), now fixed.
+- **Audio: real OBS meters, 0–100 faders, monitor mode (2026-09-28)** —
+  `os/shared/audio_meters.rs` subscribes to obs-websocket's high-volume
+  `InputVolumeMeters` event (obws `events` feature) and serves level + peak per
+  track; the UI maps them on the OBS -60…0 dB scale with fixed
+  green/amber/red zones and a peak tick. Gains are 0–100 everywhere
+  (100 = maximum), applied live with a 140 ms throttle and never restarting
+  the buffer; failures are logged (engine ring + console) and surfaced.
+  `start_audio_monitor`/`stop_audio_monitor` run an audio-only collection
+  (no capture input, no replay buffer) so levels can be checked without
+  recording; the UI auto-stops it when Settings closes. Tests: Rust parser/
+  decay/peak-hold/clamps + vitest for the dB math. Commits `35b48c4`,
+  `d40a97a`, `06680b8`.
+- **Medal UI v2 (2026-09-28)** — new shell (`AppShell.tsx`: icon rail +
+  collapsible context rail + header + main), layered-black palette with
+  measured contrast (`#000/#161617/#1f1f20`, white→`#6e6e73` text, logo red
+  `#ef4444` for actions, logo blue `#3b82f6` for links/focus, aqua accents),
+  component kit (`src/components/ui/*`, custom `Select` popover for
+  WebKitGTK/WebView2 parity), locally bundled Inter + JetBrains Mono, hover
+  previews + gallery grid, giant-editor migrations. Commits `310253e`,
+  `79ffef0`, `71c9ed1`, `4e23805`.
+
+- **Drive: library restore on another machine (2026-09-27)** —
+  `social/sync.rs` + `drive_sync_library`: connecting Drive (or pressing
+  "Restore library" in Settings → Accounts) walks `MoonClip/<game>/` and
+  rebuilds the gallery: every remote video without a local row is inserted as a
+  **cloud-only** clip (`insert_cloud_clip`: `cloud=1`, `drive_file_id`/
+  `drive_web_url`, duration from `videoMediaMetadata`, `created_at` normalized
+  to SQLite format) with the thumbnail Drive generates (`thumbnailLink` at
+  `=s480`). `upsert_drive_folder` per folder so future uploads reuse the
+  existing ones. Idempotent sync (match by `drive_file_id`, unique `_2` names),
+  one at a time (`AtomicBool`), self-healing of missing thumbnails on every
+  pass and a `moonclip://drive-sync-done` event that refreshes the gallery.
+  Drive client: `list()` now paginates (`nextPageToken`) and `DriveFile` gains
+  `createdTime`, `webViewLink` and `videoMediaMetadata`. Tests: date
+  normalization, `thumbnailLink` resizing, folder sanitizing, unique names,
+  Drive→row mapper, metadata parsing and pagination with a mock. 243 Rust
+  tests, clippy `-D warnings`, `pnpm build`. Live pass pending on Windows.
+
 - **TikTok (2026-09-27)** — `social/tiktok.rs`: desktop Login Kit with an
   ephemeral loopback (`http://127.0.0.1:<port>/callback/`) and PKCE
   **hex-encoded SHA256** (TikTok's desktop doc: it does not use the RFC 7636
@@ -986,12 +1030,12 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 ## V3 — embedded isolated OBS engine (2026-09-18)
 
 - **Capture engine replaced end-to-end on BOTH OSes** by one shared engine
-  (src-tauri/src/os/obs.rs): MoonClip now ships an embedded, isolated OBS
-  Studio and drives it with the bundled obs-cmd over a private
-  obs-websocket. GSR (os/linux/gsr.rs + uild-aux/build-gsr.sh) and the
+  (src-tauri/src/os/obs.rs; **historical: the `obs-cmd` CLI mentioned below was
+  removed in V3.5 and replaced by the in-process `obws` client**): MoonClip
+  ships an embedded, isolated OBS Studio driven over a private obs-websocket. GSR (os/linux/gsr.rs + uild-aux/build-gsr.sh) and the
   ffmpeg gfxcapture engine (os/windows/{engine,ring,pts,dsp,mux,encode,
   detector,audio,caps}.rs) are deleted.
-- **Isolation ("que no se vean ni en pintura")**: OBS is launched with
+- **Isolation ("que no se vean ni en pintura" — "not even in a painting")**: OBS is launched with
   --config-dir <MoonClip dir> (Windows `%LOCALAPPDATA%\MoonClip\obs`,
   Linux `~/.config/MoonClip/obs`), `--multi`, generated profile/collection
   `MoonClip`; the user's OBS config is never read/written. Hard guards:
@@ -1021,220 +1065,214 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   only in guard constants/tests. Pending (owner): Windows in-game pass,
   system-OBS coexistence, Linux portal run.
 
-### V3.1 — aislamiento corregido: modo portable real (2026-09-18)
+### V3.1 — isolation fixed: real portable mode (2026-09-18)
 
-- **Hallazgo (probado en vivo)**: OBS Studio 32.2.2 en Windows IGNORA
-  `--config-dir`: arrancó en `Portable mode: false` y escribió en
-  `%APPDATA%\obs-studio` (log + user.ini), descartando ese enfoque.
-- **Fix**: MoonClip ahora **copia** el OBS embebido a una carpeta escribible
-  propia (`%LOCALAPPDATA%\MoonClip\obs` en Windows,
-  `~/.local/share/MoonClip/obs` en Linux), escribe `portable_mode.txt` y
-  arranca con `--portable`. OBS escribe `config/` dentro de esa copia por
-  construcción; la config del usuario queda intocable. Marker de build para
-  re-copiar cuando cambie la versión embebida; el `Repair` sigue borrando
-  solo nuestra config.
-- **Linux system-obs**: sin copia posible → `--config-dir` + config guard.
-- **fetch-obs**: ya no ejecuta OBS jamás (ni `--help` ni `--version`) y
-  quedó pinneado y verificado por sha256: OBS 32.2.2 + obs-cmd v1.0.2.
-- Gates: `cargo clippy --all-targets -D warnings` limpio, 37 tests,
-  `pnpm build` limpio.
+- **Finding (verified live):** OBS Studio 32.2.2 on Windows IGNORES
+  `--config-dir`: it started with `Portable mode: false` and wrote to
+  `%APPDATA%\obs-studio` (log + user.ini), so that approach was dropped.
+- **Fix:** MoonClip now **copies** the embedded OBS into its own writable
+  folder (`%LOCALAPPDATA%\MoonClip\obs` on Windows, `~/.local/share/MoonClip/obs`
+  on Linux), writes `portable_mode.txt` and launches with `--portable`. OBS
+  writes `config/` inside that copy by construction; the user's config stays
+  untouched. A build marker re-copies when the embedded version changes;
+  `Repair` still deletes only our config.
+- **Linux system-obs:** no copy is possible → `--config-dir` + config guard.
+- **fetch-obs:** never executes OBS anymore (no `--help`, no `--version`) and
+  is pinned + sha256-verified: OBS 32.2.2 (obs-cmd was still shipped then; it
+  was removed in V3.5).
+- Gates: `cargo clippy --all-targets -D warnings` clean, 37 tests, `pnpm build` clean.
 
-### V3.2 - Custom = todas las opciones de video de OBS + volumen en vivo (2026-09-19)
+### V3.2 — Custom = every OBS video option + live volume (2026-09-19)
 
-- **Menu simplificado**: la vista simple deja solo monitor + presets Moon +
-  duracion + contenedor. El toggle Custom abre TODAS las opciones de salida
-  de video de OBS: picker de encoder (catalogo pinneado por plataforma x
-  vendor detectado x probe ffmpeg), schema completo por familia
-  (NVENC/x264/QSV/AMF/VAAPI) + pestana Video (resolucion, filtro, FPS
-  comun/entero/fraccionario, color). Cada opcion tiene estado Auto (= default
-  de OBS, clave omitida) y boton "Restaurar automatico".
-- **Registry `os/encoder_options.rs`**: unica fuente de verdad, tablas
-  extraidas de obs-studio@32.2.2 (nvenc-properties.c, obs-x264.c,
-  obs-qsv11.c, texture-amf.cpp + strings de la DLL, obs-ffmpeg-vaapi.c).
-  Hallazgo: nuestras claves NVENC eran de OBS 29 (`preset2`/`psycho_aq`/
-  `gpu`, ignoradas en silencio por OBS 32) -> ahora `preset`/
-  `adaptive_quantization`/`device`; QSV usaba `preset`/`async_depth`
-  inexistentes -> `target_usage` TU1-TU7 + `latency`.
-- **Auto por familia (deteccion de GPU automatica)**: vendor por DXGI;
-  NVENC/x264 recetas medidas; AMF/QSV/VAAPI receta Auto (CBR + bitrate, OBS
-  decide el resto) al no haber hardware para validar. Auto tambien corrige
-  el mapeo Linux AMD (cada codec a su id VAAPI: antes HEVC iba al id H.264).
-- **Persistencia**: migracion 008 (`custom_encoder_json`,
-  `custom_video_json`, validados pre-escritura); fix whitelist db.rs
-  (`video_encoder`/`gpu_index` antes rechazados -> el toggle GPU/CPU fallaba).
-- **Prueba real**: `test_hardware` acepta payloads Custom sin persistir
-  (boton "Probar 10 s") y verifica el stream real del clip
-  (`ffmpeg -i` parse: codec, alto y fps deben coincidir).
-- **Volumen en vivo**: `set_track_gain` aplica via
-  `obs-cmd input volume --set` sin reiniciar (fallback a un reinicio si el
-  live falla); TrackMixer muestra errores en vez de tragarlos.
-- Gates: `cargo test` 61 passed, `cargo clippy --all-targets -- -D warnings`
-  limpio, `pnpm build` limpio, zero-cfg (solo #[cfg(test)]). Pendiente
-  (owner): Probar 10 s en NVENC CBR/CQP + x264 CRF, presets AMD/QSV/VAAPI en
-  hardware real, pass in-game.
+- **Simplified menu:** the simple view keeps only monitor + Moon presets +
+  duration + container. The Custom toggle opens EVERY OBS video output option:
+  encoder picker (pinned catalog per platform x detected vendor x ffmpeg
+  probe), full schema per family (NVENC/x264/QSV/AMF/VAAPI) + a Video tab
+  (resolution, filter, common/integer/fractional FPS, color). Every option has
+  an Auto state (= OBS default, key omitted) and a "Restore automatic" button.
+- **`os/encoder_options.rs` registry:** single source of truth, tables
+  extracted from obs-studio@32.2.2 (nvenc-properties.c, obs-x264.c,
+  obs-qsv11.c, texture-amf.cpp + DLL strings, obs-ffmpeg-vaapi.c). Finding: our
+  NVENC keys were from OBS 29 (`preset2`/`psycho_aq`/`gpu`, silently ignored by
+  OBS 32) → now `preset`/`adaptive_quantization`/`device`; QSV used
+  non-existent `preset`/`async_depth` → `target_usage` TU1-TU7 + `latency`.
+- **Auto per family (automatic GPU detection):** vendor via DXGI; NVENC/x264
+  have measured recipes; AMF/QSV/VAAPI use the Auto recipe (CBR + bitrate, OBS
+  decides the rest) since there was no hardware to validate. Auto also fixes
+  the Linux AMD id mapping (each codec to its VAAPI id; HEVC used to go to the
+  H.264 id).
+- **Persistence:** migration 008 (`custom_encoder_json`, `custom_video_json`,
+  validated before writing); db.rs whitelist fix (`video_encoder`/`gpu_index`
+  were rejected before, so the GPU/CPU toggle failed).
+- **Live proof:** `test_hardware` accepts Custom payloads without persisting
+  ("Probar 10 s" button) and verifies the real stream in the saved clip
+  (`ffmpeg -i` parse: codec, height and fps must match).
+- **Live volume:** `set_track_gain` applies through the obs-websocket client
+  without restarting (a failed live apply used to fall back to one restart).
+  TrackMixer shows errors instead of swallowing them.
+- Gates: `cargo test` 61 passed, clippy clean, `pnpm build` clean, zero-cfg
+  (only `#[cfg(test)]`). Pending (owner): 10 s test on NVENC CBR/CQP + x264
+  CRF, AMD/QSV/VAAPI presets on real hardware, in-game pass.
 
-### V3.3 - compatibilidad por codec + OBS invisible (2026-09-19)
+### V3.3 — per-codec compatibility + invisible OBS (2026-09-19)
 
-- **Registry por codec**: `OptionSpec` gana `codecs`, `codec_values`,
+- **Per-codec registry:** `OptionSpec` gains `codecs`, `codec_values`,
   `codec_range`, `codec_int_values`, `codec_defaults`, `p010_values`,
-  `p010_ints` + reglas de visibilidad multiples (`when`+`and_when`).
-  `resolved_options(family, codec)` es la unica fuente para UI, sanitize y
-  `validate_pair` (incluye gate 10-bit <-> P010).
-- **Correcciones contra fuentes OBS 32.2.2**: AMF usaba claves inexistentes
-  (`vbaq`/`enforce_hrd`/`params`/`preanalysis` -> solo existen
-  `pre_analysis`/`bf`/`ffmpeg_opts`; `bf` AVC+AV1 0-5; perfil HEVC no existe;
-  preset AV1 incluye `highQuality`; rate_control suma HQVBR/HQCBR).
-  NVENC `max_bitrate` tambien en CQVBR; x264 `crf` en VBR, `bitrate` en ABR,
-  `buffer_size` requiere `use_bufsize`; VAAPI `qp`/`bitrate` en QVBR.
-- **UI Custom**: schema por encoder (no por familia), opciones invalidas en
-  gris deshabilitadas, `sanitizeVals` descarta al cambiar, bitrate sembrado
-  del ladder al entrar/cambiar/resetear, `resetAuto` resetea TODO (encoder
-  auto + Video tab), resumen "Aplicado".
-- **NumberField** compartido (draft al editar, commit en blur/Enter, clamp):
-  migados out_w/h, fps int/num/den, ints del registry, duracion custom,
-  max_gb.
-- **OBS invisible (Windows)**: `user.ini` sin bandeja, sin
-  `--minimize-to-tray`, watcher que oculta la ventana (PID+imagen, titulo
-  "OBS ", dialogos intactos), AMUI compartida, staged exe renombrado a
-  `moonclip-obs.exe`. Linux: best-effort xdotool/wmctrl.
-- **db.rs**: migracion 008 conectada (SCHEMA_VERSION 8).
-- Gates: `cargo test` 64 passed, `cargo clippy --all-targets -- -D warnings`
-  limpio, `pnpm build` limpio, zero-cfg (solo #[cfg(test)]). Pendiente
-  (owner): Probar 10 s, in-game, coexistencia sin bandeja/ventana visible,
-  Task Manager agrupado, Linux.
+  `p010_ints` + multiple visibility rules (`when`+`and_when`).
+  `resolved_options(family, codec)` is the only source for UI, sanitize and
+  `validate_pair` (including the 10-bit ↔ P010 gate).
+- **Corrections against OBS 32.2.2 sources:** AMF used non-existent keys
+  (`vbaq`/`enforce_hrd`/`params`/`preanalysis` → only `pre_analysis`/`bf`/
+  `ffmpeg_opts` exist; `bf` AVC+AV1 0-5; no HEVC profile; AV1 preset includes
+  `highQuality`; rate_control adds HQVBR/HQCBR). NVENC `max_bitrate` also in
+  CQVBR; x264 `crf` in VBR, `bitrate` in ABR, `buffer_size` needs
+  `use_bufsize`; VAAPI `qp`/`bitrate` in QVBR.
+- **Custom UI:** schema per encoder (not per family), invalid options grayed
+  out, `sanitizeVals` drops on change, bitrate seeded from the ladder on
+  enter/change/reset, `resetAuto` resets EVERYTHING (encoder auto + Video tab),
+  "Applied" summary.
+- **Shared NumberField** (draft while editing, commit on blur/Enter, clamp):
+  migrated out_w/h, fps int/num/den, registry ints, custom duration, max_gb.
+- **Invisible OBS (Windows):** `user.ini` without tray, no
+  `--minimize-to-tray`, a watcher hides the window (PID+image, title "OBS ",
+  dialogs untouched), shared AMUI, staged exe renamed to `moonclip-obs.exe`.
+  Linux: best-effort xdotool/wmctrl at the time (this is what V3.5/V3.6 later
+  replaced with the KWin script + real concealment).
+- **db.rs:** migration 008 wired (SCHEMA_VERSION 8).
+- Gates: `cargo test` 64 passed, clippy clean, `pnpm build` clean, zero-cfg
+  (only `#[cfg(test)]`). Pending (owner): 10 s test, in-game, coexistence with
+  no tray/window visible, Task Manager grouping, Linux.
 
-### Storage Security + biblioteca por juego (2026-09-27)
+### Storage security + per-game library (2026-09-27)
 
-- **Secretos fuera de la DB**: `RestoreToken` del portal al keyring
-  (`portal_<input_id>`, reinyectado al construir el perfil de captura,
-  fallback a DB solo si no hay vault); password de obs-websocket efímera por
-  arranque (nunca persistida); migracion de arranque + scrub de filas legacy
-  (`engine_ws_password`/`engine_restore_token`). `portal_ready` deriva del
-  input de pantalla. Commits `2dba167`.
-- **Auto-purga LRU** (`max_storage_gb`, apagada por defecto): borra los mas
-  viejos no favoritos (archivo+thumb+fila) tras cada guardado/trim/export;
-  jamas el recien guardado ni un favorito. Commit `65baa72`.
-- **Reconciliacion** (arranque + comando): indexa archivos sin fila (patron
-  MoonClip en raiz + cualquier video en carpetas de juego) con probe y
-  thumbnail; nunca borra archivos. Filas huerfanas solo con
-  `purge_missing_clips`. Commit `573110f`.
-- **Endurecimiento**: WAL + foreign_keys + busy_timeout + migraciones en una
-  transaccion; permisos 0700/0600 en rutas de MoonClip (DB, edits, sesiones,
-  config del motor; el clips_dir del usuario no se toca); CSP real en la
-  webview y `asset://` eliminado (antes `$HOME/**/*`); feature
-  `protocol-asset` fuera. Verificado en vivo: UI, thumbnails y playback bajo
-  el CSP nuevo, DB 0600 con WAL. Commit `90e3ef6`.
-- **Biblioteca por juego**: migracion 013 (`clips.folder`,
-  `custom_apps.clips_folder`, indice) + guard de auto-reparacion de esquema;
-  `folders.rs` (sanitize Windows-safe, reuso case-insensitive); el guardado
-  mueve el replay de OBS a `<clips_dir>/<juego>/` (thumb incluido, dedupe
-  dentro de la carpeta), trim/export quedan en la carpeta del clip origen;
-  migracion automatica e idempotente de la biblioteca plana; validacion de
-  rutas de un solo nivel con rechazo de traversal; test de regresion: borrar
-  una app registrada no toca clips, carpeta ni grupo. Verificado en vivo:
-  23 clips movidos a 7 carpetas, reproduccion intacta. Commit `49fa70a`.
-- **Sidebar de juegos**: menu Todos/Favoritos/juegos con contador y seleccion
-  persistida (los grupos salen de los clips, no del registro: borrar una app
-  no elimina su grupo); labels con el display_name registrado (backfill de
-  enlace al arrancar); picker del editor agrupado; i18n es/en. Commit
-  `afde751`.
-- Gates: `cargo test` 163 passed (incluye keyring live, reconciliacion live
-  con ffmpeg, organize, traversal, cuota, regresion de borrado),
-  `cargo clippy --all-targets -- -D warnings` limpio, `pnpm build` limpio.
+- **Secrets out of the DB:** portal `RestoreToken` to the keyring
+  (`portal_<input_id>`, re-injected when building the capture profile; DB
+  fallback only when no vault exists); obs-websocket password ephemeral per
+  start (never persisted); boot migration + scrub of legacy rows
+  (`engine_ws_password`/`engine_restore_token`). `portal_ready` derives from
+  the screen input. Commit `2dba167`.
+- **LRU auto-purge** (`max_storage_gb`, off by default): deletes the oldest
+  non-favorites (file+thumb+row) after every save/trim/export; never the clip
+  just saved nor a favorite. Commit `65baa72`.
+- **Reconciliation** (boot + command): indexes files without a row (MoonClip
+  pattern at the root + any video inside game folders) with probe and
+  thumbnail; never deletes files. Orphan rows only via `purge_missing_clips`.
+  Commit `573110f`.
+- **Hardening:** WAL + foreign_keys + busy_timeout + migrations in one
+  transaction; 0700/0600 permissions on MoonClip-owned paths (DB, edits,
+  sessions, engine config; the user's clips dir is never chmodded); real CSP
+  in the webview and `asset://` removed (it was `$HOME/**/*`); the
+  `protocol-asset` feature is gone. Verified live: UI, thumbnails and playback
+  under the new CSP, DB 0600 with WAL. Commit `90e3ef6`.
+- **Per-game library:** migration 013 (`clips.folder`,
+  `custom_apps.clips_folder`, index) + a schema self-repair guard; `folders.rs`
+  (Windows-safe sanitize, case-insensitive reuse); the save path moves the OBS
+  replay into `<clips_dir>/<game>/` (thumbnail included, dedupe inside the
+  folder); trim/export stay in the source clip's folder; automatic idempotent
+  migration of the flat library; single-level path validation rejecting
+  traversal; regression test: deleting a registered app touches neither clips
+  nor folder nor group. Verified live: 23 clips moved into 7 folders, playback
+  intact. Commit `49fa70a`.
+- **Games sidebar:** All/Favorites/games menu with counters and persisted
+  selection (groups come from clips, not from the registry: deleting an app
+  does not remove its group); labels from the registered display_name (link
+  backfill at boot); grouped editor picker; i18n es/en. Commit `afde751`.
+- Gates: `cargo test` 163 passed (keyring live, reconciliation live with
+  ffmpeg, organize, traversal, quota, delete regression), clippy clean,
+  `pnpm build` clean.
 
-### Detección de ventanas + renombrar clips (2026-09-27)
+### Window detection + clip rename (2026-09-27)
 
-- **Fix Dolphin/Explorer**: `window_matches` excluye gestores de archivos
+- **Dolphin/Explorer fix:** `window_matches` excludes file managers
   (dolphin/nautilus/thunar/nemo/pcmanfm/krusader/doublecmd/files +
-  `CabinetWClass`/`ExploreWClass`) y exige app_ids compatibles cuando ambos
-  lados lo reportan (tolerante al formato picker `steam_app_X` vs KRunner
-  `steam_icon_X`/`steam`; ids desconocidos mantienen el match por título).
-  Windows ahora reporta la clase de ventana (`GetClassNameW`) y el log de
-  diagnóstico muestra `título [app_id]`. Verificado en vivo: con Dolphin en la
-  carpeta "Overwatch" el poller registra "no registered window match" y el
-  buffer no arranca. Commit `e956ebe`.
-- **Renombrar clips**: `storage/rename.rs` (archivo + thumbnail + fila,
-  conserva extensión y carpeta; colisión/nombre inválido = error, mismo
-  nombre = no-op, archivo faltante no toca la DB), `sanitize_file_stem`
-  reutilizable, comando `rename_clip`, lápiz con edición inline en la galería
-  (Enter guarda, Esc/blur cancela) e i18n. Tests: movimiento real, colisión,
-  inválidos, no-op y faltante. Commit `63f7bd9`.
+  `CabinetWClass`/`ExploreWClass`) and requires compatible app_ids when both
+  sides report one (tolerant to the picker's `steam_app_X` vs KRunner's
+  `steam_icon_X`/`steam`; unknown ids keep the title match). Windows now
+  reports the window class (`GetClassNameW`) and the diagnostic log shows
+  `title [app_id]`. Verified live: with Dolphin in an "Overwatch" folder the
+  poller logs "no registered window match" and the buffer does not start.
+  Commit `e956ebe`.
+- **Clip rename:** `storage/rename.rs` (file + thumbnail + row, keeps the
+  extension and folder; collision/invalid name = error, same name = no-op,
+  missing file leaves the DB alone), reusable `sanitize_file_stem`,
+  `rename_clip` command, inline pencil editing in the gallery (Enter saves,
+  Esc/blur cancels) and i18n. Tests: real move, collision, invalid names,
+  no-op and missing. Commit `63f7bd9`.
 
-### Fase 6 — Google Drive (2026-09-27)
+### Phase 6 — Google Drive (2026-09-27)
 
-- **Seguridad previa**: fuera del IPC `secret_store/get/delete` (cualquier JS
-  podía leer el keyring); la bóveda queda solo para Rust. Commit `ea9b4b9`.
-- **Núcleo OAuth + Cuentas**: `social/` (PKCE S256, loopback efímero con
-  `state` y timeout, exchange/refresh con reqwest, blob de tokens en keyring
-  con refresh automático, config `social.json` fuera de git con overrides de
-  entorno). Ajustes → Cuentas; conectar Drive crea/encuentra la raíz
-  `MoonClip`; migración 014 (`drive_folders`); desconectar limpia bóveda y
-  mapeo. Tests: vector RFC 7636, callback/estado, mocks de token y de
-  carpetas, expiración y config/env. Commit `4b3668b`.
-- **Subir/bajar**: subida resumable 8 MiB con progreso, reanudación desde el
-  `Range` del 308 (test del caso parcial `bytes 4-11/12`), permiso público
-  opcional + `webViewLink`, espejo `MoonClip/<juego>/` con dedupe `_2`,
-  explorador Drive y bajada en streaming que indexa el clip localmente
-  (thumbnail + probe + fila + `clip-saved`). UI: compartir por clip con
-  progreso y toggle privado/público, modal Drive con breadcrumb. Commit
-  `33638af`.
-- Credenciales de producción: proyecto Google `moonclip-drive` (Desktop app,
-  publicado, `drive.file` no sensible), home `moonclip.souriscg.dev` y
-  política en `/privacidad/` (repo `MoonClip-Page`, commit `8f8cb3e`).
-- Gates: 189 tests, clippy `-D warnings`, `pnpm build` limpios. Verificación
-  live pendiente del clic de consentimiento (conectar → subir → explorar →
-  bajar).
+- **Previous security pass:** `secret_store/get/delete` removed from IPC
+  (any JS could read the keyring); the vault is Rust-only. Commit `ea9b4b9`.
+- **OAuth core + Accounts:** `social/` (PKCE S256, ephemeral loopback with
+  `state` and timeout, exchange/refresh with reqwest, token blob in the keyring
+  with automatic refresh, `social.json` outside git with env overrides).
+  Settings → Accounts; connecting Drive creates/finds the `MoonClip` root;
+  migration 014 (`drive_folders`); disconnect clears vault and mapping. Tests:
+  RFC 7636 vector, callback/state, token and folder mocks, expiry and
+  config/env. Commit `4b3668b`.
+- **Upload/download:** resumable 8 MiB upload with progress, resume from the
+  308 `Range` (partial `bytes 4-11/12` test), optional public permission +
+  `webViewLink`, `MoonClip/<game>/` mirror with `_2` dedupe, Drive browser and
+  streaming download that indexes the clip locally (thumbnail + probe + row +
+  `clip-saved`). UI: per-clip share with progress and private/public toggle,
+  Drive modal with breadcrumb. Commit `33638af`.
+- Production credentials: Google project `moonclip-drive` (Desktop app,
+  published, `drive.file` non-sensitive), home `moonclip.souriscg.dev` and the
+  policy at `/privacidad/` (repo `MoonClip-Page`, commit `8f8cb3e`).
+- Gates: 189 tests, clippy `-D warnings`, `pnpm build` clean. Live consent
+  click pending (connect → upload → browse → download).
 
-### Fase 6 — Clips cloud + fix de detección (2026-09-27)
+### Phase 6 — Cloud clips + detection fix (2026-09-27)
 
-- **Detección**: KRunner reporta `app_id` vacío para casi todo (Brave, Steam,
-  Discord, VS Code), así que una pestaña titulada como un juego arrancaba el
-  buffer. `window_matches` ahora rechaza títulos terminados en
-  `" - <app conocida>"`; verificado en vivo con una pestaña "Overwatch"
-  ("Overwatch - Brave" → no match, sin auto-start). Commit `d39ec45`.
-- **Clips cloud**: checkbox opcional al subir para borrar el video local
-  (thumbnail conservado, `cloud=1`); `ensure_local` descarga on demand a la
-  caché (preview/trim/reveal), el panel de trim borra la copia al cerrarse,
-  el editor pesado descarga al directorio de sesión y el export reutiliza esa
-  copia; re-subir reutiliza el remoto (sin duplicados); borrar manda el
-  archivo a la papelera de Drive con confirmación en dos pasos; purga y cuota
-  ignoran filas cloud. Migración 015. Commit `e942f17`.
-- Gates: 194 tests, clippy `-D warnings` y `pnpm build` limpios.
+- **Detection:** KRunner reports an empty `app_id` for almost everything
+  (Brave, Steam, Discord, VS Code), so a tab titled like a game started the
+  buffer. `window_matches` now rejects titles ending in `" - <known app>"`;
+  verified live with an "Overwatch" tab ("Overwatch - Brave" → no match, no
+  auto-start). Commit `d39ec45`.
+- **Cloud clips:** optional checkbox on upload to delete the local video
+  (thumbnail kept, `cloud=1`); `ensure_local` downloads on demand into the
+  cache (preview/trim/reveal), the trim panel deletes the copy on close, the
+  heavy editor downloads into the session dir and the export reuses that copy;
+  re-uploading reuses the remote file (no duplicates); deleting sends the file
+  to the Drive trash with a two-step confirmation; purge and quota ignore
+  cloud rows. Migration 015. Commit `e942f17`.
+- Gates: 194 tests, clippy `-D warnings` and `pnpm build` clean.
 
-### Fase 6 — Subidas consistentes + navegación Medal (2026-09-27)
+### Phase 6 — Consistent uploads + Medal navigation (2026-09-27)
 
-- **Consistencia**: `drive_file_id`/link persistidos en cada subida;
-  `drive_upload_clip` reutiliza el remoto vivo (404/papelera → limpia y sube),
-  `replace` manda el viejo a la papelera, y "borrar local ahora" convierte a
-  cloud sin re-subir. Diálogo de compartir en dos estados. Commit `5cd62ac`.
-- **Galería Medal**: grid de tarjetas 16:9, visor a pantalla completa con
-  acciones y navegación ←/→/Esc (cloud con descarga on demand), sidebar
-  Subidos/En Drive y toolbar con búsqueda/orden. Commit `3050b6c`.
-- Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios. Verificado en
-  vivo: grid + secciones + badge "En Drive" visibles.
+- **Consistency:** `drive_file_id`/link persisted on every upload;
+  `drive_upload_clip` reuses the live remote file (404/trash → clear and
+  upload), `replace` trashes the old one, and "delete local now" converts to
+  cloud without re-uploading. The share dialog has two states. Commit
+  `5cd62ac`.
+- **Medal gallery:** 16:9 card grid, full-screen viewer with actions and
+  ←/→/Esc navigation (cloud with on-demand download), Uploaded/In Drive
+  sidebar and a search/sort toolbar. Commit `3050b6c`.
+- Gates: 196 tests, clippy `-D warnings`, `pnpm build` clean. Verified live:
+  grid + sections + "In Drive" badge visible.
 
-### Fase 6 — Panel único ver+recortar y arreglos de reproducción (2026-09-27)
+### Phase 6 — Single view+trim panel and playback fixes (2026-09-27)
 
-- **Playback**: `ensure_local` single-flight (lock por clip) y descarga
-  atómica `*.part`+rename (evita que StrictMode descargue dos veces y el
-  reproductor lea un archivo a medio reescribir); media server con
-  `Cache-Control: private, max-age` en vez de no-store. Commit `4ddfb15`.
-- **Panel único**: fuera el visor full-screen; el panel de trim es ahora el
-  visor Medal (cabecera con renombrar inline y chips, player grande con % de
-  descarga cloud, acciones completas, ←/→, Esc, loop opt-in, estética nueva).
-  Commit `0ac9e26`.
-- Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios.
+- **Playback:** single-flight `ensure_local` (per-clip lock) and atomic
+  `*.part`+rename download (StrictMode no longer downloads twice and the
+  player cannot read a half-rewritten file); media server with
+  `Cache-Control: private, max-age` instead of no-store. Commit `4ddfb15`.
+- **Single panel:** the full-screen viewer is gone; the trim panel is now the
+  Medal viewer (header with inline rename and chips, big player with cloud
+  download %, full actions, ←/→, Esc, opt-in loop, new look). Commit
+  `0ac9e26`.
+- Gates: 196 tests, clippy `-D warnings`, `pnpm build` clean.
 
-### Fase 6 — Modales fijos al viewport y player estable (2026-09-27)
+### Phase 6 — Viewport-fixed modals and stable player (2026-09-27)
 
-- **Bug de scroll**: `main` (galería) tiene `backdrop-blur`, y un ancestro
-  con `backdrop-filter` crea containing block para los `fixed`: los modales
-  se posicionaban contra `main` y se iban con el scroll (cabecera fuera de
-  pantalla al editar un clip de abajo). Ahora TrimPanel/ShareDialog/
-  DriveBrowser/SetupWizard se renderizan con `createPortal` a `document.body`
-  (componente `Modal`): `fixed inset-0` vuelve a ser la ventana.
-- **Player**: marco `h-[52vh]` + video `absolute inset-0 object-contain`
-  (sin salto al llegar los metadatos). **Timeline**: loop `requestAnimationFrame`
-  para el playhead (estilo directo, `will-change`) y label a ~10 Hz.
-- Modales con `max-h-[calc(100vh-2rem)]` y scroll interno. Commit `ec18ef3`.
-- Gates: 196 tests, clippy `-D warnings`, `pnpm build` limpios.
+- **Scroll bug:** `main` (gallery) uses `backdrop-blur`, and an ancestor with
+  `backdrop-filter` creates a containing block for `fixed` elements: modals
+  were positioned against `main` and scrolled away (header off-screen when
+  editing a clip from the bottom). TrimPanel/ShareDialog/DriveBrowser/
+  SetupWizard now render through `createPortal` into `document.body` (the
+  `Modal` component): `fixed inset-0` is the window again.
+- **Player:** `h-[52vh]` frame + `absolute inset-0 object-contain` video (no
+  jump when metadata arrives). **Timeline:** `requestAnimationFrame` loop for
+  the playhead (direct style, `will-change`) and a ~10 Hz label.
+- Modals with `max-h-[calc(100vh-2rem)]` and internal scroll. Commit `ec18ef3`.
+- Gates: 196 tests, clippy `-D warnings`, `pnpm build` clean.
