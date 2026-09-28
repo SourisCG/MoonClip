@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { CloudUpload, Copy, ExternalLink, HardDriveDownload, RefreshCw, Trash2, X, SquarePlay } from "lucide-react";
+import { CloudUpload, Copy, ExternalLink, HardDriveDownload, MessageSquare, RefreshCw, Trash2, X, SquarePlay } from "lucide-react";
 import type { ClipMetadata } from "../../types";
 import { Modal } from "../Modal";
 
@@ -20,6 +20,12 @@ interface YouTubeResult {
   privacy: string;
 }
 
+interface DiscordResult {
+  message_id: string;
+  url: string | null;
+  channel: string;
+}
+
 interface ProviderStatus {
   configured: boolean;
   connected: boolean;
@@ -29,12 +35,14 @@ interface ProviderStatus {
 interface SocialStatus {
   google_drive: ProviderStatus;
   google_youtube: ProviderStatus;
+  discord: ProviderStatus;
   tiktok: ProviderStatus;
 }
 
 interface Progress {
   clipId: string;
   provider?: string;
+  phase?: string;
   sent: number;
   total: number;
 }
@@ -88,12 +96,25 @@ export function ShareDialog({
   const [ytError, setYtError] = useState<string | null>(null);
   const [ytCopied, setYtCopied] = useState(false);
 
+  // Discord: connect-your-account webhook; over-limit clips compress to 720p.
+  const [dcTitle, setDcTitle] = useState(() => defaultTitle(clip.file_name));
+  const [dcCompress, setDcCompress] = useState(true);
+  const [dcBusy, setDcBusy] = useState<string | null>(null);
+  const [dcProgress, setDcProgress] = useState<Progress | null>(null);
+  const [dcResult, setDcResult] = useState<DiscordResult | null>(null);
+  const [dcError, setDcError] = useState<string | null>(null);
+  const [dcCopied, setDcCopied] = useState(false);
+  const [discordMaxMb, setDiscordMaxMb] = useState("10");
+
   const uploaded = !!clip.drive_file_id;
   const cloud = clip.cloud;
 
   useEffect(() => {
     invoke<Record<string, string>>("get_settings")
-      .then((s) => setDeleteLocal(s.share_delete_local === "1"))
+      .then((s) => {
+        setDeleteLocal(s.share_delete_local === "1");
+        setDiscordMaxMb(s.discord_max_mb || "10");
+      })
       .catch(() => {});
     invoke<SocialStatus>("social_status").then(setSocial).catch(() => {});
   }, []);
@@ -111,6 +132,17 @@ export function ShareDialog({
     const unlisten = listen<Progress>("moonclip://publish-progress", (event) => {
       if (event.payload.clipId === clip.id && event.payload.provider === "youtube") {
         setYtProgress(event.payload);
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [clip.id]);
+
+  useEffect(() => {
+    const unlisten = listen<Progress>("moonclip://publish-progress", (event) => {
+      if (event.payload.clipId === clip.id && event.payload.provider === "discord") {
+        setDcProgress(event.payload);
       }
     });
     return () => {
@@ -213,6 +245,50 @@ export function ShareDialog({
     }
   };
 
+  const connectDiscord = async () => {
+    setDcBusy("connect");
+    setDcError(null);
+    try {
+      setSocial(await invoke<SocialStatus>("connect_discord"));
+    } catch (e) {
+      setDcError(String(e));
+    } finally {
+      setDcBusy(null);
+    }
+  };
+
+  const shareDiscord = async () => {
+    setDcBusy("upload");
+    setDcError(null);
+    setDcProgress(null);
+    setDcResult(null);
+    try {
+      setDcResult(
+        await invoke<DiscordResult>("discord_share_clip", {
+          clipId: clip.id,
+          title: dcTitle,
+          compress: dcCompress,
+        }),
+      );
+    } catch (e) {
+      setDcError(String(e));
+    } finally {
+      setDcBusy(null);
+      setDcProgress(null);
+    }
+  };
+
+  const copyDiscord = async () => {
+    if (!dcResult?.url) return;
+    try {
+      await writeText(dcResult.url);
+      setDcCopied(true);
+      setTimeout(() => setDcCopied(false), 2000);
+    } catch (e) {
+      setDcError(String(e));
+    }
+  };
+
   const pct =
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.sent / progress.total) * 100))
@@ -221,6 +297,12 @@ export function ShareDialog({
     ytProgress && ytProgress.total > 0
       ? Math.min(100, Math.round((ytProgress.sent / ytProgress.total) * 100))
       : null;
+  const dcPct =
+    dcProgress && dcProgress.total > 0
+      ? Math.min(100, Math.round((dcProgress.sent / dcProgress.total) * 100))
+      : null;
+  const discordOverLimit =
+    clip.file_size_bytes > (Number(discordMaxMb) || 10) * 1024 * 1024;
   const btn =
     "inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50";
 
@@ -448,6 +530,99 @@ export function ShareDialog({
             </div>
           ) : null}
           {ytError && <p className="mt-2 break-all font-mono text-xs text-red-400">{ytError}</p>}
+        </div>
+
+        {/* Discord: connect your account (pick a channel); over-limit clips
+            compress to a 720p copy on the fly. */}
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+            <MessageSquare size={14} /> {t("discord.section")}
+          </h4>
+          {social && !social.discord.connected ? (
+            <button
+              onClick={() => void connectDiscord()}
+              disabled={dcBusy !== null}
+              className={btn}
+            >
+              <MessageSquare size={13} />
+              {dcBusy === "connect" ? t("accounts.connecting") : t("discord.connect")}
+            </button>
+          ) : dcResult ? (
+            <div className="space-y-2">
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-emerald-300/90">
+                <CloudUpload size={13} /> {t("discord.sent")}
+                {dcResult.channel && (
+                  <span className="truncate text-slate-500" title={dcResult.channel}>
+                    · {dcResult.channel}
+                  </span>
+                )}
+              </p>
+              {dcResult.url && (
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => void copyDiscord()} className={btn}>
+                    <Copy size={13} />
+                    {dcCopied ? t("share.copied") : t("share.copy_link")}
+                  </button>
+                  <button
+                    onClick={() => void openUrl(dcResult.url ?? "").catch(() => {})}
+                    className={btn}
+                  >
+                    <ExternalLink size={13} /> {t("discord.open")}
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : social ? (
+            <div className="space-y-2">
+              <input
+                value={dcTitle}
+                onChange={(e) => setDcTitle(e.target.value)}
+                maxLength={100}
+                placeholder={t("discord.title_ph")}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-indigo-500/50"
+              />
+              {discordOverLimit && (
+                <label className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-400">
+                  <input
+                    type="checkbox"
+                    checked={dcCompress}
+                    onChange={(e) => setDcCompress(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  {t("discord.compress")}
+                </label>
+              )}
+              {discordOverLimit && !dcCompress && (
+                <p className="text-[11px] text-amber-300/80">{t("discord.too_big")}</p>
+              )}
+              <button
+                onClick={() => void shareDiscord()}
+                disabled={dcBusy !== null || !dcTitle.trim() || (discordOverLimit && !dcCompress)}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-100 transition hover:bg-indigo-500/20 disabled:opacity-50"
+              >
+                <MessageSquare size={15} />
+                {dcBusy === "upload" ? t("share.uploading") : t("discord.send")}
+              </button>
+              {dcBusy === "upload" && (
+                <div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-indigo-400 transition-all"
+                      style={{ width: `${dcPct ?? 5}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-right font-mono text-[10px] text-slate-500">
+                    {dcProgress?.phase === "compress" ? `${t("discord.compressing")} · ` : ""}
+                    {dcPct !== null ? `${dcPct}%` : "…"}
+                  </p>
+                </div>
+              )}
+              {discordOverLimit && dcCompress && (
+                <p className="text-[11px] text-slate-500">{t("discord.compress_note")}</p>
+              )}
+            </div>
+          ) : null}
+          {dcError && <p className="mt-2 break-all font-mono text-xs text-red-400">{dcError}</p>}
         </div>
 
         {error && <p className="mt-3 break-all font-mono text-xs text-red-400">{error}</p>}

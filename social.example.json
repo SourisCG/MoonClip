@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to <app_data>/social.json (Linux: ~/.local/share/dev.souriscg.moonclip/social.json, Windows: %APPDATA%/dev.souriscg.moonclip/social.json). NEVER commit the real file. Env overrides: MOONCLIP_GOOGLE_DRIVE_CLIENT_ID / MOONCLIP_GOOGLE_DRIVE_CLIENT_SECRET / MOONCLIP_TIKTOK_WORKER_URL.",
+  "_comment": "Copy to <app_data>/social.json (Linux: ~/.local/share/dev.souriscg.moonclip/social.json, Windows: %APPDATA%/dev.souriscg.moonclip/social.json). NEVER commit the real file. Env overrides: MOONCLIP_GOOGLE_DRIVE_CLIENT_ID / MOONCLIP_GOOGLE_DRIVE_CLIENT_SECRET / MOONCLIP_DISCORD_CLIENT_ID / MOONCLIP_TIKTOK_WORKER_URL.",
   "google_drive": {
     "client_id": "REPLACE.apps.googleusercontent.com",
     "client_secret": "REPLACE"
@@ -7,6 +7,9 @@
   "google_youtube": {
     "client_id": "REPLACE.apps.googleusercontent.com",
     "client_secret": "REPLACE"
+  },
+  "discord": {
+    "client_id": "OPTIONAL: MoonClip's public app is the default (no secret; Public Client + PKCE)"
   },
   "tiktok": {
     "client_id": "REPLACE",

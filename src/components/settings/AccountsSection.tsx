@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { HardDrive, SquarePlay } from "lucide-react";
+import { HardDrive, MessageSquare, SquarePlay } from "lucide-react";
 import type { ReactNode } from "react";
 
 interface ProviderStatus {
@@ -13,6 +13,7 @@ interface ProviderStatus {
 interface SocialStatus {
   google_drive: ProviderStatus;
   google_youtube: ProviderStatus;
+  discord: ProviderStatus;
   tiktok: ProviderStatus;
 }
 
@@ -75,6 +76,7 @@ export function AccountsSection() {
   const [status, setStatus] = useState<SocialStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [discordMaxMb, setDiscordMaxMb] = useState("10");
 
   const refresh = useCallback(async () => {
     try {
@@ -88,6 +90,17 @@ export function AccountsSection() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    invoke<Record<string, string>>("get_settings")
+      .then((s) => setDiscordMaxMb(s.discord_max_mb || "10"))
+      .catch(() => {});
+  }, []);
+
+  const changeDiscordLimit = (value: string) => {
+    setDiscordMaxMb(value);
+    void invoke("set_setting", { key: "discord_max_mb", value }).catch(() => {});
+  };
 
   const run = async (key: string, command: string) => {
     setBusy(key);
@@ -121,6 +134,32 @@ export function AccountsSection() {
         onConnect={() => void run("google_youtube", "connect_google_youtube")}
         onDisconnect={() => void run("google_youtube", "disconnect_google_youtube")}
       />
+      <ProviderRow
+        icon={<MessageSquare size={14} />}
+        label={t("accounts.discord")}
+        status={status?.discord}
+        connecting={busy === "discord"}
+        disabled={busy !== null}
+        onConnect={() => void run("discord", "connect_discord")}
+        onDisconnect={() => void run("discord", "disconnect_discord")}
+      />
+      {status?.discord.connected && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/20 px-3 py-2 sm:px-4">
+          <span className="text-xs text-slate-400">{t("accounts.discord_limit")}</span>
+          <select
+            value={discordMaxMb}
+            onChange={(e) => changeDiscordLimit(e.target.value)}
+            className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 outline-none focus:border-cyan-500/50"
+          >
+            {["10", "25", "50", "100"].map((mb) => (
+              <option key={mb} value={mb}>
+                {mb} MB
+              </option>
+            ))}
+          </select>
+          <span className="text-[11px] text-slate-500">{t("accounts.discord_limit_hint")}</span>
+        </div>
+      )}
       {error && <p className="break-all font-mono text-xs text-red-400">{error}</p>}
     </div>
   );

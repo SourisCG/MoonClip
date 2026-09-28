@@ -16,7 +16,7 @@ Canonical phase numbers live in `ROADMAP_PHASES.md`; technical specs in `01_*`�
 | 3-ui | Transparent tray icon, i18n codec labels, opener perms, disk note | ✅ done | `7c5d733` (batch) | user-verified pending |
 | 4 | Game detection + launchers + custom apps | ✅ done | `e956ebe`, `d39ec45` | Browser windows/title suffixes never fake a game (live-verified) |
 | 5 | Editor: quick trim (E1) + Medal-style advanced editor (E2–E6) | ✅ done | `b67080e`, `3067a4c`, `367a8bf` | E1 lossless + 3 tracks; export E2E 1 video + 1 audio |
-| 6 | Drive + social sharing | 🚧 Drive done; Discord/Twitter/YouTube/TikTok pending | `4b3668b`→`5cd62ac` | Drive public link + cloud-only clips verified |
+| 6 | Drive + social sharing | 🚧 Drive + YouTube + Discord done; Twitter/TikTok pending | `4b3668b`→`38a4251` | Drive public link + cloud-only clips verified; Discord live pass pending |
 | 7 | CI/CD packaging | ⬜ pending | — | Tag produces all installers |
 | 8 | Distribution & dependencies (decode matrix, audit, any-PC fallbacks) | 🚧 in progress | `f62e6d3`→`425aab2` | Decode notice + dependency audit shipped; bundles pending |
 
@@ -29,6 +29,25 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
 
 ## Log
 
+- **Discord (2026-09-27)** — `social/discord.rs`: "connect your account"
+  instead of asking the user to paste a webhook. OAuth `webhook.incoming` with
+  Public Client + PKCE S256 (no client secret) over the fixed loopback
+  `127.0.0.1:38471/callback`; Discord's consent lets the user pick a server +
+  channel and the token response carries the created webhook (`id`/`token`/
+  `url`), stored in the keyring (`discord_webhook`) with the OAuth grant
+  revoked immediately. Streaming multipart upload with `?wait=true` and
+  progress (`moonclip://publish-progress`, phases compress/upload),
+  `payload_json` = title + `#MoonClip #moonclip` with mentions disabled;
+  413/429/401-404 map to actionable errors. Optional compression when the clip
+  exceeds `discord_max_mb` (10/25/50/100, default 10): 720p cap (never
+  upscales), CRF 30 then a computed bitrate fallback, AAC 96k, one audio
+  track, temp file always deleted. Disconnect deletes the webhook from the
+  channel. MoonClip's Discord app is embedded as the public client id
+  (override via `social.json` / `MOONCLIP_DISCORD_CLIENT_ID`). UI: Discord row
+  in Settings → Accounts with the server-limit select and a Discord block in
+  the share dialog. Tests: auth URL, payload, multipart framing, compression
+  args + a mock upload asserting the exact file bytes/progress and the 413
+  path. 224 Rust tests green, clippy `-D warnings`, `pnpm build` green.
 - **YouTube uploads (2026-09-27)** — `social/youtube.rs`: loopback OAuth with
   the `youtube.upload` scope (own keyring token; falls back to the Drive
   client when `google_youtube` is absent) and a resumable `videos.insert`

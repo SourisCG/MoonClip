@@ -8,6 +8,7 @@
 
 pub mod cloud;
 pub mod commands;
+pub mod discord;
 pub mod drive;
 pub mod google;
 pub mod oauth;
@@ -37,6 +38,17 @@ pub(crate) fn google_credentials(
     }
 }
 
+/// Public client id for the Discord app: config first, then the built-in
+/// MoonClip application (public clients have no secret).
+pub(crate) fn discord_client_id(config: &SocialConfig) -> Option<String> {
+    config
+        .discord
+        .as_ref()
+        .map(|c| c.client_id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .or_else(|| Some(discord::DEFAULT_CLIENT_ID.to_string()))
+}
+
 /// Authenticated Drive client from the vault (refreshes when needed).
 pub(crate) async fn drive_client_for(app: &AppHandle) -> Result<drive::DriveClient, String> {
     let config = load_config(app);
@@ -63,6 +75,9 @@ pub struct SocialConfig {
     pub google_drive: Option<ClientCredentials>,
     #[serde(default)]
     pub google_youtube: Option<ClientCredentials>,
+    /// Optional Discord app override (public client; only `client_id` is used).
+    #[serde(default)]
+    pub discord: Option<ClientCredentials>,
     #[serde(default)]
     pub tiktok: Option<ClientCredentials>,
     /// Cloudflare Worker that brokers the TikTok token exchange.
@@ -102,6 +117,14 @@ fn apply_env(config: &mut SocialConfig) {
             client_secret: secret,
         });
     }
+    if let Ok(id) = std::env::var("MOONCLIP_DISCORD_CLIENT_ID") {
+        if !id.trim().is_empty() {
+            config.discord = Some(ClientCredentials {
+                client_id: id,
+                client_secret: String::new(),
+            });
+        }
+    }
     if let Ok(url) = std::env::var("MOONCLIP_TIKTOK_WORKER_URL") {
         if !url.trim().is_empty() {
             config.tiktok_worker_url = Some(url);
@@ -124,7 +147,33 @@ pub struct ProviderStatus {
 pub struct SocialStatus {
     pub google_drive: ProviderStatus,
     pub google_youtube: ProviderStatus,
+    pub discord: ProviderStatus,
     pub tiktok: ProviderStatus,
+}
+
+/// Discord is a webhook (not an OAuth session): "connected" means the
+/// captured webhook blob is in the vault.
+fn discord_status() -> ProviderStatus {
+    match discord::load_webhook() {
+        Ok(Some(entry)) => ProviderStatus {
+            configured: true,
+            connected: true,
+            account: entry.account,
+        },
+        Ok(None) => ProviderStatus {
+            configured: true,
+            connected: false,
+            account: String::new(),
+        },
+        Err(e) => {
+            eprintln!("[moonclip] cannot read the Discord webhook: {e}");
+            ProviderStatus {
+                configured: true,
+                connected: false,
+                account: String::new(),
+            }
+        }
+    }
 }
 
 fn provider_status(
@@ -165,6 +214,7 @@ pub fn social_status(app: AppHandle) -> Result<SocialStatus, String> {
             google_credentials(&config, google::Provider::YouTube).is_some(),
             token_store::GOOGLE_YOUTUBE,
         ),
+        discord: discord_status(),
         tiktok: provider_status(
             config.tiktok.is_some() && config.tiktok_worker_url.is_some(),
             token_store::TIKTOK,

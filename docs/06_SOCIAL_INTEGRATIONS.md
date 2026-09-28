@@ -60,9 +60,21 @@ All uploads are client-to-service. No MoonClip server.
   **Bloqueo externo**: hasta pasar la auditoría de YouTube (y la verificación
   del scope sensible) todo video subido por API queda privado; la UI lo avisa
   (trámites en el log de PROGRESS).
-- Pendiente: TikTok (Worker broker para el `client_secret`), Discord (webhook
-  por usuario + compresión agresiva opcional para servidores sin boost) y X
-  (navegador + portapapeles de archivo).
+- **Discord (2026-09-27)**: "conectar la cuenta" sin bot ni backend — OAuth
+  `webhook.incoming` con Public Client + PKCE S256 (sin client secret) sobre
+  el loopback fijo `127.0.0.1:38471`; el usuario elige servidor y canal en el
+  navegador y el webhook que devuelve Discord (id/token/url) se guarda en el
+  keyring, con el grant OAuth revocado al momento. Subida multipart
+  `?wait=true` por streaming con progreso (`moonclip://publish-progress`,
+  fases compress/upload), `payload_json` con título + `#MoonClip #moonclip` y
+  menciones desactivadas; 413/429/401-404 con mensajes accionables. Si el clip
+  supera el límite del servidor (ajuste `discord_max_mb`: 10/25/50/100, default
+  10) se ofrece compresión agresiva a 720p (CRF 30 → bitrate calculado si aún
+  no cabe, AAC 96k, una pista) a un temporal que se borra siempre.
+  Desconectar borra el webhook del canal. La app de MoonClip va embebida como
+  client id público (override en `social.json`/`MOONCLIP_DISCORD_CLIENT_ID`).
+- Pendiente: TikTok (Worker broker para el `client_secret`) y X (navegador +
+  portapapeles de archivo).
 
 ## 1. Google Drive (primary share)
 
@@ -88,7 +100,7 @@ All uploads are client-to-service. No MoonClip server.
 
 | Network | Priority | Flow |
 |---|---|---|
-| Discord | Essential | Webhook `POST multipart/form-data`. If >25 MB (or >10 MB on old limits), send Drive link instead. Optional FFmpeg fast-compress toggle to fit limit. Zero API cost. |
+| Discord | Essential | OAuth `webhook.incoming` (Public Client + PKCE, no bot, no backend): the user picks a server + channel and the webhook lands in the keyring. `POST ?wait=true` multipart with streaming progress. Over-limit clips compress to a temporary 720p copy (optional; never a Drive-link fallback). Zero API cost. |
 | YouTube | Essential | Data API v3 `videos.insert` over the same Google OAuth (implemented). Privacy selector: Private/Unlisted/Public. Fixed description `#MoonClip #moonclip`; default quota 100 `videos.insert`/day per project. Without the compliance audit, API uploads are locked private. |
 | TikTok | Essential | Content Posting API (Direct Post / Inbox Draft). Requires TikTok Developers app + audit. Upload as draft so user adds music. Fallback: open TikTok Studio Web with file ready. |
 | Twitter/X | Essential | **No paid API.** Copy file to OS clipboard + open `https://twitter.com/compose/tweet?text=...` (or `twitter.com/intent/tweet?url=<drive>&text=...`). User presses Ctrl+V; video uploads natively. If using Drive link, ensure OpenGraph `twitter:card=player` on viewer page (future web viewer). |
@@ -98,5 +110,7 @@ All uploads are client-to-service. No MoonClip server.
 
 - [x] Drive upload shows live %, finishes with public `webViewLink` copied + notification.
 - [ ] YouTube upload shows live %, finishes with the video link (public visibility waits for the project audit).
-- [ ] Discord webhook sends file (or the compressed copy) correctly.
+- [ ] Discord: connect flow captures the webhook; the upload sends the file
+      (or the compressed copy) with live progress (code + mock tests green;
+      owner live pass pending).
 - [ ] Twitter flow opens intent with clipboard ready.

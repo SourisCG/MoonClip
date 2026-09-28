@@ -21,7 +21,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 
 - **Press `F9` while playing** — get an `.mp4` of the last seconds in <1s.
 - **Keep playing** — capture lives in RAM inside the embedded OBS child; the React UI stays hidden in tray.
-- **Own your clips** — local files + SQLite + OS keyring. No central server. Share via *your* Google Drive or webhooks.
+- **Own your clips** — local files + SQLite + OS keyring. No central server. Share via *your* Google Drive, YouTube or Discord.
 
 ## How MoonClip is different
 
@@ -55,7 +55,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 
 - **Game detection** — Steam (`SteamAppId` + `.acf`), Wine/Proton cmdline + blacklist, Minecraft/Prism/Bedrock, Heroic/Epic/Battle.net/Xbox, custom apps + process picker.
 - **Lazy editor** — `React.lazy` ClipEditor + Wavesurfer Regions + dual waveforms, FFmpeg sidecar (lossless trim <1s, vertical HW, remix). Fully destroyed on close.
-- **Sharing** — Drive PKCE + resumable upload + public link + clipboard, Discord webhook, Twitter/YouTube/TikTok flows.
+- **Sharing** — Drive PKCE + resumable upload + public link + clipboard, YouTube uploads, Discord (connect your account, no bot; optional 720p compression), Twitter/TikTok flows.
 - **Distribution** — `.exe/.msi/.AppImage/.deb/.rpm` from GitHub Releases on `v*` tags. Flathub / MS Store / WinGet later.
 
 See [`docs/ROADMAP_PHASES.md`](./docs/ROADMAP_PHASES.md) and [`docs/PROGRESS.md`](./docs/PROGRESS.md) for acceptance checklists and build log.
@@ -131,7 +131,7 @@ pnpm app:install               # replace install + taskbar association
 
 - No central server, no telemetry, no account.
 - Clips + SQLite stay on disk. Tokens (e.g. `google_drive_refresh_token`) stay in OS keyring (libsecret / Credential Manager / Keychain).
-- Uploads go client → service directly (Drive API, Discord webhook). You revoke them where you created them.
+- Uploads go client → service directly (Drive API, YouTube API, Discord). You revoke them where you created them.
 
 ## Tech stack (brief)
 

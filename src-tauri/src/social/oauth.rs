@@ -43,6 +43,18 @@ impl Loopback {
     pub fn start(path: &str) -> Result<Self, String> {
         let server = tiny_http::Server::http("127.0.0.1:0")
             .map_err(|e| format!("cannot start the loopback server: {e}"))?;
+        Self::with_server(server, path)
+    }
+
+    /// Fixed-port variant: providers that match the redirect URI byte for
+    /// byte (Discord) require the port registered in their developer portal.
+    pub fn start_on(port: u16, path: &str) -> Result<Self, String> {
+        let server = tiny_http::Server::http(("127.0.0.1", port))
+            .map_err(|e| format!("cannot start the loopback server on port {port}: {e}"))?;
+        Self::with_server(server, path)
+    }
+
+    fn with_server(server: tiny_http::Server, path: &str) -> Result<Self, String> {
         let port = server
             .server_addr()
             .to_ip()

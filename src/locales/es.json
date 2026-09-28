@@ -205,11 +205,26 @@
     "title": "Cuentas",
     "drive": "Google Drive",
     "youtube": "YouTube",
+    "discord": "Discord",
+    "discord_limit": "Límite del servidor",
+    "discord_limit_hint": "10 MB sin boost; súbelo si tu servidor está boosteado.",
     "connect": "Conectar",
     "disconnect": "Desconectar",
     "connecting": "Esperando al navegador…",
     "connected": "Conectado",
     "not_configured": "No configurado (social.json)"
+  },
+  "discord": {
+    "section": "Discord",
+    "connect": "Conectar Discord",
+    "title_ph": "Mensaje del clip",
+    "compress": "Comprimir a 720p para que quepa",
+    "too_big": "El clip supera el límite del servidor: activa la compresión.",
+    "send": "Enviar a Discord",
+    "sent": "Enviado a Discord",
+    "open": "Abrir mensaje",
+    "compressing": "Comprimiendo",
+    "compress_note": "Se genera una copia temporal a 720p; el original no se toca."
   },
   "youtube": {
     "section": "YouTube",

@@ -206,11 +206,26 @@
     "title": "Accounts",
     "drive": "Google Drive",
     "youtube": "YouTube",
+    "discord": "Discord",
+    "discord_limit": "Server limit",
+    "discord_limit_hint": "10 MB without boosts; raise it if your server is boosted.",
     "connect": "Connect",
     "disconnect": "Disconnect",
     "connecting": "Waiting for the browser…",
     "connected": "Connected",
     "not_configured": "Not configured (social.json)"
+  },
+  "discord": {
+    "section": "Discord",
+    "connect": "Connect Discord",
+    "title_ph": "Clip message",
+    "compress": "Compress to 720p so it fits",
+    "too_big": "The clip is over the server limit: enable compression.",
+    "send": "Send to Discord",
+    "sent": "Sent to Discord",
+    "open": "Open message",
+    "compressing": "Compressing",
+    "compress_note": "A temporary 720p copy is created; the original is untouched."
   },
   "youtube": {
     "section": "YouTube",
