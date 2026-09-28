@@ -137,13 +137,13 @@ export function Topbar() {
             className={`fixed z-30 touch-none select-none ${cls}`}
           />
         ))}
-      <header className="relative z-20 flex h-10 select-none items-center justify-between border-b border-white/5 bg-[#0d0f14]/85 pl-3 pr-2 backdrop-blur-md">
+      <header className="relative z-20 flex h-10 select-none items-center justify-between border-b-2 border-line bg-void/90 pl-3 pr-2 backdrop-blur-md">
         <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-2">
           <MoonClipLogo size={18} />
-          <span className="hidden shrink-0 text-sm font-extrabold tracking-wide text-slate-100 sm:inline">
-            Moon<span className="text-indigo-400">Clip</span>
+          <span className="hidden shrink-0 font-display text-sm font-bold tracking-wide text-ink sm:inline">
+            Moon<span className="text-blood-bright">Clip</span>
           </span>
-          <span className="hidden truncate text-[11px] text-slate-500 md:inline">
+          <span className="hidden truncate font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint md:inline">
             {lastClip ?? t("app.tagline")}
           </span>
         </div>
@@ -153,7 +153,7 @@ export function Topbar() {
             title={t("window.minimize")}
             onPointerDown={stop}
             onClick={onMinimize}
-            className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-slate-100"
+            className="rounded-stamp p-1.5 text-ink-muted transition hover:bg-raised hover:text-ink"
           >
             <Minus size={15} />
           </button>
@@ -162,7 +162,7 @@ export function Topbar() {
             title={maximized ? t("window.restore") : t("window.maximize")}
             onPointerDown={stop}
             onClick={(e) => onToggleMax(e)}
-            className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-slate-100"
+            className="rounded-stamp p-1.5 text-ink-muted transition hover:bg-raised hover:text-ink"
           >
             <Square size={13} />
           </button>
@@ -171,7 +171,7 @@ export function Topbar() {
             title={t("window.close")}
             onPointerDown={stop}
             onClick={onClose}
-            className="rounded-md p-1.5 text-slate-400 transition hover:bg-red-500/80 hover:text-white"
+            className="rounded-stamp p-1.5 text-ink-muted transition hover:bg-blood hover:text-paper"
           >
             <X size={15} />
           </button>

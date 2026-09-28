@@ -131,12 +131,12 @@ export default function App() {
   }, []);
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden bg-moonclip-void font-sans text-slate-100 selection:bg-cyan-500/30">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-void font-sans text-ink selection:bg-blood/35">
       <Topbar />
       {editorClip ? (
         <Suspense
           fallback={
-            <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-slate-400">
+            <div className="flex min-h-0 flex-1 items-center justify-center font-mono text-xs uppercase tracking-[0.2em] text-ink-muted">
               {t("editor.loading")}
             </div>
           }
@@ -150,14 +150,15 @@ export default function App() {
       ) : (
       <div className="relative flex min-h-0 flex-1">
         <MoonClipStarfield />
-        <div className="pointer-events-none fixed left-1/2 top-10 h-[250px] w-[min(700px,100vw)] -translate-x-1/2 bg-gradient-to-b from-cyan-500/10 via-indigo-500/5 to-transparent blur-3xl" />
+        <div className="pointer-events-none fixed left-1/2 top-8 h-[260px] w-[min(720px,100vw)] -translate-x-1/2 bg-gradient-to-b from-lava/10 via-gold/5 to-transparent blur-3xl" />
+        <div className="pointer-events-none fixed -left-24 bottom-0 h-[240px] w-[420px] bg-gradient-to-tr from-sky/10 via-aether/5 to-transparent blur-3xl" />
 
         <div className="relative z-10 flex min-h-0 flex-1 gap-2 overflow-x-auto p-2 sm:gap-4 sm:p-4">
-          <aside className="flex max-h-[calc(100vh-4rem)] w-14 shrink-0 flex-col justify-between self-start overflow-y-auto rounded-2xl border border-white/5 bg-moonclip-panel/50 p-2 shadow-2xl backdrop-blur-xl sm:max-h-[calc(100vh-5.5rem)] lg:w-56 lg:p-4 xl:w-64">
+          <aside className="flex max-h-[calc(100vh-4rem)] w-14 shrink-0 flex-col justify-between self-start overflow-y-auto rounded-card border border-line bg-panel/60 p-2 shadow-panel backdrop-blur-xl sm:max-h-[calc(100vh-5.5rem)] lg:w-56 lg:p-3 xl:w-60">
             <div>
-              <div className="mb-3 flex items-center justify-center gap-2.5 px-0 py-2 lg:mb-6 lg:justify-start lg:px-2 lg:py-3">
+              <div className="mb-3 flex items-center justify-center gap-2.5 px-0 py-2 lg:mb-5 lg:justify-start lg:px-1 lg:py-2">
                 <MoonClipLogo size={30} />
-                <h1 className="hidden bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-lg font-bold tracking-wider text-transparent lg:block">
+                <h1 className="hidden font-display text-lg font-bold tracking-wide text-ink lg:block">
                   {t("app.name")}
                 </h1>
               </div>
@@ -165,10 +166,10 @@ export default function App() {
               <nav className="space-y-1">
                 {(
                   [
-                    { id: "clips", icon: <Clapperboard size={15} />, label: t("nav.clips") },
-                    { id: "games", icon: <Gamepad2 size={15} />, label: t("nav.games") },
-                    { id: "settings", icon: <Settings size={15} />, label: t("nav.settings") },
-                  ] as { id: View; icon: React.ReactNode; label: string }[]
+                    { id: "clips", num: "01", icon: <Clapperboard size={15} />, label: t("nav.clips") },
+                    { id: "games", num: "02", icon: <Gamepad2 size={15} />, label: t("nav.games") },
+                    { id: "settings", num: "03", icon: <Settings size={15} />, label: t("nav.settings") },
+                  ] as { id: View; num: string; icon: React.ReactNode; label: string }[]
                 ).map((item) => (
                   <button
                     key={item.id}
@@ -176,37 +177,48 @@ export default function App() {
                     title={item.label}
                     className={
                       view === item.id
-                        ? "flex w-full items-center justify-center rounded-xl border border-cyan-500/20 bg-cyan-500/10 px-0 py-2 text-sm font-medium text-cyan-300 shadow-[0_0_10px_rgba(56,189,248,0.1)] lg:justify-start lg:px-3"
-                        : "flex w-full items-center justify-center rounded-xl px-0 py-2 text-sm font-medium text-slate-400 transition hover:bg-white/5 hover:text-slate-200 lg:justify-start lg:px-3"
+                        ? "flex w-full items-center justify-center gap-2 rounded-stamp border border-ink bg-paper px-0 py-1.5 text-sm font-semibold text-ink shadow-stamp-blood lg:justify-start lg:px-2.5"
+                        : "flex w-full items-center justify-center gap-2 rounded-stamp border border-transparent px-0 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-raised/70 hover:text-ink lg:justify-start lg:px-2.5"
                     }
                   >
-                    <span className="inline-flex items-center gap-2">
-                      {item.icon}
-                      <span className="hidden lg:inline">{item.label}</span>
+                    <span
+                      className={
+                        "hidden font-mono text-[10px] tracking-widest lg:inline " +
+                        (view === item.id ? "text-blood" : "text-ink-faint")
+                      }
+                    >
+                      {item.num}
                     </span>
+                    {item.icon}
+                    <span className="hidden lg:inline">{item.label}</span>
                   </button>
                 ))}
               </nav>
             </div>
 
             <div className="space-y-3">
-              <div className="rounded-xl border border-white/5 bg-[#0f1424]/80 p-2 lg:p-3">
-                <div className="flex items-center justify-center gap-2 lg:justify-start">
+              {/* Status stamp card: the fanzine "editor card" with the live state. */}
+              <div className="relative rounded-card border-2 border-ink bg-paper p-2 text-ink shadow-stamp lg:p-3">
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-1 rounded-[6px] border border-dashed border-ink/25"
+                />
+                <div className="relative flex items-center justify-center gap-2 lg:justify-start">
                   <span className="relative flex h-2.5 w-2.5">
                     {status.running ? (
-                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-lava shadow-[0_0_8px_rgba(232,115,41,0.8)]" />
                     ) : (
                       <>
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400 opacity-75" />
-                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-cyan-500" />
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-jade opacity-60" />
+                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-jade" />
                       </>
                     )}
                   </span>
                   <div className="hidden text-xs lg:block">
-                    <p className="font-medium text-slate-300">
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-blood">
                       {status.running ? t("rec.recording") : t("status.standby")}
                     </p>
-                    <p className="truncate text-[11px] text-slate-500">
+                    <p className="truncate text-[11px] text-ink/70">
                       {status.running
                         ? `${currentGame ?? status.backend} · ${t("rec.tracks", { n: status.tracks_linked })}`
                         : currentGame
@@ -219,10 +231,10 @@ export default function App() {
                   onClick={() => void (status.running ? stop() : start())}
                   disabled={busy}
                   title={status.running ? t("rec.stop") : t("rec.start")}
-                  className={`mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-semibold transition disabled:opacity-50 lg:mt-2.5 ${
+                  className={`relative mt-2 inline-flex w-full items-center justify-center gap-2 rounded-stamp border-2 px-2 py-1.5 text-xs font-bold uppercase tracking-wider transition disabled:opacity-50 lg:mt-2.5 ${
                     status.running
-                      ? "border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20"
-                      : "border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20"
+                      ? "border-blood bg-blood/10 text-blood hover:bg-blood hover:text-paper"
+                      : "border-ink bg-blood text-paper hover:bg-blood-bright"
                   }`}
                 >
                   {status.running ? <Square size={12} /> : <Circle size={12} />}
@@ -235,33 +247,37 @@ export default function App() {
                     onClick={() => void startScreen()}
                     disabled={screenBusy}
                     title={t("rec.record_screen")}
-                    className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs font-semibold text-slate-300 transition hover:bg-white/10 disabled:opacity-50"
+                    className="relative mt-2 inline-flex w-full items-center justify-center gap-2 rounded-stamp border border-dashed border-ink/50 bg-transparent px-2 py-1.5 text-[11px] font-semibold text-ink/80 transition hover:border-ink hover:text-ink disabled:opacity-50"
                   >
                     <Monitor size={12} />
                     <span className="hidden lg:inline">{t("rec.record_screen")}</span>
                   </button>
                 )}
                 {engineError && (
-                  <p className="mt-1.5 break-all font-mono text-[11px] text-red-400">{engineError}</p>
+                  <p className="relative mt-1.5 break-all font-mono text-[11px] text-blood">
+                    {engineError}
+                  </p>
                 )}
                 {status.engine_error && (
-                  <p className="mt-1.5 break-all font-mono text-[11px] text-amber-400">
+                  <p className="relative mt-1.5 break-all font-mono text-[11px] text-gold-bright">
                     {status.engine_error}
                   </p>
                 )}
               </div>
-              <div className="hidden items-center justify-between rounded-xl border border-white/5 bg-black/30 px-3 py-2 text-xs lg:flex">
-                <span className="text-slate-400">{t("lang.label")}</span>
+              <div className="hidden items-center justify-between rounded-stamp border border-line bg-void/50 px-3 py-2 text-xs lg:flex">
+                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">
+                  {t("lang.label")}
+                </span>
                 <div className="flex gap-1">
                   <button
                     onClick={() => void setLocale("es")}
-                    className={`rounded-md px-2 py-1 font-mono ${locale.startsWith("es") ? "bg-cyan-500/20 text-cyan-200" : "text-slate-500 hover:text-slate-200"}`}
+                    className={`rounded-stamp px-2 py-1 font-mono text-[11px] ${locale.startsWith("es") ? "bg-paper text-ink" : "text-ink-muted hover:text-ink"}`}
                   >
                     {t("lang.es")}
                   </button>
                   <button
                     onClick={() => void setLocale("en")}
-                    className={`rounded-md px-2 py-1 font-mono ${locale.startsWith("en") ? "bg-cyan-500/20 text-cyan-200" : "text-slate-500 hover:text-slate-200"}`}
+                    className={`rounded-stamp px-2 py-1 font-mono text-[11px] ${locale.startsWith("en") ? "bg-paper text-ink" : "text-ink-muted hover:text-ink"}`}
                   >
                     {t("lang.en")}
                   </button>
@@ -270,33 +286,33 @@ export default function App() {
             </div>
           </aside>
 
-          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-2xl border border-white/5 bg-moonclip-panel/30 p-3 shadow-2xl backdrop-blur-xl sm:p-4 lg:p-6">
+          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-card border border-line bg-panel/40 p-3 shadow-panel backdrop-blur-xl sm:p-4 lg:p-6">
             {view === "settings" && (
               <>
-                <h2 className="text-xl font-bold text-slate-100">{t("nav.settings")}</h2>
-                <div className="mt-4">
-                  <SettingsModal
-                    engineStatus={status}
-                    onHotkeyChange={setHotkey}
-                    onOpenWizard={() => setShowWizard(true)}
-                  />
+                <div className="mb-4 border-b-2 border-line pb-2">
+                  <h2 className="font-display text-xl font-bold text-ink">{t("nav.settings")}</h2>
                 </div>
+                <SettingsModal
+                  engineStatus={status}
+                  onHotkeyChange={setHotkey}
+                  onOpenWizard={() => setShowWizard(true)}
+                />
               </>
             )}
             {view === "games" && (
               <>
-                <h2 className="text-xl font-bold text-slate-100">{t("nav.games")}</h2>
-                <div className="mt-4">
-                  <AppManager />
+                <div className="mb-4 border-b-2 border-line pb-2">
+                  <h2 className="font-display text-xl font-bold text-ink">{t("nav.games")}</h2>
                 </div>
+                <AppManager />
               </>
             )}
             {view === "clips" && (
               <>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-xl font-bold text-slate-100">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b-2 border-line pb-2">
+                  <h2 className="font-display text-xl font-bold text-ink">
                     {t("gallery.title")}{" "}
-                    <span className="font-mono text-sm font-normal text-slate-500">
+                    <span className="font-mono text-sm font-normal text-ink-faint">
                       ({clips.length})
                     </span>
                   </h2>
@@ -304,7 +320,7 @@ export default function App() {
                     <button
                       onClick={() => void saveNow()}
                       disabled={busy}
-                      className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
+                      className="inline-flex items-center gap-2 rounded-stamp border-2 border-ink bg-blood px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-paper transition hover:bg-blood-bright disabled:opacity-50"
                     >
                       {t("rec.save_now")}
                     </button>

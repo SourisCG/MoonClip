@@ -49,12 +49,12 @@ export function MoonClipStarfield() {
       for (const star of stars) {
         // Soft twinkle: small amplitude around base, desynced via phase.
         const a = Math.max(0.05, Math.min(1, star.baseAlpha + Math.sin(t * star.speed + star.phase) * 0.12));
-        ctx.fillStyle = `rgba(224, 231, 255, ${a})`;
+        ctx.fillStyle = `rgba(239, 230, 210, ${a})`;
         ctx.beginPath();
         ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
         ctx.fill();
         if (star.size > 1.4 && a > 0.6) {
-          ctx.fillStyle = `rgba(56, 189, 248, ${a * 0.25})`;
+          ctx.fillStyle = `rgba(216, 164, 74, ${a * 0.22})`;
           ctx.beginPath();
           ctx.arc(star.x, star.y, star.size * 2.5, 0, Math.PI * 2);
           ctx.fill();
@@ -110,7 +110,7 @@ export function MoonClipStarfield() {
     <canvas
       ref={canvasRef}
       aria-hidden
-      className="starfield pointer-events-none fixed inset-0 z-0 opacity-70"
+      className="starfield pointer-events-none fixed inset-0 z-0 opacity-60"
     />
   );
 }

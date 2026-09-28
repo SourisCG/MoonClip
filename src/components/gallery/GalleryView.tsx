@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { thumbnailUrl } from "../../lib/media";
+import { EmptyState } from "../ui/EmptyState";
 import {
   Clapperboard,
   Cloud,
@@ -80,7 +82,54 @@ interface CardActions {
   onError: (msg: string) => void;
 }
 
-/** Medal-style 16:9 card: thumbnail, duration, quick actions on hover. */
+/**
+ * Medal-style hover preview: after a short dwell, a muted looping video
+ * replaces the thumbnail (local clips only — cloud clips would trigger a
+ * full download). The video unmounts on leave, stopping playback.
+ */
+function useHoverPreview(clip: ClipMetadata) {
+  const eligible = !clip.cloud && clip.exists;
+  const [url, setUrl] = useState<string | null>(null);
+  const timer = useRef<number | null>(null);
+  const cancelled = useRef(false);
+
+  const clearTimer = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+
+  useEffect(
+    () => () => {
+      cancelled.current = true;
+      clearTimer();
+    },
+    [],
+  );
+
+  const onEnter = () => {
+    if (!eligible || url) return;
+    clearTimer();
+    timer.current = window.setTimeout(async () => {
+      try {
+        const media = await invoke<string>("media_url", { clipId: clip.id });
+        if (!cancelled.current) setUrl(media);
+      } catch {
+        // Media server unavailable: the thumbnail stays.
+      }
+    }, 260);
+  };
+
+  const onLeave = () => {
+    clearTimer();
+    setUrl(null);
+  };
+
+  return { url, onEnter, onLeave };
+}
+
+/** Medal-style 16:9 card: thumbnail + hover preview, duration, quick actions. */
 function ClipCard({
   clip,
   gameLabel,
@@ -94,38 +143,57 @@ function ClipCard({
 }) {
   const { t } = useTranslation();
   const src = useThumbnail(clip, actions.onError);
+  const preview = useHoverPreview(clip);
   const iconBtn =
-    "rounded-lg bg-black/60 p-1.5 text-slate-300 transition hover:bg-black/80 hover:text-cyan-200";
+    "rounded-stamp border border-line bg-void/85 p-1.5 text-ink-soft transition hover:border-blood/60 hover:bg-blood hover:text-paper";
 
   return (
-    <div className="group overflow-hidden rounded-xl border border-white/5 bg-black/30 transition hover:border-cyan-500/20">
+    <div
+      className="group overflow-hidden rounded-card border border-line bg-raised/60 transition-all duration-150 hover:-translate-y-0.5 hover:border-gold/40 hover:shadow-stamp"
+      onMouseEnter={preview.onEnter}
+      onMouseLeave={preview.onLeave}
+    >
       <div className="relative">
         <button onClick={onOpen} className="block w-full" title={clip.file_name}>
-          <div className="flex aspect-video w-full items-center justify-center overflow-hidden bg-black/40">
+          <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden bg-void">
             {src ? (
               <img
                 src={src}
                 alt=""
                 onError={() => actions.onError(`thumb asset blocked: ${clip.thumbnail_name}`)}
-                className="h-full w-full object-cover transition group-hover:brightness-110"
+                className={
+                  "h-full w-full object-cover transition duration-200 " +
+                  (preview.url ? "opacity-0" : "opacity-100 group-hover:brightness-110")
+                }
               />
             ) : (
-              <Clapperboard size={22} className="text-slate-600" />
+              <Clapperboard size={22} className="text-ink-faint" />
+            )}
+            {preview.url && (
+              <video
+                src={preview.url}
+                muted
+                loop
+                autoPlay
+                playsInline
+                preload="none"
+                className="absolute inset-0 h-full w-full object-cover"
+              />
             )}
           </div>
         </button>
-        <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded bg-black/75 px-1.5 py-0.5 font-mono text-[10px] text-slate-200">
+        <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded-stamp border border-line bg-void/85 px-1.5 py-0.5 font-mono text-[10px] text-ink">
           {fmtDuration(clip.duration_ms)}
         </span>
         {clip.cloud && (
-          <span className="pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center gap-0.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] text-cyan-300">
+          <span className="pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-stamp border border-sky/50 bg-void/85 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-sky-bright">
             <Cloud size={10} /> {t("gallery.cloud")}
           </span>
         )}
         <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-0 transition group-hover:opacity-100">
           <button
             onClick={() => actions.onToggleFavorite(clip.id)}
-            className={`${iconBtn} ${clip.is_favorite ? "text-amber-300" : ""}`}
+            className={`${iconBtn} ${clip.is_favorite ? "border-gold/60 text-gold-bright" : ""}`}
             title={t("gallery.favorite")}
           >
             <Star size={13} fill={clip.is_favorite ? "currentColor" : "none"} />
@@ -139,19 +207,19 @@ function ClipCard({
           </button>
         </div>
       </div>
-      <div className="min-w-0 px-2 py-1.5">
-        <p className="truncate text-sm font-medium text-slate-200" title={clip.file_name}>
+      <div className="min-w-0 px-2.5 py-2">
+        <p className="truncate text-sm font-medium text-ink" title={clip.file_name}>
           {bareName(clip.file_name)}
         </p>
-        <p className="truncate font-mono text-[11px] text-slate-500">
+        <p className="truncate font-mono text-[11px] text-ink-faint">
           {gameLabel} · {fmtSize(clip.file_size_bytes)}{" "}
           {!clip.cloud && clip.drive_file_id && (
-            <span className="inline-flex items-center gap-0.5 text-emerald-300/80">
+            <span className="inline-flex items-center gap-0.5 text-jade-bright">
               <Upload size={10} /> {t("gallery.uploaded")}
             </span>
           )}
           {!clip.cloud && !clip.drive_file_id && !clip.exists && (
-            <span className="text-amber-400">({t("gallery.missing")})</span>
+            <span className="text-gold-bright">({t("gallery.missing")})</span>
           )}
         </p>
       </div>
@@ -308,21 +376,25 @@ export function GalleryView({
   };
 
   if (loading && clips.length === 0)
-    return <p className="text-sm text-slate-400">{t("common.loading")}</p>;
+    return (
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink-muted">
+        {t("common.loading")}
+      </p>
+    );
 
   if (clips.length === 0) {
     return (
       <>
-        <p className="mt-1 text-sm text-slate-400">{t("gallery.coming")}</p>
+        <p className="mt-1 text-sm text-ink-muted">{t("gallery.coming")}</p>
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {[0, 1, 2].map((i) => (
-            <div
+            <EmptyState
               key={i}
-              className="relative overflow-hidden rounded-xl border border-dashed border-white/10 bg-moonclip-card/60 p-6 text-center"
-            >
-              <Clapperboard size={22} className="mx-auto text-slate-600" />
-              <p className="mt-2 text-xs text-slate-500">{t("gallery.empty")}</p>
-            </div>
+              icon={<Clapperboard size={22} />}
+              title={t("gallery.empty")}
+              hint={t("gallery.coming")}
+              className={i === 0 ? "-rotate-1" : i === 1 ? "rotate-1" : ""}
+            />
           ))}
         </div>
       </>
@@ -344,12 +416,12 @@ export function GalleryView({
   const uploadedCount = clips.filter((c) => !!c.drive_file_id).length;
   const cloudCount = clips.filter((c) => c.cloud).length;
   const navBtn = (active: boolean) =>
-    `flex w-full shrink-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition ${
+    `flex w-full shrink-0 items-center gap-2 rounded-stamp px-2.5 py-1.5 text-left text-xs transition ${
       active
-        ? "border border-cyan-400/20 bg-cyan-500/10 text-cyan-200"
-        : "border border-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"
+        ? "border border-ink bg-paper font-semibold text-ink shadow-stamp-blood"
+        : "border border-transparent text-ink-muted hover:bg-raised/70 hover:text-ink"
     }`;
-  const countBadge = "ml-auto font-mono text-[10px] text-slate-500";
+  const countBadge = "ml-auto font-mono text-[10px] text-ink-faint";
 
   return (
     <>
@@ -408,7 +480,7 @@ export function GalleryView({
               <span className="truncate">{t("gallery.cloud_section")}</span>
               <span className={countBadge}>{cloudCount}</span>
             </button>
-            <p className="hidden px-2.5 pt-2 text-[10px] uppercase tracking-wide text-slate-600 lg:block">
+            <p className="hidden px-2.5 pt-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint lg:block">
               {t("gallery.games")}
             </p>
             {groups.map((g) => (
@@ -426,23 +498,23 @@ export function GalleryView({
           </nav>
         </aside>
         <div className="min-w-0 flex-1">
-          <div className="mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-line/70 pb-3 sm:gap-3">
             <label className="relative min-w-0 flex-1 sm:max-w-xs">
               <Search
                 size={13}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint"
               />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t("gallery.search")}
-                className="w-full rounded-lg border border-white/10 bg-black/30 py-1.5 pl-7 pr-2 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-500/40"
+                className="w-full rounded-stamp border border-line bg-void/70 py-1.5 pl-7 pr-2 text-xs text-ink outline-none placeholder:text-ink-faint focus:border-gold/60"
               />
             </label>
             <select
               value={sort}
               onChange={(e) => changeSort(e.target.value)}
-              className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500/40"
+              className="cursor-pointer rounded-stamp border border-line bg-void/70 px-2 py-1.5 text-xs text-ink-soft outline-none focus:border-gold/60"
               title={t("gallery.sort")}
             >
               <option value="recent">{t("gallery.sort_recent")}</option>
@@ -451,29 +523,29 @@ export function GalleryView({
             </select>
             <button
               onClick={() => setShowDrive(true)}
-              className="inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-cyan-200"
+              className="inline-flex items-center gap-1.5 rounded-stamp border border-dashed border-ink-faint/60 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-muted transition hover:border-sky/60 hover:text-sky-bright"
               title={t("drive.title")}
             >
               <HardDriveDownload size={12} /> {t("drive.browse")}
             </button>
             <button
               onClick={onPurge}
-              className="text-xs text-slate-500 transition hover:text-slate-200"
+              className="rounded-stamp border border-dashed border-ink-faint/60 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-muted transition hover:border-gold/60 hover:text-gold-bright"
               title={t("gallery.purge")}
             >
               {t("gallery.purge")}
             </button>
           </div>
           {lastError && (
-            <p className="mb-2 truncate font-mono text-xs text-red-400" title={lastError}>
+            <p className="mb-2 truncate font-mono text-xs text-blood-bright" title={lastError}>
               {lastError}
             </p>
           )}
           {purged !== null && !lastError && !download && (
-            <p className="mb-2 text-xs text-slate-500">{t("gallery.purged", { count: purged })}</p>
+            <p className="mb-2 text-xs text-ink-muted">{t("gallery.purged", { count: purged })}</p>
           )}
           {download && (
-            <p className="mb-2 text-xs text-cyan-300/80">
+            <p className="mb-2 font-mono text-xs text-sky-bright">
               {t("gallery.downloading")}{" "}
               {download.total > 0
                 ? `${Math.min(100, Math.round((download.sent / download.total) * 100))}%`
@@ -481,7 +553,12 @@ export function GalleryView({
             </p>
           )}
           {visible.length === 0 ? (
-            <p className="text-xs text-slate-500">{t("gallery.empty_group")}</p>
+            <EmptyState
+              icon={<Search size={20} />}
+              title={t("gallery.empty_group")}
+              hint={t("gallery.search")}
+              className="mx-auto max-w-md"
+            />
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {visible.map((c) => (

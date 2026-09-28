@@ -1,14 +1,17 @@
+@import "./fonts.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
   color-scheme: dark;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
 }
 
 body {
-  background-color: #050608;
-  color: #e2e8f0;
+  background-color: #15110d;
+  color: #efe6d2;
   font-family: Inter, system-ui, sans-serif;
   margin: 0;
   overflow: hidden;
@@ -25,13 +28,49 @@ textarea,
   user-select: text;
 }
 
+/* Paper grain over the whole window (below the app content, above the
+   background effects). Pointer-transparent and static, so it costs one
+   composite layer. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.045;
+  background-image: var(--grain);
+  background-size: 220px 220px;
+}
+
 ::selection {
-  background: rgba(56, 189, 248, 0.3);
+  background: rgba(201, 42, 42, 0.35);
+}
+
+/* Fanzine scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1c1814;
+}
+::-webkit-scrollbar-thumb {
+  background: #3a2f24;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b58a3c;
+}
+
+/* Stamped focus ring (gold, dashed) for keyboard users. */
+:focus-visible {
+  outline: 2px dashed rgba(216, 164, 74, 0.9);
+  outline-offset: 2px;
 }
 
 /* Low-power mode (software compositing: no accelerated WebKit renderer).
-   Full-window backdrop blurs and the twinkle canvas are per-frame costs that
-   a CPU-only compositor cannot afford while playing video. */
+   Full-window backdrop blurs, the twinkle canvas and the grain layer are
+   per-frame costs that a CPU-only compositor cannot afford while playing
+   video. */
 .low-power .backdrop-blur-sm,
 .low-power .backdrop-blur-md,
 .low-power .backdrop-blur-lg,
@@ -40,6 +79,17 @@ textarea,
   -webkit-backdrop-filter: none !important;
 }
 
-.low-power .starfield {
+.low-power .starfield,
+.low-power body::after {
   display: none;
+}
+
+/* Utility: 1px warm hairline used by rows and cards. */
+@layer components {
+  .hairline {
+    border: 1px solid rgba(42, 34, 27, 0.9);
+  }
+  .stamp-label {
+    @apply inline-flex items-center gap-1 rounded-stamp border border-gold/60 bg-void/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-gold;
+  }
 }
