@@ -1,6 +1,13 @@
 {
-  "app": { "name": "MOONCLIP", "tagline": "Replay buffer standby" },
-  "nav": { "clips": "My Clips", "games": "Games", "settings": "Settings" },
+  "app": {
+    "name": "MOONCLIP",
+    "tagline": "Replay buffer standby"
+  },
+  "nav": {
+    "clips": "My Clips",
+    "games": "Games",
+    "settings": "Settings"
+  },
   "status": {
     "active": "Replay Buffer Active",
     "standby": "Standby",
@@ -48,7 +55,9 @@
     "single_track_hint": "Maximum compatibility: any player plays the Mix. The file loses the Game and Mic tracks.",
     "single_track_note": "Saved clips will carry only the Mix track, playable in any player.",
     "stopped_hint": "Start the buffer to link audio tracks.",
-    "gain_live": "Applies live while the buffer runs; otherwise on the next start."
+    "gain_live": "Applies live while the buffer runs; otherwise on the next start.",
+    "mute": "Mute",
+    "unmute": "Unmute"
   },
   "decode": {
     "title": "Video decoding",
@@ -377,7 +386,10 @@
     "export_failed": "Export failed",
     "proxy_active": "preview proxy"
   },
-  "common": { "loading": "Loading…", "delete": "Delete" },
+  "common": {
+    "loading": "Loading…",
+    "delete": "Delete"
+  },
   "rec": {
     "start": "Start buffer",
     "stop": "Stop",
@@ -388,7 +400,11 @@
     "mic": "Mic",
     "tracks": "{{n}} tracks linked"
   },
-  "lang": { "label": "Language", "es": "Spanish", "en": "English" },
+  "lang": {
+    "label": "Language",
+    "es": "Spanish",
+    "en": "English"
+  },
   "window": {
     "minimize": "Minimize",
     "maximize": "Maximize",

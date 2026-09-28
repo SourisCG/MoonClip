@@ -10,10 +10,17 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use obws::events::EventStream;
 use obws::requests::config::SetVideoSettings;
 use obws::requests::inputs::{InputId, Volume};
 use obws::requests::sources::{SaveScreenshot, SourceId};
+use obws::requests::EventSubscription;
 use obws::Client;
+
+/// OBS volume multiplier from the app's 0–100 % gain (100 % = unity, 1.0).
+pub fn percent_to_mul(percent: u32) -> f32 {
+    (percent.min(100) as f32) / 100.0
+}
 
 /// How long `replay_save` waits for OBS to flush the replay file to disk.
 const REPLAY_SAVE_TIMEOUT: Duration = Duration::from_secs(45);
@@ -181,14 +188,30 @@ impl Obsws {
             .map_err(|e| format!("open properties dialog failed: {e}"))
     }
 
-    /// Live per-track gain (0-200 % -> OBS multiplier 0.0-2.0).
+    /// Live per-track gain (0-100 % -> OBS multiplier 0.0-1.0).
     pub async fn set_input_volume(&self, source: &str, percent: u32) -> Result<(), String> {
-        let mul = ((percent.clamp(0, 200) as f32) / 100.0).clamp(0.0, 2.0);
+        let mul = percent_to_mul(percent);
         self.client
             .inputs()
             .set_volume(InputId::Name(source), Volume::Mul(mul))
             .await
             .map_err(|e| format!("set volume failed: {e}"))
+    }
+
+    /// Ask obs-websocket for the high-volume meter events (needed for the
+    /// OBS-style level meters).
+    pub async fn subscribe_meters(&self) -> Result<(), String> {
+        self.client
+            .reidentify(EventSubscription::ALL | EventSubscription::INPUT_VOLUME_METERS)
+            .await
+            .map_err(|e| format!("meter subscription failed: {e}"))
+    }
+
+    /// Event stream for the meter task (feature `events`).
+    pub fn event_stream(&self) -> Result<EventStream, String> {
+        self.client
+            .events()
+            .map_err(|e| format!("event stream failed: {e}"))
     }
 
     /// Live mute/unmute of a generated audio source.

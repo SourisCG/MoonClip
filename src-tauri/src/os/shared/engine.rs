@@ -531,9 +531,10 @@ pub fn render_record_encoder_json(p: &ObsProfile) -> String {
         .unwrap_or_else(|_| "{}".into())
 }
 
-/// OBS volume multiplier from a 0-200 % gain (1.0 = unity).
+/// OBS volume multiplier from the app's 0-100 % gain (1.0 = unity; the
+/// slider's 100 is the maximum, per the user's spec).
 pub fn gain_to_volume(pct: u32) -> f64 {
-    (pct.min(200) as f64) / 100.0
+    (pct.min(100) as f64) / 100.0
 }
 
 /// Stable UUIDs for one generated collection (fresh per start is fine; OBS
@@ -1218,6 +1219,16 @@ impl CaptureEngine for ObsEngine {
             }
         };
 
+        // Level meters: subscribe to the high-volume meter events and pump
+        // them into the shared store the mixer reads.
+        match ws.subscribe_meters().await {
+            Ok(()) => match ws.event_stream() {
+                Ok(stream) => super::audio_meters::spawn(stream),
+                Err(e) => eprintln!("[moonclip] audio meters unavailable: {e}"),
+            },
+            Err(e) => eprintln!("[moonclip] audio meters unavailable: {e}"),
+        }
+
         // Setup runs exist only to let the user pick a capture target: hand
         // the engine back with no replay buffer so the caller can wait for
         // the pick to land in the source settings.
@@ -1346,6 +1357,7 @@ impl CaptureEngine for ObsEngine {
             let _ = child.wait().await;
         }
         self.profile = None;
+        super::audio_meters::deactivate();
         self.push_event("engine stopped");
         Ok(())
     }
@@ -1387,13 +1399,27 @@ impl CaptureEngine for ObsEngine {
             other => return Err(format!("unknown track '{other}'")),
         };
         let obsws = self.obsws()?;
-        obsws.set_input_muted(source, muted).await
+        let result = obsws.set_input_muted(source, muted).await;
+        match &result {
+            Ok(()) => self.push_event(format!(
+                "audio: {} {}",
+                track,
+                if muted { "muted" } else { "unmuted" }
+            )),
+            Err(e) => self.push_event(format!("audio: mute {track} failed ({e})")),
+        }
+        result
     }
 
     async fn set_volume(&mut self, track: &str, percent: u32) -> Result<(), String> {
         let source = volume_source(track).ok_or_else(|| format!("unknown track '{track}'"))?;
         let obsws = self.obsws()?;
-        obsws.set_input_volume(source, percent).await
+        let result = obsws.set_input_volume(source, percent).await;
+        match &result {
+            Ok(()) => self.push_event(format!("audio: {track} gain {percent}% (live)")),
+            Err(e) => self.push_event(format!("audio: {track} gain {percent}% failed ({e})")),
+        }
+        result
     }
 }
 
@@ -1746,13 +1772,13 @@ mod tests {
     #[test]
     fn collection_applies_gains_and_mutes() {
         let mut c = config();
-        c.gain_game = 150;
+        c.gain_game = 150; // legacy value: clamped to 100 (1.0)
         c.gain_mic = 50;
         c.mute_mic = true;
         let p = ObsProfile::from_config(&c, &FakePlatform).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&render_collection(&p, &SourceUuids::generate())).unwrap();
-        assert_eq!(v["AuxAudioDevice1"]["volume"], 1.5);
+        assert_eq!(v["AuxAudioDevice1"]["volume"], 1.0);
         assert_eq!(v["AuxAudioDevice2"]["volume"], 0.5);
         assert_eq!(v["AuxAudioDevice2"]["muted"], true);
         assert_eq!(v["AuxAudioDevice1"]["muted"], false);
@@ -1791,8 +1817,9 @@ mod tests {
     fn gain_volume_conversion() {
         assert_eq!(gain_to_volume(0), 0.0);
         assert_eq!(gain_to_volume(100), 1.0);
-        assert_eq!(gain_to_volume(150), 1.5);
-        assert_eq!(gain_to_volume(500), 2.0);
+        // 100 is the maximum now; older stored values clamp down.
+        assert_eq!(gain_to_volume(150), 1.0);
+        assert_eq!(gain_to_volume(500), 1.0);
     }
 
     #[test]

@@ -1,6 +1,13 @@
 {
-  "app": { "name": "MOONCLIP", "tagline": "Búfer de repetición en espera" },
-  "nav": { "clips": "Mis Clips", "games": "Juegos", "settings": "Ajustes" },
+  "app": {
+    "name": "MOONCLIP",
+    "tagline": "Búfer de repetición en espera"
+  },
+  "nav": {
+    "clips": "Mis Clips",
+    "games": "Juegos",
+    "settings": "Ajustes"
+  },
   "status": {
     "active": "Replay Buffer Activo",
     "standby": "En espera",
@@ -48,7 +55,9 @@
     "single_track_hint": "Máxima compatibilidad: cualquier reproductor reproduce el Mix. El archivo pierde las pistas Juego y Mic.",
     "single_track_note": "El clip guardado llevará solo el canal Mix, reproducible en cualquier reproductor.",
     "stopped_hint": "Inicia el búfer para enlazar las pistas de audio.",
-    "gain_live": "Se aplica en vivo mientras el búfer graba; sin el búfer, se aplica al iniciar."
+    "gain_live": "Se aplica en vivo mientras el búfer graba; sin el búfer, se aplica al iniciar.",
+    "mute": "Silenciar",
+    "unmute": "Quitar silencio"
   },
   "decode": {
     "title": "Decodificación de video",
@@ -145,7 +154,8 @@
     "vaapi_device": "Dispositivo VAAPI",
     "amf_preset": "Preset AMF"
   },
-  "obs": {    "title": "Motor de captura (aislado)",
+  "obs": {
+    "title": "Motor de captura (aislado)",
     "subtitle": "MoonClip graba con su propio motor embebido, en su propia carpeta. Nada más en tu sistema se toca.",
     "repair": "Reparar motor",
     "repairing": "Reparando…",
@@ -376,7 +386,10 @@
     "export_failed": "Falló el export",
     "proxy_active": "proxy de previsualización"
   },
-  "common": { "loading": "Cargando…", "delete": "Eliminar" },
+  "common": {
+    "loading": "Cargando…",
+    "delete": "Eliminar"
+  },
   "rec": {
     "start": "Iniciar búfer",
     "stop": "Detener",
@@ -387,7 +400,11 @@
     "mic": "Mic",
     "tracks": "{{n}} pistas enlazadas"
   },
-  "lang": { "label": "Idioma", "es": "Español", "en": "Inglés" },
+  "lang": {
+    "label": "Idioma",
+    "es": "Español",
+    "en": "Inglés"
+  },
   "window": {
     "minimize": "Minimizar",
     "maximize": "Maximizar",

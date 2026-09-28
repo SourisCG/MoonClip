@@ -14,7 +14,8 @@
     "tauri:build:linux": "tauri build --bundles rpm --config '{\"bundle\":{\"resources\":[\"icons/tray-icon.png\",\"binaries/x86_64-unknown-linux-gnu/*\",\"binaries/x86_64-unknown-linux-gnu/engine\"]}}'",
     "tauri:build:windows": "tauri build --bundles nsis,msi",
     "app:install": "bash build-aux/linux/install-local.sh",
-    "desktop:install": "bash build-aux/linux/install-dev-desktop.sh"
+    "desktop:install": "bash build-aux/linux/install-dev-desktop.sh",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -45,6 +46,7 @@
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
     "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^5.0.2"
   }
 }

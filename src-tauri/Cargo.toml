@@ -35,7 +35,7 @@ tokio = { version = "1", features = ["process", "time", "rt-multi-thread", "macr
 rodio = "0.21"
 # obs-websocket v5 client (control plane for the embedded OBS). No default
 # features: plain ws:// on localhost, no TLS.
-obws = "0.15"
+obws = { version = "0.15", features = ["events"] }
 # Social integrations (Phase 6): OAuth loopback + Google/TikTok/Discord APIs.
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tiny_http = "0.12"

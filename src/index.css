@@ -86,3 +86,39 @@ input[type="range"] {
     @apply border border-line bg-surface/80 backdrop-blur-xl;
   }
 }
+
+/* OBS-style horizontal fader (drawn by us so WebKitGTK and WebView2 match). */
+input[type="range"].fader {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].fader::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(
+    to right,
+    #3b82f6 0 var(--fader-pct, 0%),
+    #1f1f20 var(--fader-pct, 0%) 100%
+  );
+}
+input[type="range"].fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -7px;
+  height: 18px;
+  width: 11px;
+  border-radius: 4px;
+  background: #d6d6d9;
+  border: 1px solid rgba(0, 0, 0, 0.65);
+}
+input[type="range"].fader:hover::-webkit-slider-thumb {
+  background: #ffffff;
+}
+input[type="range"].fader:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}

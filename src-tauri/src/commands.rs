@@ -1785,11 +1785,12 @@ fn read_gains(app: &AppHandle) -> TrackGains {
         .try_state::<DbState>()
         .and_then(|db| db.get_settings().ok())
         .unwrap_or_default();
+    // The mixer is 0–100 (100 = unity/max); older rows stored up to 200.
     let num = |k: &str, d: u32| {
         map.get(k)
             .and_then(|v| v.parse().ok())
             .unwrap_or(d)
-            .clamp(0, 200)
+            .clamp(0, 100)
     };
     let flag = |k: &str| map.get(k).map(|v| v == "1" || v == "true").unwrap_or(false);
     TrackGains {
@@ -1806,7 +1807,7 @@ pub async fn audio_levels(app: AppHandle) -> Result<TrackGains, String> {
 }
 
 /// Live signal peaks (linear 0.0–1.0+) per captured stream, for the UI
-/// meters. `null` when the backend does not expose them (OBS engine).
+/// meters. `null` when the engine is not running.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioPeaks {
     pub game: f32,
@@ -1815,7 +1816,8 @@ pub struct AudioPeaks {
 
 #[tauri::command]
 pub async fn audio_peaks() -> Result<Option<AudioPeaks>, String> {
-    Ok(None)
+    Ok(crate::os::shared::audio_meters::snapshot()
+        .map(|(game, _game_peak, mic, _mic_peak)| AudioPeaks { game, mic }))
 }
 
 fn check_track(track: &str) -> Result<(), String> {
@@ -1826,9 +1828,9 @@ fn check_track(track: &str) -> Result<(), String> {
     }
 }
 
-/// Gain applies live through obs-websocket while the buffer runs (no
-/// restart). When the live apply fails, it falls back to the single-restart
-/// path. Persisted either way, so the next start renders it in the scene.
+/// Gain applies live through obs-websocket while the buffer runs. A failed
+/// live apply is reported (and logged) but NEVER restarts the buffer: the
+/// value is persisted and lands in the scene on the next start.
 #[tauri::command]
 pub async fn set_track_gain(
     app: AppHandle,
@@ -1836,7 +1838,7 @@ pub async fn set_track_gain(
     percent: u32,
 ) -> Result<TrackGains, String> {
     check_track(&track)?;
-    let pct = percent.clamp(0, 200);
+    let pct = percent.clamp(0, 100);
     {
         let db = app.state::<DbState>();
         db.set_setting(
@@ -1853,31 +1855,32 @@ pub async fn set_track_gain(
         let guard = st.recorder.lock().await;
         guard.is_some()
     };
-    if running {
-        let live: Result<(), String> = {
-            let st = app.state::<AppState>();
-            let mut guard = st.recorder.lock().await;
-            match guard.as_mut() {
-                Some(engine) => engine.set_volume(&track, pct).await,
-                None => Err("engine stopped".into()),
-            }
-        };
-        match live {
-            Ok(()) => {
-                set_audio_error(&app, None).await;
-                return Ok(read_gains(&app));
-            }
-            Err(e) => {
-                eprintln!("[moonclip] live gain failed ({e}), restarting buffer");
-            }
+    if !running {
+        eprintln!("[moonclip] audio: {track} gain {pct}% saved (engine stopped)");
+        set_audio_error(&app, None).await;
+        return Ok(read_gains(&app));
+    }
+    let live: Result<(), String> = {
+        let st = app.state::<AppState>();
+        let mut guard = st.recorder.lock().await;
+        match guard.as_mut() {
+            Some(engine) => engine.set_volume(&track, pct).await,
+            None => Err("engine stopped".into()),
+        }
+    };
+    match live {
+        Ok(()) => {
+            eprintln!("[moonclip] audio: {track} gain {pct}% applied live");
+            set_audio_error(&app, None).await;
+            Ok(read_gains(&app))
+        }
+        Err(e) => {
+            let message = format!("{e} (se aplicará al reiniciar la captura)");
+            eprintln!("[moonclip] audio: {track} gain {pct}% live apply failed: {e}");
+            set_audio_error(&app, Some(message.clone())).await;
+            Err(message)
         }
     }
-    if let Err(e) = restart_if_running(&app).await {
-        set_audio_error(&app, Some(e.clone())).await;
-        return Err(e);
-    }
-    set_audio_error(&app, None).await;
-    Ok(read_gains(&app))
 }
 
 /// Mutes apply live through obs-cmd when the buffer runs, and persist for the
@@ -1913,11 +1916,17 @@ pub async fn set_track_mute(
         if let Some(engine) = guard.as_mut() {
             if let Err(e) = engine.set_mute(&track, muted).await {
                 drop(guard);
+                eprintln!("[moonclip] audio: {track} mute failed: {e}");
                 set_audio_error(&app, Some(e.clone())).await;
                 return Err(e);
             }
         }
     }
+    eprintln!(
+        "[moonclip] audio: {track} {} (engine {})",
+        if muted { "muted" } else { "unmuted" },
+        if running { "live" } else { "stopped" }
+    );
     set_audio_error(&app, None).await;
     Ok(read_gains(&app))
 }
