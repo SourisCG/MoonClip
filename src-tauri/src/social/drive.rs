@@ -13,15 +13,29 @@ const ROOT_FOLDER_NAME: &str = "MoonClip";
 /// Resumable upload chunk (Google requires multiples of 256 KiB).
 const CHUNK: usize = 8 * 1024 * 1024;
 
+/// Drive returns int64 fields (duration, dimensions) as JSON strings; accept
+/// both shapes.
+fn de_i64_opt<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| match value {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(text) => text.parse::<i64>().ok(),
+        _ => None,
+    }))
+}
+
 /// Video metadata Drive exposes for uploaded videos (duration for restored
 /// library rows).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VideoMediaMetadata {
-    #[serde(default, rename = "durationMillis")]
+    #[serde(default, rename = "durationMillis", deserialize_with = "de_i64_opt")]
     pub duration_millis: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_i64_opt")]
     pub width: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_i64_opt")]
     pub height: Option<i64>,
 }
 
@@ -519,7 +533,7 @@ mod tests {
                 "createdTime": "2026-09-27T18:04:05.123Z",
                 "thumbnailLink": "https://lh3.googleusercontent.com/x=s220",
                 "webViewLink": "https://drive.google.com/file/d/f1/view",
-                "videoMediaMetadata": {"durationMillis": 8800, "width": 1920, "height": 1080}
+                "videoMediaMetadata": {"durationMillis": "8800", "width": "1920", "height": "1080"}
             }"#,
         )
         .unwrap();
