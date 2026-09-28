@@ -1,21 +1,7 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
 
-type Tone =
-  | "neutral"
-  | "brand"
-  | "link"
-  | "ok"
-  | "warn"
-  | "aqua"
-  | "edit"
-  | "warn"
-  | "brand"
-  | "ok"
-  | "edit"
-  | "brand"
-  | "link"
-  | "paper";
+type Tone = "neutral" | "brand" | "link" | "ok" | "warn" | "aqua" | "edit" | "paper";
 
 const tones: Record<Tone, string> = {
   neutral: "border-line bg-raised text-ink-soft",
@@ -25,13 +11,6 @@ const tones: Record<Tone, string> = {
   warn: "border-warn/50 bg-warn/15 text-warn-bright",
   aqua: "border-aqua/50 bg-aqua/15 text-aqua-bright",
   edit: "border-edit/50 bg-edit/15 text-edit-bright",
-  // v1 aliases
-  warn: "border-warn/50 bg-warn/15 text-warn-bright",
-  brand: "border-brand/50 bg-brand/15 text-brand-bright",
-  ok: "border-ok/50 bg-ok/15 text-ok-bright",
-  edit: "border-edit/50 bg-edit/15 text-edit-bright",
-  brand: "border-warn/50 bg-warn/15 text-warn-bright",
-  link: "border-link/50 bg-link/15 text-link-bright",
   paper: "border-line bg-raised text-ink-soft",
 };
 
